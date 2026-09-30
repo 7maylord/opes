@@ -1,66 +1,35 @@
-## Foundry
+# OPES contracts
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+C0 establishes the local test harness. Vault and escrow implementation follow separately.
 
-Foundry consists of:
+## Build and test
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+Pinned settings: Foundry v1.5.1, Solidity 0.8.30, Cancun EVM, optimizer enabled with 200 runs. forge-std v1.17.0 is vendored with its revision in `foundry.lock`.
 
-## Documentation
+OpenZeppelin v5.7.0 is pinned as a Git submodule. After cloning, initialize it from the repository root:
 
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
+```sh
+git submodule update --init --recursive
 ```
 
-### Test
+The gitlink and `foundry.lock` pin revision `cab19933c33c2ad1d4c7a84864a3601dddfd16f3`. No implicit upgrades.
 
-```shell
-$ forge test
+Run from the repository root:
+
+```sh
+forge fmt --root contracts --check
+forge build --root contracts
+FOUNDRY_PROFILE=ci forge test --root contracts -vv
 ```
 
-### Format
+CI lives in the root `.github/workflows/` so GitHub discovers it.
 
-```shell
-$ forge fmt
-```
+## Fixtures
 
-### Gas Snapshots
+`MockUSDC` extends OpenZeppelin ERC20 with six decimals, test-only minting and false-return/revert failures for both transfer methods. `OrganizationFixture` supplies distinct owners/operators and balances. These tests verify token behavior, not yet vault authorization or application tenant isolation. Mocks remain under `test/`; never deploy them as USDC.
 
-```shell
-$ forge snapshot
-```
+## Arc runtime gate
 
-### Anvil
+Cancun is an explicit local target, not proof of Arc compatibility. Before deployment, confirm settings for the actual target network and run the Arc runtime suite. The [Arc deployment guide](https://docs.arc.network/arc/tutorials/deploy-on-arc) specifies `arc-forge test --network arc`; Arc Foundry is not installed here. Installation and runtime checks remain deployment prerequisites. Local tests do not establish live compatibility or source verification.
 
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+Deployment and ABI export are later checkpoints. Both deployed contracts must be source-verified before activation; see `docs/IMPLEMENTATION_PLAN.md`.
