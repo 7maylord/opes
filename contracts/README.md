@@ -1,6 +1,8 @@
 # OPES contracts
 
-C0 establishes the local test harness. Vault and escrow implementation follow separately.
+C0 establishes the local test harness. C1 implements vault policy and owner controls; payment execution and escrow follow separately.
+
+`OWNER_ROLE` aliases OpenZeppelin's `DEFAULT_ADMIN_ROLE`: one owner, two-step acceptance, initially zero transfer delay. Owner renunciation is disabled to preserve recovery access. Operators cannot hold owner authority, including after owner transfer. Owners manage vendor policies and limits, can pause/unpause, and can recover only while paused to the immutable destination. Pausers can stop execution but cannot resume it. Limits start at zero; no vendor starts allowlisted. Deployment configuration must verify the official USDC/network and organization bindings; a six-decimal check alone cannot establish token identity. Recovery reconciliation remains a backend responsibility.
 
 ## Build and test
 
