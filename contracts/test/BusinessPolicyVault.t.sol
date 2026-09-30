@@ -116,7 +116,7 @@ contract BusinessPolicyVaultTest is OrganizationFixture {
         vault.grantRole(operatorRole, ownerA);
         vault.beginDefaultAdminTransfer(operatorA);
         vm.stopPrank();
-        vm.warp(block.timestamp + 1);
+        vm.warp(vm.getBlockTimestamp() + 1);
         vm.prank(operatorA);
         vm.expectRevert(BusinessPolicyVault.InvalidConfiguration.selector);
         vault.acceptDefaultAdminTransfer();
@@ -125,7 +125,7 @@ contract BusinessPolicyVaultTest is OrganizationFixture {
         vm.prank(ownerA);
         vault.beginDefaultAdminTransfer(successor);
         assertEq(vault.owner(), ownerA);
-        vm.warp(block.timestamp + 1);
+        vm.warp(vm.getBlockTimestamp() + 1);
         vm.prank(successor);
         vault.acceptDefaultAdminTransfer();
         assertEq(vault.owner(), successor);

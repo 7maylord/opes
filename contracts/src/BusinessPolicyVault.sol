@@ -10,7 +10,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/// @notice Organization-scoped custody and policy. Payment execution is added separately.
+/// @notice Organization-scoped custody, policy and bounded payment execution.
 contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -33,6 +33,35 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
     }
 
     mapping(address vendor => VendorPolicy) public vendorPolicies;
+
+    uint256 public constant DECISION_SCHEMA_VERSION = 1;
+    uint8 public constant DIRECT_PAYMENT = 1;
+
+    struct Approval {
+        address owner;
+        uint64 expiresAt;
+    }
+
+    mapping(bytes32 key => bool) public usedIdempotencyKeys;
+    mapping(bytes32 decision => Approval) public approvals;
+    mapping(uint256 day => uint256) public dailySpent;
+    mapping(address vendor => mapping(uint256 day => uint256)) public vendorDailySpent;
+
+    error InvalidDecision();
+    error DecisionExpired();
+    error ObligationAlreadyPaid();
+    error VendorNotAllowed();
+    error LimitExceeded();
+    error ApprovalRequired();
+
+    event DecisionApproved(bytes32 indexed decisionHash, uint64 expiresAt, address approver);
+    event PaymentExecuted(
+        bytes32 indexed decisionHash,
+        bytes32 indexed idempotencyKey,
+        address indexed vendor,
+        uint256 amount,
+        address operator
+    );
 
     error InvalidConfiguration();
     error InvalidLimits();
@@ -65,6 +94,76 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         if (allowed && dailyLimit == 0) revert InvalidLimits();
         vendorPolicies[vendor] = VendorPolicy({allowed: allowed, dailyLimit: dailyLimit});
         emit VendorPolicyUpdated(vendor, allowed, dailyLimit);
+    }
+
+    function hashDirectPayment(
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        address vendor,
+        uint256 amount,
+        uint64 expiresAt
+    ) public view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                DECISION_SCHEMA_VERSION,
+                block.chainid,
+                address(this),
+                organizationDomain,
+                address(token),
+                DIRECT_PAYMENT,
+                obligationKey,
+                vendor,
+                amount,
+                expiresAt,
+                bytes32(0),
+                bytes32(0),
+                uint32(0),
+                contextHash
+            )
+        );
+    }
+
+    function approveDecision(bytes32 decisionHash, uint64 expiresAt) external onlyRole(OWNER_ROLE) {
+        if (decisionHash == bytes32(0)) revert InvalidDecision();
+        if (expiresAt <= block.timestamp) revert DecisionExpired();
+        approvals[decisionHash] = Approval({owner: msg.sender, expiresAt: expiresAt});
+        emit DecisionApproved(decisionHash, expiresAt, msg.sender);
+    }
+
+    function executeDirectPayment(
+        bytes32 decisionHash,
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        bytes32 idempotencyKey,
+        address vendor,
+        uint256 amount,
+        uint64 expiresAt
+    ) external onlyRole(OPERATOR_ROLE) whenNotPaused nonReentrant {
+        if (amount == 0) revert InvalidAmount();
+        if (expiresAt <= block.timestamp) revert DecisionExpired();
+        if (
+            obligationKey == bytes32(0) || contextHash == bytes32(0) || idempotencyKey != obligationKey
+                || decisionHash != hashDirectPayment(obligationKey, contextHash, vendor, amount, expiresAt)
+        ) revert InvalidDecision();
+        if (usedIdempotencyKeys[obligationKey]) revert ObligationAlreadyPaid();
+        VendorPolicy memory policy = vendorPolicies[vendor];
+        if (!policy.allowed) revert VendorNotAllowed();
+        uint256 day = block.timestamp / 1 days;
+        uint256 total = dailySpent[day] + amount;
+        uint256 vendorTotal = vendorDailySpent[vendor][day] + amount;
+        if (amount > singleMax || total > organizationDailyMax || vendorTotal > policy.dailyLimit) {
+            revert LimitExceeded();
+        }
+        Approval memory approval = approvals[decisionHash];
+        if (amount > autonomousMax && (approval.owner != owner() || approval.expiresAt <= block.timestamp)) {
+            revert ApprovalRequired();
+        }
+        usedIdempotencyKeys[obligationKey] = true;
+        dailySpent[day] = total;
+        vendorDailySpent[vendor][day] = vendorTotal;
+        delete approvals[decisionHash];
+        token.safeTransfer(vendor, amount);
+        emit PaymentExecuted(decisionHash, obligationKey, vendor, amount, msg.sender);
     }
 
     function setLimits(uint256 autonomous, uint256 single, uint256 daily) external onlyRole(OWNER_ROLE) {
