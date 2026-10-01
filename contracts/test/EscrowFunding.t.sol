@@ -6,7 +6,7 @@ import {BusinessPolicyVault} from "../src/BusinessPolicyVault.sol";
 import {MilestoneEscrow} from "../src/MilestoneEscrow.sol";
 import {MockUSDC} from "./mocks/MockUSDC.sol";
 
-contract EscrowFundingTest is OrganizationFixture {
+abstract contract EscrowFixture is OrganizationFixture {
     BusinessPolicyVault internal vault;
     MilestoneEscrow internal escrow;
     bytes32 internal constant ID = keccak256("agreement");
@@ -15,7 +15,7 @@ contract EscrowFundingTest is OrganizationFixture {
     uint64 internal deadline;
     bytes32 internal decision;
 
-    function setUp() public override {
+    function setUp() public virtual override {
         super.setUp();
         vault = new BusinessPolicyVault(address(usdc), keccak256("a"), ownerA, operatorA, ownerA, ownerA);
         escrow = new MilestoneEscrow(address(vault), ownerA);
@@ -44,7 +44,9 @@ contract EscrowFundingTest is OrganizationFixture {
         vm.prank(operatorA);
         vault.fundEscrow(decision, KEY, CONTEXT, KEY, address(escrow), ID, 30e6, deadline + 1);
     }
+}
 
+contract EscrowFundingTest is EscrowFixture {
     function test_ExactFundingChargesBeneficiaryAndRejectsReplay() public {
         fund();
         assertEq(escrow.getAgreement(ID).funded, 30e6);

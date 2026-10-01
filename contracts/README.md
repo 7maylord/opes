@@ -1,10 +1,20 @@
 # OPES contracts
 
-C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates; C4 adds escrow agreements and funding. Release/refund execution follows in C5. Do not deploy the intermediate escrow version with funds.
+C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates; C4 adds escrow agreements and funding; C5 adds milestone release, disputes and refunds. C6 security invariants and deployment gates remain pending.
+
+## Milestone release and refunds (C5)
+
+Approvers record a nonzero decision/evidence commitment against an agreement and milestone with an exclusive expiry no later than its completion deadline. Operators release the immutable allocation to the immutable payee. Approval must remain live, its approver must still hold the role, and sequential agreements require prior allocations released. Operators cannot hold admin or approver roles; payees cannot approve their own milestones. The initial admin also holds the approver role; role rotation must explicitly revoke old approvers. Admin renunciation is disabled.
+
+Evidence interpretation and decision-hash validation belong to the deterministic backend, never an LLM signer. Resubmission must confirm `invalidateMilestoneApproval` before queuing a replacement decision; the contract cannot observe offchain evidence changes. Release reads only the stored acceptance and cannot substitute its amount, payee or evidence. Approval and completion expiry both block release.
+
+Payees or admins may dispute pending/accepted milestones, holding the allocation. Admin resolution either makes it refundable or resets it to pending for fresh approval. Cancellation makes pending/accepted allocations refundable while preserving disputes and completed transfers. Refunds require cancellation and return only explicitly refundable allocations to the bound vault; resolving a hold later allows another refund with a new key. Cancelled agreements cannot resume releases. Global and agreement pauses block funding, release and refund; dispute, cancellation and approval invalidation remain available. Transfer failure rolls back state, totals and replay keys atomically. Funding alone consumes vault spending limits; releases/refunds do not charge them again or replenish them.
+
+Held/refundable balances and terminal status derive from the at-most-five milestone states and fixed amounts. Backend reconciliation must separately confirm cancellation and resolve pending/unknown submissions before refund execution.
 
 ## Escrow funding (C4)
 
-Each escrow binds to one vault and inherits its token and organization domain. Its initial admin must be that vault's owner. Admin-created agreements have 1–5 positive milestone allocations, immutable criteria/terms/payee and refund-to-vault destination, and ordered future funding/completion deadlines. Funding must arrive strictly before the funding deadline; completion deadline enforcement belongs to C5 release logic.
+Each escrow binds to one vault and inherits its token and organization domain. Its initial admin must be that vault's owner. Admin-created agreements have 1–5 positive milestone allocations, immutable criteria/terms/payee and refund-to-vault destination, and ordered future funding/completion deadlines. Funding must arrive strictly before the funding deadline; releases must precede the completion deadline.
 
 The vault owner allowlists matching escrow instances and approves each exact funding decision, including amounts within the autonomous limit. Hash schema 1 uses action `uint8(3)`, recipient = escrow, and the agreement ID; mandate/cycle fields are zero. Spending limits apply to the stored payee. The escrow pulls exactly the approved total; balance-delta validation, replay state, approval consumption and both contracts' accounting roll back together on failure. Allowance is cleared after success. A vault-wide agreement ID cannot fund twice, even through another escrow. `PaymentExecuted` identifies the beneficiary; `EscrowFunded` identifies the actual custody destination. Funding is restricted-asset movement, not vendor settlement or expense.
 
