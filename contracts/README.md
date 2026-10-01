@@ -58,6 +58,10 @@ CI lives in the root `.github/workflows/` so GitHub discovers it.
 
 `MockUSDC` extends OpenZeppelin ERC20 with six decimals, test-only minting and false-return/revert failures for both transfer methods. `OrganizationFixture` supplies distinct owners/operators and balances. These tests verify token behavior, not yet vault authorization or application tenant isolation. Mocks remain under `test/`; never deploy them as USDC.
 
+## Financial sequence checks (C6 in progress)
+
+`FinancialSequencesTest` fuzzes 64-action histories spanning funding, direct/recurring payments, milestone decisions, disputes, cancellation, refunds, pause, recovery and time advancement. Independent totals check conservation and payee/recovery attribution after each action; wrong-tenant calls must fail, repeated movement keys cannot succeed, and reverted calls preserve balances, approval and replay state. CI runs 1,000 histories. This bounded test uses one agreement, two recurring cycles and one UTC day; reentrancy and remaining boundary coverage are still pending.
+
 ## Arc runtime gate
 
 Cancun is an explicit local target, not proof of Arc compatibility. Before deployment, confirm settings for the actual target network and run the Arc runtime suite. The [Arc deployment guide](https://docs.arc.network/arc/tutorials/deploy-on-arc) specifies `arc-forge test --network arc`; Arc Foundry is not installed here. Installation and runtime checks remain deployment prerequisites. Local tests do not establish live compatibility or source verification.
