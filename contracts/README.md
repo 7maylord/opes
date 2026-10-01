@@ -1,6 +1,12 @@
 # OPES contracts
 
-C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; recurring payments and escrow follow separately.
+C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates. Escrow follows separately.
+
+## Recurring mandates (C3)
+
+Owners register immutable schedules of 1–24 strictly increasing UTC due timestamps and unique stable obligation keys. The backend calculates calendar/timezone periods; the contract enforces stored timestamps, per-cycle and total caps. Payment is allowed at the due timestamp and strictly before the mandate end. Owners can pause/resume or permanently cancel. Replacing a schedule requires cancellation and a new ID; only unpaid keys can be reused. Registered recurring keys cannot execute through the direct-payment route.
+
+Recurring hashes use schema 1 with action `uint8(2)`, the stored vendor/key, mandate ID and cycle index; the agreement field stays zero. Recurring and direct payments share daily/vendor accounting, replay protection, exceptional approvals and token transfer logic. Mandate approval does not waive the exact-decision approval required above the autonomous threshold. Financial failure rolls back mandate totals as well as shared payment state.
 
 `OWNER_ROLE` aliases OpenZeppelin's `DEFAULT_ADMIN_ROLE`: one owner, two-step acceptance, initially zero transfer delay. Owner renunciation is disabled to preserve recovery access. Operators cannot hold owner authority, including after owner transfer. Owners manage vendor policies and limits, can pause/unpause, and can recover only while paused to the immutable destination. Pausers can stop execution but cannot resume it. Limits start at zero; no vendor starts allowlisted. Deployment configuration must verify the official USDC/network and organization bindings; a six-decimal check alone cannot establish token identity. Recovery reconciliation remains a backend responsibility.
 

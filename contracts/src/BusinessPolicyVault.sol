@@ -36,6 +36,34 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
 
     uint256 public constant DECISION_SCHEMA_VERSION = 1;
     uint8 public constant DIRECT_PAYMENT = 1;
+    uint8 public constant RECURRING_PAYMENT = 2;
+
+    enum MandateStatus {
+        None,
+        Active,
+        Paused,
+        Cancelled
+    }
+
+    struct RecurringMandate {
+        address vendor;
+        uint256 amountPerCycleMax;
+        uint256 totalAmountMax;
+        uint256 paid;
+        uint64 startsAt;
+        uint64 endsAt;
+        MandateStatus status;
+        uint64[] dueAt;
+        bytes32[] obligationKeys;
+    }
+
+    mapping(bytes32 id => RecurringMandate) private _mandates;
+    mapping(bytes32 key => bytes32 mandateId) public recurringMandateFor;
+    error InvalidMandate();
+    error CycleNotDue();
+    event RecurringMandateCreated(bytes32 indexed mandateId, address indexed vendor);
+    event RecurringPaymentExecuted(bytes32 indexed mandateId, bytes32 indexed obligationKey, uint256 amount);
+    event RecurringMandateStatusChanged(bytes32 indexed mandateId, MandateStatus status);
 
     struct Approval {
         address owner;
@@ -103,6 +131,19 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         uint256 amount,
         uint64 expiresAt
     ) public view returns (bytes32) {
+        return _hashPayment(DIRECT_PAYMENT, obligationKey, contextHash, vendor, amount, expiresAt, bytes32(0), 0);
+    }
+
+    function _hashPayment(
+        uint8 action,
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        address vendor,
+        uint256 amount,
+        uint64 expiresAt,
+        bytes32 mandateId,
+        uint32 cycleIndex
+    ) internal view returns (bytes32) {
         return keccak256(
             abi.encode(
                 DECISION_SCHEMA_VERSION,
@@ -110,14 +151,14 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
                 address(this),
                 organizationDomain,
                 address(token),
-                DIRECT_PAYMENT,
+                action,
                 obligationKey,
                 vendor,
                 amount,
                 expiresAt,
                 bytes32(0),
-                bytes32(0),
-                uint32(0),
+                mandateId,
+                cycleIndex,
                 contextHash
             )
         );
@@ -139,12 +180,24 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         uint256 amount,
         uint64 expiresAt
     ) external onlyRole(OPERATOR_ROLE) whenNotPaused nonReentrant {
-        if (amount == 0) revert InvalidAmount();
-        if (expiresAt <= block.timestamp) revert DecisionExpired();
         if (
-            obligationKey == bytes32(0) || contextHash == bytes32(0) || idempotencyKey != obligationKey
+            idempotencyKey != obligationKey || recurringMandateFor[obligationKey] != bytes32(0)
                 || decisionHash != hashDirectPayment(obligationKey, contextHash, vendor, amount, expiresAt)
         ) revert InvalidDecision();
+        _executePayment(decisionHash, obligationKey, contextHash, vendor, amount, expiresAt);
+    }
+
+    function _executePayment(
+        bytes32 decisionHash,
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        address vendor,
+        uint256 amount,
+        uint64 expiresAt
+    ) internal {
+        if (amount == 0) revert InvalidAmount();
+        if (expiresAt <= block.timestamp) revert DecisionExpired();
+        if (obligationKey == bytes32(0) || contextHash == bytes32(0)) revert InvalidDecision();
         if (usedIdempotencyKeys[obligationKey]) revert ObligationAlreadyPaid();
         VendorPolicy memory policy = vendorPolicies[vendor];
         if (!policy.allowed) revert VendorNotAllowed();
@@ -172,6 +225,115 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         singleMax = single;
         organizationDailyMax = daily;
         emit LimitsUpdated(autonomous, single, daily);
+    }
+
+    function getRecurringMandate(bytes32 mandateId) external view returns (RecurringMandate memory) {
+        return _mandates[mandateId];
+    }
+
+    function createRecurringMandate(
+        bytes32 mandateId,
+        address vendor,
+        uint256 amountPerCycleMax,
+        uint64[] calldata dueAt,
+        bytes32[] calldata obligationKeys,
+        uint64 startsAt,
+        uint64 endsAt,
+        uint256 totalAmountMax
+    ) external onlyRole(OWNER_ROLE) {
+        uint256 count = dueAt.length;
+        if (
+            mandateId == bytes32(0) || _mandates[mandateId].status != MandateStatus.None
+                || !vendorPolicies[vendor].allowed || count == 0 || count > 24 || obligationKeys.length != count
+                || amountPerCycleMax == 0 || totalAmountMax < amountPerCycleMax || startsAt < block.timestamp
+                || endsAt <= startsAt
+        ) revert InvalidMandate();
+        for (uint256 i; i < count; ++i) {
+            bytes32 key = obligationKeys[i];
+            if (
+                key == bytes32(0) || usedIdempotencyKeys[key] || dueAt[i] < startsAt || dueAt[i] >= endsAt
+                    || (i > 0 && dueAt[i] <= dueAt[i - 1])
+            ) revert InvalidMandate();
+            // ponytail: quadratic uniqueness check is bounded to 24 cycles; use a set if the cap grows.
+            for (uint256 j; j < i; ++j) {
+                if (obligationKeys[j] == key) revert InvalidMandate();
+            }
+            bytes32 previous = recurringMandateFor[key];
+            if (previous != bytes32(0) && _mandates[previous].status != MandateStatus.Cancelled) {
+                revert InvalidMandate();
+            }
+            recurringMandateFor[key] = mandateId;
+        }
+        _mandates[mandateId] = RecurringMandate(
+            vendor, amountPerCycleMax, totalAmountMax, 0, startsAt, endsAt, MandateStatus.Active, dueAt, obligationKeys
+        );
+        emit RecurringMandateCreated(mandateId, vendor);
+    }
+
+    function hashRecurringPayment(
+        bytes32 mandateId,
+        uint32 cycleIndex,
+        bytes32 contextHash,
+        uint256 amount,
+        uint64 expiresAt
+    ) public view returns (bytes32) {
+        RecurringMandate storage mandate = _mandates[mandateId];
+        if (cycleIndex >= mandate.obligationKeys.length) revert InvalidMandate();
+        return _hashPayment(
+            RECURRING_PAYMENT,
+            mandate.obligationKeys[cycleIndex],
+            contextHash,
+            mandate.vendor,
+            amount,
+            expiresAt,
+            mandateId,
+            cycleIndex
+        );
+    }
+
+    function executeRecurringPayment(
+        bytes32 mandateId,
+        uint32 cycleIndex,
+        bytes32 decisionHash,
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        uint256 amount,
+        uint64 expiresAt
+    ) external onlyRole(OPERATOR_ROLE) whenNotPaused nonReentrant {
+        RecurringMandate storage mandate = _mandates[mandateId];
+        if (mandate.status != MandateStatus.Active || cycleIndex >= mandate.dueAt.length) revert InvalidMandate();
+        if (block.timestamp < mandate.dueAt[cycleIndex] || block.timestamp >= mandate.endsAt) revert CycleNotDue();
+        if (
+            obligationKey != mandate.obligationKeys[cycleIndex]
+                || decisionHash != hashRecurringPayment(mandateId, cycleIndex, contextHash, amount, expiresAt)
+        ) revert InvalidDecision();
+        if (amount > mandate.amountPerCycleMax || mandate.paid + amount > mandate.totalAmountMax) {
+            revert LimitExceeded();
+        }
+        mandate.paid += amount;
+        _executePayment(decisionHash, obligationKey, contextHash, mandate.vendor, amount, expiresAt);
+        emit RecurringPaymentExecuted(mandateId, obligationKey, amount);
+    }
+
+    function pauseRecurringMandate(bytes32 mandateId) external onlyRole(OWNER_ROLE) {
+        if (_mandates[mandateId].status != MandateStatus.Active) revert InvalidMandate();
+        _mandates[mandateId].status = MandateStatus.Paused;
+        emit RecurringMandateStatusChanged(mandateId, MandateStatus.Paused);
+    }
+
+    function resumeRecurringMandate(bytes32 mandateId) external onlyRole(OWNER_ROLE) {
+        if (_mandates[mandateId].status != MandateStatus.Paused || block.timestamp >= _mandates[mandateId].endsAt) {
+            revert InvalidMandate();
+        }
+        _mandates[mandateId].status = MandateStatus.Active;
+        emit RecurringMandateStatusChanged(mandateId, MandateStatus.Active);
+    }
+
+    function cancelRecurringMandate(bytes32 mandateId) external onlyRole(OWNER_ROLE) {
+        MandateStatus status = _mandates[mandateId].status;
+        if (status != MandateStatus.Active && status != MandateStatus.Paused) revert InvalidMandate();
+        _mandates[mandateId].status = MandateStatus.Cancelled;
+        emit RecurringMandateStatusChanged(mandateId, MandateStatus.Cancelled);
     }
 
     function pause() external {
