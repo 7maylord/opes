@@ -66,4 +66,17 @@ CI lives in the root `.github/workflows/` so GitHub discovers it.
 
 Cancun is an explicit local target, not proof of Arc compatibility. Before deployment, confirm settings for the actual target network and run the Arc runtime suite. The [Arc deployment guide](https://docs.arc.network/arc/tutorials/deploy-on-arc) specifies `arc-forge test --network arc`; Arc Foundry is not installed here. Installation and runtime checks remain deployment prerequisites. Local tests do not establish live compatibility or source verification.
 
-Deployment and ABI export are later checkpoints. Both deployed contracts must be source-verified before activation; see `docs/IMPLEMENTATION_PLAN.md`.
+Both deployed contracts must be source-verified before activation; see `docs/IMPLEMENTATION_PLAN.md`.
+
+## Application ABI exports (C7)
+
+Run from the repository root with Node.js and Foundry already installed:
+
+```sh
+node contracts/script/ExportAbis.mjs
+node contracts/script/ExportAbis.mjs --check
+```
+
+The script compiles first, then exports the complete ABI arrays for `BusinessPolicyVault`, `MilestoneEscrow` and OpenZeppelin's `IERC20Metadata` (ERC-20 transfers, balances, allowances and metadata). Identical JSON files live in `frontend/abi/` and `backend/src/abi/`, including compiled events and errors. Commit regenerated files alongside contract changes. `--check` is read-only for exports and fails on any missing or stale file; CI runs it. No packages are required for export.
+
+Frontend consumers import, for example, `vaultAbi` from `@/abi/BusinessPolicyVault.json`; backend services under `src/` import it from `./abi/BusinessPolicyVault.json` (adjust the relative path for nested services). Both TypeScript configurations support JSON imports. Use these files for contract calls and event/error decoding; never write inline ABI fragments. Contract addresses come from verified deployment bindings, separately from ABIs. Consumer wrappers and their function/event checks are implemented with the backend/frontend features.

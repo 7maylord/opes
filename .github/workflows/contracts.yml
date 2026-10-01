@@ -39,5 +39,13 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      - name: Install Node.js for ABI checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check generated application ABIs
+        run: node script/ExportAbis.mjs --check
+
       - name: Run Forge tests
         run: forge test -vvv
