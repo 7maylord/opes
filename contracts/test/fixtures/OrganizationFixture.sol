@@ -16,8 +16,12 @@ abstract contract OrganizationFixture is Test {
         ownerB = makeAddr("organization-b-owner");
         operatorA = makeAddr("organization-a-operator");
         operatorB = makeAddr("organization-b-operator");
-        usdc = new MockUSDC();
+        usdc = createToken();
         usdc.mint(ownerA, 10_000e6);
         usdc.mint(ownerB, 10_000e6);
+    }
+
+    function createToken() internal virtual returns (MockUSDC) {
+        return new MockUSDC();
     }
 }

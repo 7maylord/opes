@@ -1,6 +1,6 @@
 # OPES contracts
 
-C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates; C4 adds escrow agreements and funding; C5 adds milestone release, disputes and refunds. C6 security invariants and deployment gates remain pending.
+C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates; C4 adds escrow agreements and funding; C5 adds milestone release, disputes and refunds. C6 adds financial sequence, reentrancy and boundary checks. Deployment gates remain pending.
 
 ## Milestone release and refunds (C5)
 
@@ -58,9 +58,9 @@ CI lives in the root `.github/workflows/` so GitHub discovers it.
 
 `MockUSDC` extends OpenZeppelin ERC20 with six decimals, test-only minting and false-return/revert failures for both transfer methods. `OrganizationFixture` supplies distinct owners/operators and balances. These tests verify token behavior, not yet vault authorization or application tenant isolation. Mocks remain under `test/`; never deploy them as USDC.
 
-## Financial sequence checks (C6 in progress)
+## Financial security checks (C6)
 
-`FinancialSequencesTest` fuzzes 64-action histories spanning funding, direct/recurring payments, milestone decisions, disputes, cancellation, refunds, pause, recovery and time advancement. Independent totals check conservation and payee/recovery attribution after each action; wrong-tenant calls must fail, repeated movement keys cannot succeed, and reverted calls preserve balances, approval and replay state. CI runs 1,000 histories. This bounded test uses one agreement, two recurring cycles and one UTC day; reentrancy and remaining boundary coverage are still pending.
+`FinancialSequencesTest` fuzzes 64-action histories spanning funding, direct/recurring payments, milestone decisions, disputes, cancellation, refunds, pause, recovery and time advancement. Independent totals check conservation and payee/recovery attribution after each action; wrong-tenant calls must fail, repeated movement keys cannot succeed, and reverted calls preserve balances, approval and replay state. CI runs 1,000 histories. This bounded test uses one agreement, two recurring cycles and one UTC day; separate boundary tests cover funding, approval/completion expiry, recurring due/end times and daily rollover. `ReentrancyTest` uses a hostile callback token to test direct, recurring, funding, release, refund and recovery paths. Callbacks hold execution authority (or owner authority for recovery), and assertions require the exact reentrancy-guard error. The funding callback also checks the escrow guard before its vault-only body check. These local tests are bounded checks, not a formal proof or live-token compatibility test.
 
 ## Arc runtime gate
 
