@@ -64,6 +64,14 @@ CI lives in the root `.github/workflows/` so GitHub discovers it.
 
 ## Arc runtime gate
 
+Prepare the deployment configuration from the repository root:
+
+```sh
+cp -n contracts/.env.example contracts/.env
+```
+
+Fill the blank organization/domain and owner/operator/pauser/recovery fields in `contracts/.env`. The template includes Arc testnet RPC, chain, USDC and Blockscout verification defaults from the [official deployment guide](https://docs.arc.io/arc/tutorials/deploy-on-arc) and [USDC interface reference](https://docs.arc.io/integrate/infrastructure/indexing-events). Fill the Circle credentials/wallet IDs for the planned provider path; the private-key field is only for a documented direct-deployment fallback. Deployment output addresses stay blank until confirmed. This is configuration preparation; C8 deployment scripts, provider support checks, runtime validation and verification are still pending.
+
 Cancun is an explicit local target, not proof of Arc compatibility. Before deployment, confirm settings for the actual target network and run the Arc runtime suite. The [Arc deployment guide](https://docs.arc.network/arc/tutorials/deploy-on-arc) specifies `arc-forge test --network arc`; Arc Foundry is not installed here. Installation and runtime checks remain deployment prerequisites. Local tests do not establish live compatibility or source verification.
 
 Both deployed contracts must be source-verified before activation; see `docs/IMPLEMENTATION_PLAN.md`.
