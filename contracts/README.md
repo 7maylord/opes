@@ -1,6 +1,12 @@
 # OPES contracts
 
-C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates. Escrow follows separately.
+C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates; C4 adds escrow agreements and funding. Release/refund execution follows in C5. Do not deploy the intermediate escrow version with funds.
+
+## Escrow funding (C4)
+
+Each escrow binds to one vault and inherits its token and organization domain. Its initial admin must be that vault's owner. Admin-created agreements have 1–5 positive milestone allocations, immutable criteria/terms/payee and refund-to-vault destination, and ordered future funding/completion deadlines. Funding must arrive strictly before the funding deadline; completion deadline enforcement belongs to C5 release logic.
+
+The vault owner allowlists matching escrow instances and approves each exact funding decision, including amounts within the autonomous limit. Hash schema 1 uses action `uint8(3)`, recipient = escrow, and the agreement ID; mandate/cycle fields are zero. Spending limits apply to the stored payee. The escrow pulls exactly the approved total; balance-delta validation, replay state, approval consumption and both contracts' accounting roll back together on failure. Allowance is cleared after success. A vault-wide agreement ID cannot fund twice, even through another escrow. `PaymentExecuted` identifies the beneficiary; `EscrowFunded` identifies the actual custody destination. Funding is restricted-asset movement, not vendor settlement or expense.
 
 ## Recurring mandates (C3)
 

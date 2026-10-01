@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {
     AccessControlDefaultAdminRules
 } from "@openzeppelin/contracts/access/extensions/AccessControlDefaultAdminRules.sol";
+import {MilestoneEscrow} from "./MilestoneEscrow.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -37,6 +38,13 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
     uint256 public constant DECISION_SCHEMA_VERSION = 1;
     uint8 public constant DIRECT_PAYMENT = 1;
     uint8 public constant RECURRING_PAYMENT = 2;
+    uint8 public constant ESCROW_FUNDING = 3;
+    mapping(address escrow => bool) public approvedEscrows;
+    mapping(bytes32 agreement => bool) public fundedAgreements;
+    event EscrowPolicyUpdated(address indexed escrow, bool allowed);
+    event EscrowFunded(
+        bytes32 indexed decisionHash, bytes32 indexed agreementId, address indexed escrowContract, uint256 amount
+    );
 
     enum MandateStatus {
         None,
@@ -131,7 +139,9 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         uint256 amount,
         uint64 expiresAt
     ) public view returns (bytes32) {
-        return _hashPayment(DIRECT_PAYMENT, obligationKey, contextHash, vendor, amount, expiresAt, bytes32(0), 0);
+        return _hashPayment(
+            DIRECT_PAYMENT, obligationKey, contextHash, vendor, amount, expiresAt, bytes32(0), bytes32(0), 0
+        );
     }
 
     function _hashPayment(
@@ -141,6 +151,7 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         address vendor,
         uint256 amount,
         uint64 expiresAt,
+        bytes32 agreementId,
         bytes32 mandateId,
         uint32 cycleIndex
     ) internal view returns (bytes32) {
@@ -156,7 +167,7 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
                 vendor,
                 amount,
                 expiresAt,
-                bytes32(0),
+                agreementId,
                 mandateId,
                 cycleIndex,
                 contextHash
@@ -195,6 +206,19 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         uint256 amount,
         uint64 expiresAt
     ) internal {
+        _consumePayment(decisionHash, obligationKey, contextHash, vendor, amount, expiresAt);
+        token.safeTransfer(vendor, amount);
+        emit PaymentExecuted(decisionHash, obligationKey, vendor, amount, msg.sender);
+    }
+
+    function _consumePayment(
+        bytes32 decisionHash,
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        address vendor,
+        uint256 amount,
+        uint64 expiresAt
+    ) internal {
         if (amount == 0) revert InvalidAmount();
         if (expiresAt <= block.timestamp) revert DecisionExpired();
         if (obligationKey == bytes32(0) || contextHash == bytes32(0)) revert InvalidDecision();
@@ -215,8 +239,6 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         dailySpent[day] = total;
         vendorDailySpent[vendor][day] = vendorTotal;
         delete approvals[decisionHash];
-        token.safeTransfer(vendor, amount);
-        emit PaymentExecuted(decisionHash, obligationKey, vendor, amount, msg.sender);
     }
 
     function setLimits(uint256 autonomous, uint256 single, uint256 daily) external onlyRole(OWNER_ROLE) {
@@ -225,6 +247,56 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
         singleMax = single;
         organizationDailyMax = daily;
         emit LimitsUpdated(autonomous, single, daily);
+    }
+
+    function setEscrow(address escrow, bool allowed) external onlyRole(OWNER_ROLE) {
+        if (
+            allowed
+                && (MilestoneEscrow(escrow).vault() != address(this)
+                    || address(MilestoneEscrow(escrow).token()) != address(token)
+                    || MilestoneEscrow(escrow).organizationDomain() != organizationDomain)
+        ) revert InvalidConfiguration();
+        approvedEscrows[escrow] = allowed;
+        emit EscrowPolicyUpdated(escrow, allowed);
+    }
+
+    function hashEscrowFunding(
+        bytes32 key,
+        bytes32 contextHash,
+        address escrow,
+        bytes32 agreementId,
+        uint256 amount,
+        uint64 expiresAt
+    ) public view returns (bytes32) {
+        return _hashPayment(ESCROW_FUNDING, key, contextHash, escrow, amount, expiresAt, agreementId, bytes32(0), 0);
+    }
+
+    function fundEscrow(
+        bytes32 decisionHash,
+        bytes32 obligationKey,
+        bytes32 contextHash,
+        bytes32 idempotencyKey,
+        address escrow,
+        bytes32 agreementId,
+        uint256 amount,
+        uint64 expiresAt
+    ) external onlyRole(OPERATOR_ROLE) whenNotPaused nonReentrant {
+        if (
+            !approvedEscrows[escrow] || fundedAgreements[agreementId]
+                || recurringMandateFor[obligationKey] != bytes32(0) || idempotencyKey != obligationKey
+                || decisionHash != hashEscrowFunding(obligationKey, contextHash, escrow, agreementId, amount, expiresAt)
+        ) revert InvalidDecision();
+        MilestoneEscrow.Agreement memory agreement = MilestoneEscrow(escrow).getAgreement(agreementId);
+        if (amount != agreement.totalAmount) revert InvalidAmount();
+        Approval memory approval = approvals[decisionHash];
+        if (approval.owner != owner() || approval.expiresAt <= block.timestamp) revert ApprovalRequired();
+        _consumePayment(decisionHash, obligationKey, contextHash, agreement.payee, amount, expiresAt);
+        fundedAgreements[agreementId] = true;
+        token.forceApprove(escrow, amount);
+        MilestoneEscrow(escrow).fundAgreement(agreementId, amount);
+        token.forceApprove(escrow, 0);
+        emit PaymentExecuted(decisionHash, obligationKey, agreement.payee, amount, msg.sender);
+        emit EscrowFunded(decisionHash, agreementId, escrow, amount);
     }
 
     function getRecurringMandate(bytes32 mandateId) external view returns (RecurringMandate memory) {
@@ -286,6 +358,7 @@ contract BusinessPolicyVault is AccessControlDefaultAdminRules, Pausable, Reentr
             mandate.vendor,
             amount,
             expiresAt,
+            bytes32(0),
             mandateId,
             cycleIndex
         );
