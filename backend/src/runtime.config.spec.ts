@@ -6,6 +6,7 @@ describe('loadRuntimeConfig', () => {
       environment: 'test',
       port: 3000,
       allowedOrigins: ['http://localhost:3001'],
+      databaseUrl: undefined,
     });
   });
 
@@ -18,6 +19,12 @@ describe('loadRuntimeConfig', () => {
   it('requires explicit origins in production', () => {
     expect(() => loadRuntimeConfig({ NODE_ENV: 'production' })).toThrow(
       'OPES_ALLOWED_ORIGINS is required in production',
+    );
+  });
+
+  it('validates database URLs when provided', () => {
+    expect(() => loadRuntimeConfig({ DATABASE_URL: 'nope' })).toThrow(
+      'DATABASE_URL must be a valid URL',
     );
   });
 });

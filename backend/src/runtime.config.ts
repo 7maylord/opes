@@ -4,6 +4,7 @@ export interface RuntimeConfig {
   environment: RuntimeEnvironment;
   port: number;
   allowedOrigins: string[];
+  databaseUrl?: string;
 }
 
 const environments = new Set<RuntimeEnvironment>([
@@ -21,6 +22,7 @@ export function loadRuntimeConfig(
     environment,
     port: parsePort(env.PORT),
     allowedOrigins: parseAllowedOrigins(env.OPES_ALLOWED_ORIGINS, environment),
+    databaseUrl: parseOptionalUrl(env.DATABASE_URL, 'DATABASE_URL'),
   };
 }
 
@@ -83,4 +85,21 @@ function parseAllowedOrigins(
   }
 
   return origins;
+}
+
+function parseOptionalUrl(
+  value: string | undefined,
+  name: string,
+): string | undefined {
+  if (value === undefined || value.trim() === '') {
+    return undefined;
+  }
+
+  try {
+    new URL(value);
+  } catch {
+    throw new Error(`${name} must be a valid URL`);
+  }
+
+  return value;
 }
