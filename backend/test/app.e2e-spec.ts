@@ -16,11 +16,17 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
+  it('/health (GET)', () => {
+    return request(app.getHttpAdapter().getInstance() as App)
+      .get('/health')
       .expect(200)
-      .expect('Hello World!');
+      .expect(({ body }) => {
+        expect(body).toMatchObject({
+          status: 'ok',
+          service: 'opes-backend',
+          environment: 'test',
+        });
+      });
   });
 
   afterEach(async () => {

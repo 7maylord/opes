@@ -1,8 +1,15 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { loadRuntimeConfig } from './runtime.config';
 
 async function bootstrap() {
+  const config = loadRuntimeConfig();
   const app = await NestFactory.create(AppModule);
-  await app.listen(process.env.PORT ?? 3000);
+  app.enableCors({
+    origin: config.allowedOrigins,
+    credentials: true,
+  });
+  app.enableShutdownHooks();
+  await app.listen(config.port, '0.0.0.0');
 }
-bootstrap();
+void bootstrap();
