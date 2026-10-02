@@ -84,13 +84,24 @@ Prepare the deployment configuration from the repository root:
 cp -n contracts/.env.example contracts/.env
 ```
 
-The template contains the factory deployment signer, fixed USDC token, platform factory admin/provisioner and public RPC/verification defaults. Organization domains and tenant role addresses are per-signup factory arguments, not global environment variables. Circle application credentials are not required for direct Foundry deployment or public Blockscout verification. Defaults follow the [official deployment guide](https://docs.arc.io/arc/tutorials/deploy-on-arc) and [USDC interface reference](https://docs.arc.io/integrate/infrastructure/indexing-events). Deployment manifests record factory/helper addresses and each tenant pair. Deployment scripts, Arc runtime checks and source verification remain pending.
+The template contains the factory deployment signer, fixed USDC token, platform factory admin/provisioner and public RPC/verification defaults. Organization domains and tenant role addresses are per-signup factory arguments, not global environment variables. Circle application credentials are not required for direct Foundry deployment or public Blockscout verification. Defaults follow the [official deployment guide](https://docs.arc.io/arc/tutorials/deploy-on-arc) and [USDC interface reference](https://docs.arc.io/integrate/infrastructure/indexing-events). Deployment manifests record factory/helper addresses and each tenant pair.
+
+`script/DeployFactory.s.sol` rejects any chain except Arc testnet (5042002), any token except its official USDC, and missing platform roles. It reads the signer internally from the environment. From `contracts/`, load your trusted `.env`, then simulate:
+
+```sh
+set -a
+source .env
+set +a
+forge script script/DeployFactory.s.sol:DeployFactory --rpc-url "$ARC_TESTNET_RPC_URL"
+```
+
+Before broadcasting, check the signer balance/nonce and ask Arc RPC `eth_estimateGas` and `eth_call` to simulate the exact creation bytecode with encoded constructor arguments. Append `--broadcast` only for the intended deployment. Save the receipt immediately; if submission times out, reconcile its hash and signer nonce before retrying. `broadcast/` and `cache/` are ignored and may contain sensitive signing data; never commit them. Verify factory and helper separately using `forge verify-contract --chain-id 5042002 --verifier blockscout --verifier-url "$ARC_VERIFIER_URL" --watch`, their source identifiers and encoded constructor arguments. Factory arguments are `(token, admin, provisioner)`; helper arguments are `(token)`.
 
 Current contracts settle USDC on their deployed chain. They do not execute CCTP transfers or token swaps. The user requires autonomous Base USDC → Arbitrum USDT payouts; PRD v1.5 §11.8.1 now supersedes the earlier inbound-only CCTP scope. The agent selects an allowed route, source/destination contracts enforce authorization and execute transfers/swaps, and the Railway worker handles quotes, attestations, transaction submission and resumable reconciliation. Existing CCTP and swap infrastructure supply those operations; OPES does not build a bridge or DEX. An Arc custody hop is not inherently required for this route.
 
 Crosschain authorization must bind the organization/obligation, chain/token/recipient, exact payout, maximum spend and fees, expiry and permitted executors. A completed burn or mint is not a completed vendor payment. A failed destination swap leaves controlled destination funds to reconcile/retry/recover, never a reason to burn again. Concrete provider/token support, authenticated source-to-destination execution, arrangement compatibility and per-asset accounting must be specified in C7a, implemented/tested in C7b–C7c, then deployed and source-verified. Existing ABIs and tests cover the same-chain implementation only.
 
-Cancun is an explicit local target, not proof of Arc compatibility. Before deployment, confirm settings for the actual target network and run the Arc runtime suite. The [Arc deployment guide](https://docs.arc.network/arc/tutorials/deploy-on-arc) specifies `arc-forge test --network arc`; Arc Foundry is not installed here. Installation and runtime checks remain deployment prerequisites. Local tests do not establish live compatibility or source verification.
+Cancun is an explicit compiler target, not proof of Arc compatibility. Standard Foundry can deploy and verify on Arc. Arc Foundry's `arc-forge test --network arc` additionally runs the local suite under Arc execution rules; it is not installed here. For this testnet deployment, use standard Foundry tests plus live Arc-node creation simulation, gas estimation and post-deployment checks. This replaces the earlier mandatory installation gate; it does not claim that the Arc-specific local suite ran. Tenant payment/escrow smoke tests and source verification remain separate checks.
 
 Both deployed contracts must be source-verified before activation; see `docs/IMPLEMENTATION_PLAN.md`.
 
