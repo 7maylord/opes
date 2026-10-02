@@ -26,13 +26,24 @@ export class DatabaseService implements OnModuleDestroy {
   ): Promise<T> {
     assertTenantContext(context);
 
+    return this.withOrganizationScope(context.organizationId, work);
+  }
+
+  async withOrganizationScope<T>(
+    organizationId: string,
+    work: (database: TenantDatabase) => Promise<T>,
+  ): Promise<T> {
+    if (organizationId.trim() === '') {
+      throw new Error('organizationId is required');
+    }
+
     const client = await this.getPool().connect();
 
     try {
       await client.query('BEGIN');
       await client.query(
         "SELECT set_config('opes.organization_id', $1, true)",
-        [context.organizationId],
+        [organizationId],
       );
       const result = await work(client);
       await client.query('COMMIT');

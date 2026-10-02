@@ -73,4 +73,12 @@ describe('DatabaseService', () => {
       ),
     ).rejects.toThrow('TenantContext.organizationId is required');
   });
+
+  it('rejects empty organization scope before checking out a client', async () => {
+    const service = new DatabaseService();
+
+    await expect(
+      service.withOrganizationScope('', () => Promise.resolve()),
+    ).rejects.toThrow('organizationId is required');
+  });
 });
