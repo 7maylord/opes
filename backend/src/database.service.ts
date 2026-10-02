@@ -20,6 +20,18 @@ export class DatabaseService implements OnModuleDestroy {
   private pool?: DatabasePool;
   private readonly databaseUrl = loadRuntimeConfig().databaseUrl;
 
+  async withDatabase<T>(
+    work: (database: TenantDatabase) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.getPool().connect();
+
+    try {
+      return await work(client);
+    } finally {
+      client.release();
+    }
+  }
+
   async withTenant<T>(
     context: TenantContext,
     work: (database: TenantDatabase) => Promise<T>,
