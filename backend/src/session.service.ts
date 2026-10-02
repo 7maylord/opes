@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
-import { DatabaseService } from './database.service';
+import { DatabaseService, TenantDatabase } from './database.service';
 
 const defaultTtlMs = 7 * 24 * 60 * 60 * 1000;
 
@@ -28,18 +28,30 @@ export class SessionService {
       throw new Error('userId is required');
     }
 
+    return this.database.withDatabase((database) =>
+      this.createSessionRecord(database, userId, ttlMs),
+    );
+  }
+
+  async createSessionRecord(
+    database: TenantDatabase,
+    userId: string,
+    ttlMs: number = defaultTtlMs,
+  ): Promise<string> {
+    if (userId.trim() === '') {
+      throw new Error('userId is required');
+    }
+
     const token = randomBytes(32).toString('base64url');
     const tokenHash = hashSessionToken(token);
     const expiresAt = new Date(Date.now() + ttlMs).toISOString();
 
-    await this.database.withDatabase((database) =>
-      database.query(
-        `
-          INSERT INTO opes.user_sessions (user_id, token_hash, expires_at)
-          VALUES ($1, $2, $3)
-        `,
-        [userId, tokenHash, expiresAt],
-      ),
+    await database.query(
+      `
+        INSERT INTO opes.user_sessions (user_id, token_hash, expires_at)
+        VALUES ($1, $2, $3)
+      `,
+      [userId, tokenHash, expiresAt],
     );
 
     return token;

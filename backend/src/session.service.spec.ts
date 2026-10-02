@@ -24,6 +24,19 @@ describe('SessionService', () => {
     expect(query.mock.calls[0]?.[1]).not.toContain(token);
   });
 
+  it('can create a session inside an existing transaction', async () => {
+    const query = jest.fn(() => Promise.resolve({ rows: [] }));
+    const service = new SessionService({} as DatabaseService);
+
+    const token = await service.createSessionRecord(
+      { query },
+      '11111111-1111-1111-1111-111111111111',
+    );
+
+    expect(token.length).toBeGreaterThan(40);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves an active token to its user', async () => {
     const database = {
       withDatabase: jest.fn(
