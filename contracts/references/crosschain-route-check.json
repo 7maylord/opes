@@ -1,0 +1,117 @@
+[
+  {
+    "network": "base-sepolia",
+    "checkedAt": "2026-10-02T09:19:51.242Z",
+    "contracts": {
+      "usdc": {
+        "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "codeBytes": 1798,
+        "decimals": 6
+      },
+      "messenger": {
+        "address": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+        "codeBytes": 2175
+      },
+      "transmitter": {
+        "address": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+        "codeBytes": 2175
+      }
+    },
+    "chainId": 84532,
+    "blockNumber": 47582252,
+    "providerBindings": {
+      "messageVersion": 1,
+      "burnBodyVersion": 1,
+      "localDomain": 6,
+      "maxMessageBodySize": 8192,
+      "remoteMessenger": "0x0000000000000000000000008fe6b999dc680ccfdd5bf7eb0974218be2542daa"
+    }
+  },
+  {
+    "network": "arbitrum-sepolia",
+    "checkedAt": "2026-10-02T09:19:51.280Z",
+    "contracts": {
+      "usdc": {
+        "address": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+        "codeBytes": 1798,
+        "decimals": 6
+      },
+      "messenger": {
+        "address": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+        "codeBytes": 2175
+      },
+      "transmitter": {
+        "address": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+        "codeBytes": 2175
+      },
+      "router": {
+        "address": "0x101F443B4d1b059569D643917553c771E1b9663E",
+        "codeBytes": 24497
+      },
+      "factory": {
+        "address": "0x248AB79Bbb9bC29bB72f7Cd42F17e054Fc40188e",
+        "codeBytes": 24535
+      },
+      "quoter": {
+        "address": "0x2779a0CC1c3e0E44D2542EC3e79e3864Ae93Ef0B",
+        "codeBytes": 8273
+      }
+    },
+    "chainId": 421614,
+    "blockNumber": 314936678,
+    "providerBindings": {
+      "messageVersion": 1,
+      "burnBodyVersion": 1,
+      "localDomain": 3,
+      "maxMessageBodySize": 8192,
+      "remoteMessenger": "0x0000000000000000000000008fe6b999dc680ccfdd5bf7eb0974218be2542daa"
+    }
+  },
+  {
+    "network": "arbitrum-one",
+    "checkedAt": "2026-10-02T09:19:51.281Z",
+    "contracts": {
+      "usdc": {
+        "address": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+        "codeBytes": 1852,
+        "decimals": 6
+      },
+      "usdt0": {
+        "address": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+        "codeBytes": 2141,
+        "decimals": 6
+      },
+      "router": {
+        "address": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+        "codeBytes": 24497
+      },
+      "factory": {
+        "address": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        "codeBytes": 24535
+      },
+      "quoter": {
+        "address": "0x61fFE014bA17989E743c5F6cB21bF9697530B21e",
+        "codeBytes": 8273
+      }
+    },
+    "chainId": 42161,
+    "blockNumber": 510941437,
+    "quotes": [
+      {
+        "fee": 100,
+        "outputAtomic": "100000000",
+        "inputAtomic": "99983099"
+      },
+      {
+        "fee": 500,
+        "outputAtomic": "100000000",
+        "inputAtomic": "99990959"
+      },
+      {
+        "fee": 3000,
+        "outputAtomic": "100000000",
+        "inputAtomic": "434371553"
+      }
+    ]
+  }
+]
