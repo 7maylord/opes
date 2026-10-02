@@ -1,6 +1,8 @@
-# C7a — bounded crosschain payouts
+# Future contract design — bounded crosschain payouts
 
-Status: original route design complete; six-chain expansion documented, with Celo transport and missing swap-provider bindings still open. Checked 2026-10-02. The user now requires Arbitrum, Base, Arc, Celo, Ethereum and Monad plus their testnets. [Network scope and provider matrix](NETWORK_SUPPORT.md) supersedes the original two-chain scope. Implementation remains pending; no deployed crosschain support is claimed.
+Status: deferred future feature. The current implementation path uses backend and wallet restrictions for multichain payouts, with the verified Arc same-chain factory/vault/escrow contracts remaining the only OPES contracts in active scope. This document preserves the earlier contract-enforced design for a later version; it is not a prerequisite for backend B0-B9 work. See [future features](../FUTURE_FEATURES.md).
+
+Checked 2026-10-02. The user requires Arbitrum, Base, Arc, Celo, Ethereum and Monad plus their testnets. [Network scope and provider matrix](NETWORK_SUPPORT.md) defines current route capabilities and provider gaps. No deployed crosschain OPES contract support is claimed.
 
 ## Route and capability boundary
 
