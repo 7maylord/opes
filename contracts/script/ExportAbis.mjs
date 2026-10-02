@@ -14,7 +14,7 @@ const contracts = join(root, 'contracts');
 // Compile before reading artifacts so a stale build cannot bless stale exports.
 execFileSync('forge', ['build', '--root', contracts], { stdio: 'inherit' });
 
-const names = ['BusinessPolicyVault', 'MilestoneEscrow', 'IERC20Metadata'];
+const names = ['BusinessPolicyVault', 'MilestoneEscrow', 'OrganizationFactory', 'IERC20Metadata'];
 const outputs = names.flatMap((name) => {
   const artifact = JSON.parse(readFileSync(join(contracts, 'out', `${name}.sol`, `${name}.json`), 'utf8'));
   if (!Array.isArray(artifact.abi) || artifact.abi.length === 0) {

@@ -18,7 +18,7 @@ abstract contract EscrowFixture is OrganizationFixture {
     function setUp() public virtual override {
         super.setUp();
         vault = new BusinessPolicyVault(address(usdc), keccak256("a"), ownerA, operatorA, ownerA, ownerA);
-        escrow = new MilestoneEscrow(address(vault), ownerA);
+        escrow = new MilestoneEscrow(address(vault), ownerA, operatorA, ownerA);
         deadline = uint64(vm.getBlockTimestamp() + 100);
         uint256[] memory amounts = new uint256[](2);
         amounts[0] = 10e6;

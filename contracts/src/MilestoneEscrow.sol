@@ -82,12 +82,16 @@ contract MilestoneEscrow is AccessControlDefaultAdminRules, Pausable, Reentrancy
     event AgreementCreated(bytes32 indexed agreementId, address indexed payee, uint256 totalAmount, bytes32 termsHash);
     event AgreementFunded(bytes32 indexed agreementId, uint256 amount);
 
-    constructor(address vault_, address admin) AccessControlDefaultAdminRules(0, admin) {
+    constructor(address vault_, address admin, address operator, address pauser)
+        AccessControlDefaultAdminRules(0, admin)
+    {
         if (vault_ == address(0) || IEscrowVault(vault_).owner() != admin) revert InvalidAgreement();
         vault = vault_;
         token = IEscrowVault(vault_).token();
         organizationDomain = IEscrowVault(vault_).organizationDomain();
         _grantRole(APPROVER_ROLE, admin);
+        _grantRole(OPERATOR_ROLE, operator);
+        _grantRole(PAUSER_ROLE, pauser);
         _pause();
     }
 
