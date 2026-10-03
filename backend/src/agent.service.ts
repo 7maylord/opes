@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { DatabaseService } from './database.service';
+import { DatabaseService, TenantDatabase } from './database.service';
 import {
   FactoryManifestService,
   VerifiedFactoryManifest,
@@ -138,6 +138,11 @@ export class AgentService {
       );
 
       if (existing.rows[0] !== undefined) {
+        await enqueueProvisioningEvent(
+          database,
+          context.organizationId,
+          existing.rows[0].id,
+        );
         return mapBinding(existing.rows[0]);
       }
 
@@ -179,9 +184,45 @@ export class AgentService {
         ],
       );
 
-      return mapBinding(requireBinding(inserted.rows[0]));
+      const binding = requireBinding(inserted.rows[0]);
+      await enqueueProvisioningEvent(
+        database,
+        context.organizationId,
+        binding.id,
+      );
+
+      return mapBinding(binding);
     });
   }
+}
+
+async function enqueueProvisioningEvent(
+  database: TenantDatabase,
+  organizationId: string,
+  bindingId: string,
+): Promise<void> {
+  await database.query(
+    `
+      INSERT INTO opes.outbox_events (
+        organization_id,
+        event_type,
+        aggregate_type,
+        aggregate_id,
+        payload
+      )
+      SELECT $1, 'agent.provision.arc_testnet', 'tenant_resource_binding', $2, '{}'::jsonb
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM opes.outbox_events
+         WHERE organization_id = $1
+           AND event_type = 'agent.provision.arc_testnet'
+           AND aggregate_type = 'tenant_resource_binding'
+           AND aggregate_id = $2
+           AND status IN ('PENDING', 'PROCESSING')
+      )
+    `,
+    [organizationId, bindingId],
+  );
 }
 
 function mapBinding(row: BindingRow): AgentResourceBinding {

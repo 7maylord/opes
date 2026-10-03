@@ -122,7 +122,8 @@ describe('AgentService', () => {
             },
           },
         ],
-      });
+      })
+      .mockResolvedValueOnce({ rows: [] });
     const withTenant = jest.fn(
       (
         _context: TenantContext,
@@ -154,7 +155,7 @@ describe('AgentService', () => {
         checkedAt: '2026-10-02T09:05:47.854Z',
       },
     });
-    expect(query).toHaveBeenLastCalledWith(
+    expect(query).toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO opes.tenant_resource_bindings'),
       [
         'organization-1',
@@ -168,6 +169,10 @@ describe('AgentService', () => {
           checkedAt: '2026-10-02T09:05:47.854Z',
         }),
       ],
+    );
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining('agent.provision.arc_testnet'),
+      ['organization-1', 'binding-1'],
     );
   });
 });
