@@ -4,6 +4,8 @@ import { AgentService } from './agent.service';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DatabaseService } from './database.service';
+import { DecisionController } from './decision.controller';
+import { DecisionService } from './decision.service';
 import { EvidenceController } from './evidence.controller';
 import { EvidenceService } from './evidence.service';
 import { FactoryManifestService } from './factory-manifest.service';
@@ -26,6 +28,7 @@ import { TenantContextService } from './tenant-context.service';
   controllers: [
     AgentController,
     AppController,
+    DecisionController,
     EvidenceController,
     InvoiceController,
     LifecycleController,
@@ -38,6 +41,7 @@ import { TenantContextService } from './tenant-context.service';
     AgentService,
     AppService,
     DatabaseService,
+    DecisionService,
     EvidenceService,
     FactoryManifestService,
     InvoiceService,
