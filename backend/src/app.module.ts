@@ -7,6 +7,8 @@ import { DatabaseService } from './database.service';
 import { EvidenceController } from './evidence.controller';
 import { EvidenceService } from './evidence.service';
 import { FactoryManifestService } from './factory-manifest.service';
+import { InvoiceController } from './invoice.controller';
+import { InvoiceService } from './invoice.service';
 import { OnboardingController } from './onboarding.controller';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
 import { OnboardingService } from './onboarding.service';
@@ -23,6 +25,7 @@ import { TenantContextService } from './tenant-context.service';
     AgentController,
     AppController,
     EvidenceController,
+    InvoiceController,
     OnboardingController,
     OrganizationInvitationController,
     OrganizationController,
@@ -34,6 +37,7 @@ import { TenantContextService } from './tenant-context.service';
     DatabaseService,
     EvidenceService,
     FactoryManifestService,
+    InvoiceService,
     OnboardingService,
     ProvisioningWorkerService,
     OrganizationService,
