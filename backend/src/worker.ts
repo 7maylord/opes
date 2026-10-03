@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
+import { PaymentExecutionWorkerService } from './payment-execution-worker.service';
 import { loadRuntimeConfig } from './runtime.config';
 
 async function bootstrapWorker() {
@@ -15,6 +16,7 @@ async function bootstrapWorker() {
   logger.log(`worker started in ${config.environment}`);
 
   const provisioning = app.get(ProvisioningWorkerService);
+  const payments = app.get(PaymentExecutionWorkerService);
   const runProvisioning = async () => {
     try {
       await provisioning.processDueArcProvisioning();
@@ -22,8 +24,20 @@ async function bootstrapWorker() {
       logger.error('arc provisioning worker failed', error);
     }
   };
+  const runPayments = async () => {
+    try {
+      await payments.processDuePaymentExecutions();
+    } catch (error) {
+      logger.error('payment execution worker failed', error);
+    }
+  };
+
   await runProvisioning();
-  const interval = setInterval(() => void runProvisioning(), 10_000);
+  await runPayments();
+  const interval = setInterval(() => {
+    void runProvisioning();
+    void runPayments();
+  }, 10_000);
 
   await new Promise<void>((resolve) => {
     process.once('SIGINT', resolve);
