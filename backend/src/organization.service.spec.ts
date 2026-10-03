@@ -100,4 +100,58 @@ describe('OrganizationService', () => {
     });
     expect(withTenant).toHaveBeenCalledWith(context, expect.any(Function));
   });
+
+  it('lists organization members through tenant-scoped access', async () => {
+    const context: TenantContext = {
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      membershipId: 'membership-1',
+      role: 'OWNER',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+    };
+    const createdAt = new Date('2026-10-03T10:00:00.000Z');
+    const query = jest.fn(() =>
+      Promise.resolve({
+        rows: [
+          {
+            id: 'membership-1',
+            user_id: 'user-1',
+            email: 'owner@example.com',
+            display_name: 'Owner',
+            role: 'OWNER',
+            status: 'ACTIVE',
+            created_at: createdAt,
+          },
+        ],
+      }),
+    );
+    const withTenant = jest.fn(
+      (
+        _context: TenantContext,
+        work: (database: TenantDatabase) => Promise<unknown>,
+      ) => work({ query }),
+    );
+    const database = {
+      withTenant,
+    } as unknown as DatabaseService;
+    const service = new OrganizationService(database);
+
+    await expect(service.listMembers(context)).resolves.toEqual([
+      {
+        id: 'membership-1',
+        userId: 'user-1',
+        email: 'owner@example.com',
+        displayName: 'Owner',
+        role: 'OWNER',
+        status: 'ACTIVE',
+        createdAt,
+      },
+    ]);
+    expect(withTenant).toHaveBeenCalledWith(context, expect.any(Function));
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('membership.organization_id = $1'),
+      ['organization-1'],
+    );
+  });
 });

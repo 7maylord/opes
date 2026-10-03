@@ -13,6 +13,16 @@ export interface UserOrganization {
   agentLifecycleStatus: string;
 }
 
+export interface OrganizationMember {
+  id: string;
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  status: string;
+  createdAt: Date;
+}
+
 interface UserOrganizationRow {
   id: string;
   slug: string;
@@ -22,6 +32,16 @@ interface UserOrganizationRow {
   role: string;
   agent_id: string;
   agent_lifecycle_status: string;
+}
+
+interface OrganizationMemberRow {
+  id: string;
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: string;
+  status: string;
+  created_at: Date;
 }
 
 @Injectable()
@@ -112,5 +132,38 @@ export class OrganizationService {
       agentId: row.agent_id,
       agentLifecycleStatus: row.agent_lifecycle_status,
     };
+  }
+
+  async listMembers(context: TenantContext): Promise<OrganizationMember[]> {
+    const result = await this.database.withTenant(context, (database) =>
+      database.query<OrganizationMemberRow>(
+        `
+          SELECT
+            membership.id,
+            membership.user_id,
+            app_user.email,
+            app_user.display_name,
+            membership.role,
+            membership.status,
+            membership.created_at
+          FROM opes.organization_memberships AS membership
+          JOIN opes.app_users AS app_user
+            ON app_user.id = membership.user_id
+          WHERE membership.organization_id = $1
+          ORDER BY membership.created_at ASC
+        `,
+        [context.organizationId],
+      ),
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      email: row.email,
+      displayName: row.display_name,
+      role: row.role,
+      status: row.status,
+      createdAt: row.created_at,
+    }));
   }
 }

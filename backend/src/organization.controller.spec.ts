@@ -97,4 +97,50 @@ describe('OrganizationController', () => {
     });
     expect(getForTenant).toHaveBeenCalledWith(context);
   });
+
+  it('lists organization members through resolved tenant context', async () => {
+    const members = [
+      {
+        id: 'membership-1',
+        userId: 'user-1',
+        email: 'owner@example.com',
+        displayName: 'Owner',
+        role: 'OWNER',
+        status: 'ACTIVE',
+        createdAt: new Date('2026-10-03T10:00:00.000Z'),
+      },
+    ];
+    const listMembers = jest.fn(() => Promise.resolve(members));
+    const resolveUser = jest.fn(() =>
+      Promise.resolve({
+        id: 'user-1',
+        email: 'owner@example.com',
+        displayName: 'Owner',
+      }),
+    );
+    const context = {
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      membershipId: 'membership-1',
+      role: 'OWNER' as const,
+      agentId: 'agent-1',
+      requestId: 'http-request',
+    };
+    const resolve = jest.fn(() => Promise.resolve(context));
+    const controller = new OrganizationController(
+      { listMembers } as unknown as OrganizationService,
+      { resolveUser } as unknown as SessionService,
+      { resolve } as unknown as TenantContextService,
+    );
+
+    await expect(
+      controller.listOrganizationMembers('organization-1', 'Bearer token-1'),
+    ).resolves.toEqual(members);
+    expect(resolve).toHaveBeenCalledWith({
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      requestId: 'http-request',
+    });
+    expect(listMembers).toHaveBeenCalledWith(context);
+  });
 });
