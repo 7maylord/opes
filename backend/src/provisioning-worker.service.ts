@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { FactoryManifestService } from './factory-manifest.service';
+import { organizationDomain } from './evm-decision-hash';
 
 interface OutboxEventRow {
   id: string;
@@ -202,6 +203,7 @@ async function activateFactoryProvisioningBinding(
                'transactionHash', $5::text,
                'blockNumber', $6::integer,
                'sourceVerification', $7::text,
+               'organizationDomain', $8::text,
                'activatedAt', now()
              ),
              updated_at = now()
@@ -221,6 +223,7 @@ async function activateFactoryProvisioningBinding(
       result.transactionHash,
       result.blockNumber,
       result.sourceVerification,
+      organizationDomain(result.organizationId, 'arc-testnet'),
     ],
   );
 
@@ -261,7 +264,8 @@ async function upsertContractBinding(
           'provisioningBindingId', $4::uuid,
           'transactionHash', $5::text,
           'blockNumber', $6::integer,
-          'sourceVerification', $7::text
+          'sourceVerification', $7::text,
+          'organizationDomain', $8::text
         )
       )
       ON CONFLICT (provider, environment, resource_type, resource_id)
@@ -285,6 +289,7 @@ async function upsertContractBinding(
       result.transactionHash,
       result.blockNumber,
       result.sourceVerification,
+      organizationDomain(result.organizationId, 'arc-testnet'),
     ],
   );
 

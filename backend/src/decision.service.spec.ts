@@ -69,51 +69,52 @@ describe('DecisionService', () => {
             id: 'binding-1',
             address: '0x0000000000000000000000000000000000000003',
             status: 'ACTIVE',
+            metadata: {},
           },
         ],
       })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
-      .mockResolvedValueOnce({
-        rows: [
-          {
-            id: 'decision-1',
-            source_type: 'INVOICE',
-            source_id: '66666666-6666-6666-6666-666666666666',
-            source_version_id: request.invoiceVersionId,
-            decision_version: 1,
-            payment_mode: 'DIRECT',
-            model_action: 'PAY',
-            derived_action: 'PAY',
-            liquidity_route: 'OPERATING',
-            route_environment: 'arc-testnet',
-            route_chain_id: 5042002,
-            route_asset_symbol: 'USDC',
-            amount_atomic: '12340001',
-            destination_address: '0x0000000000000000000000000000000000000002',
-            evidence_bundle_hash: 'c'.repeat(64),
-            policy_snapshot_hash: 'd'.repeat(64),
-            context_hash: 'e'.repeat(64),
-            decision_hash: null,
-            checks: [
-              {
-                code: 'route_supported',
-                status: 'PASS',
-                message: 'route is supported',
-              },
-            ],
-            expires_at: new Date(request.expiresAt),
-          },
-        ],
-      });
+      .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
+        Promise.resolve({
+          rows: [
+            {
+              id: 'decision-1',
+              source_type: 'INVOICE',
+              source_id: '66666666-6666-6666-6666-666666666666',
+              source_version_id: request.invoiceVersionId,
+              decision_version: 1,
+              payment_mode: 'DIRECT',
+              model_action: 'PAY',
+              derived_action: 'PAY',
+              liquidity_route: 'OPERATING',
+              route_environment: 'arc-testnet',
+              route_chain_id: 5042002,
+              route_asset_symbol: 'USDC',
+              amount_atomic: '12340001',
+              destination_address: '0x0000000000000000000000000000000000000002',
+              evidence_bundle_hash: 'c'.repeat(64),
+              policy_snapshot_hash: 'd'.repeat(64),
+              context_hash: 'e'.repeat(64),
+              decision_hash: values[17],
+              checks: [
+                {
+                  code: 'route_supported',
+                  status: 'PASS',
+                  message: 'route is supported',
+                },
+              ],
+              expires_at: new Date(request.expiresAt),
+            },
+          ],
+        }),
+      );
     const service = serviceWithQuery(query);
 
-    await expect(
-      service.evaluateInvoicePayment(context, request),
-    ).resolves.toMatchObject({
-      derivedAction: 'PAY',
-      decisionVersion: 1,
-      decisionHash: null,
-    });
+    const decision = await service.evaluateInvoicePayment(context, request);
+
+    expect(decision.derivedAction).toBe('PAY');
+    expect(decision.decisionVersion).toBe(1);
+    expect(decision.decisionHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(query).toHaveBeenNthCalledWith(
       4,
       expect.stringContaining('INSERT INTO opes.payment_decisions'),
@@ -133,7 +134,9 @@ describe('DecisionService', () => {
       .fn()
       .mockResolvedValueOnce({ rows: [invoiceRow()] })
       .mockResolvedValueOnce({
-        rows: [{ id: 'binding-1', address: '0x1', status: 'ACTIVE' }],
+        rows: [
+          { id: 'binding-1', address: '0x1', status: 'ACTIVE', metadata: {} },
+        ],
       })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
@@ -157,9 +160,9 @@ describe('DecisionService', () => {
               evidence_bundle_hash: 'c'.repeat(64),
               policy_snapshot_hash: 'd'.repeat(64),
               context_hash: 'e'.repeat(64),
-              decision_hash: null,
+              decision_hash: values[17],
               checks: JSON.parse(
-                values[17] as string,
+                values[18] as string,
               ) as DecisionCheckResponse[],
               expires_at: new Date(request.expiresAt),
             },
@@ -188,7 +191,14 @@ describe('DecisionService', () => {
         rows: [invoiceRow({ amount_atomic: '1000000001' })],
       })
       .mockResolvedValueOnce({
-        rows: [{ id: 'binding-1', address: '0x1', status: 'ACTIVE' }],
+        rows: [
+          {
+            id: 'binding-1',
+            address: '0x0000000000000000000000000000000000000003',
+            status: 'ACTIVE',
+            metadata: {},
+          },
+        ],
       })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
@@ -212,9 +222,9 @@ describe('DecisionService', () => {
               evidence_bundle_hash: 'c'.repeat(64),
               policy_snapshot_hash: 'd'.repeat(64),
               context_hash: 'e'.repeat(64),
-              decision_hash: null,
+              decision_hash: values[17],
               checks: JSON.parse(
-                values[17] as string,
+                values[18] as string,
               ) as DecisionCheckResponse[],
               expires_at: new Date(request.expiresAt),
             },

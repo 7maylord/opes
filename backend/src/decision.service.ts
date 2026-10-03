@@ -6,6 +6,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import factoryManifest from './deployments/arc-testnet-factory.json';
+import {
+  buildDirectPaymentDecisionHash,
+  isEvmAddress,
+  organizationDomain,
+} from './evm-decision-hash';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { TenantContext } from './tenant-context';
 
@@ -19,6 +25,7 @@ const SUPPORTED_ROUTE = {
   chainId: 5042002,
   assetSymbol: 'USDC',
 };
+const ARC_TESTNET_USDC = factoryManifest.token;
 
 export interface EvaluateInvoiceDecisionRequest {
   invoiceVersionId: string;
@@ -101,6 +108,7 @@ interface BindingRow {
   id: string;
   address: string | null;
   status: string;
+  metadata: unknown;
 }
 
 interface ApprovalRow {
@@ -281,6 +289,23 @@ export class DecisionService {
         expiresAt,
       };
       const contextHash = hashStable(contextPayload);
+      const decisionHash = canHashDirectPayment(route, vaultBinding, invoice)
+        ? buildDirectPaymentDecisionHash({
+            chainId: route.chainId,
+            vault: vaultBinding.address,
+            organizationDomain: bindingOrganizationDomain(
+              context.organizationId,
+              route.environment,
+              vaultBinding,
+            ),
+            token: ARC_TESTNET_USDC,
+            obligationKey: invoice.obligation_key,
+            vendor: invoice.payout_address,
+            amount: invoice.amount_atomic,
+            expiresAt,
+            contextHash,
+          })
+        : null;
 
       const inserted = await database.query<DecisionRow>(
         `
@@ -315,8 +340,8 @@ export class DecisionService {
           )
           VALUES (
             $1, 'INVOICE', $2, $3, $4, 'DIRECT', $5, $6, $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16, $17, NULL, $18::jsonb, $19, $20,
-            $21, 'b6-static-v1', $22, $23
+            $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20, $21,
+            $22, 'b6-static-v1', $23, $24
           )
           RETURNING
             id,
@@ -358,6 +383,7 @@ export class DecisionService {
           evidenceBundleHash,
           policySnapshotHash,
           contextHash,
+          decisionHash,
           JSON.stringify(checks),
           modelName,
           modelRationale,
@@ -461,7 +487,7 @@ async function getActiveVaultBinding(
 ): Promise<BindingRow | null> {
   const result = await database.query<BindingRow>(
     `
-      SELECT id, address, status
+      SELECT id, address, status, metadata
         FROM opes.tenant_resource_bindings
        WHERE organization_id = $1
          AND provider = 'arc'
@@ -493,6 +519,35 @@ async function nextDecisionVersion(
   return requireRow(result.rows[0], 'next decision version').next_version;
 }
 
+function canHashDirectPayment(
+  route: EvaluateInvoiceDecisionRequest['route'],
+  vaultBinding: BindingRow | null,
+  invoice: InvoiceVersionRow,
+): vaultBinding is BindingRow & { address: string } {
+  return (
+    routeSupported(route) &&
+    isEvmAddress(vaultBinding?.address) &&
+    isEvmAddress(invoice.payout_address) &&
+    /^[0-9a-f]{64}$/.test(invoice.obligation_key)
+  );
+}
+
+function bindingOrganizationDomain(
+  organizationId: string,
+  environment: string,
+  vaultBinding: BindingRow,
+): string {
+  const metadata = vaultBinding.metadata;
+  if (metadata !== null && typeof metadata === 'object') {
+    const value = (metadata as Record<string, unknown>).organizationDomain;
+    if (typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value)) {
+      return value;
+    }
+  }
+
+  return organizationDomain(organizationId, environment);
+}
+
 function buildChecks(
   invoice: InvoiceVersionRow,
   vaultBinding: BindingRow | null,
@@ -514,10 +569,14 @@ function buildChecks(
     ),
     check(
       'payout_address_active',
-      invoice.address_status === 'VERIFIED_ACTIVE' ? 'PASS' : 'BLOCK',
-      invoice.address_status === 'VERIFIED_ACTIVE'
+      invoice.address_status === 'VERIFIED_ACTIVE' &&
+        isEvmAddress(invoice.payout_address)
+        ? 'PASS'
+        : 'BLOCK',
+      invoice.address_status === 'VERIFIED_ACTIVE' &&
+        isEvmAddress(invoice.payout_address)
         ? 'payout address is active'
-        : 'payout address is not active',
+        : 'payout address is not active or invalid',
     ),
     check(
       'route_supported',
@@ -526,12 +585,10 @@ function buildChecks(
     ),
     check(
       'vault_binding_active',
-      vaultBinding?.address !== undefined && vaultBinding.address !== null
-        ? 'PASS'
-        : 'BLOCK',
-      vaultBinding?.address !== undefined && vaultBinding.address !== null
+      isEvmAddress(vaultBinding?.address) ? 'PASS' : 'BLOCK',
+      isEvmAddress(vaultBinding?.address)
         ? 'verified vault binding is active'
-        : 'verified vault binding is missing',
+        : 'verified vault binding is missing or invalid',
     ),
     check(
       'autonomous_amount_limit',
