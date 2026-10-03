@@ -9,6 +9,8 @@ import { EvidenceService } from './evidence.service';
 import { FactoryManifestService } from './factory-manifest.service';
 import { InvoiceController } from './invoice.controller';
 import { InvoiceService } from './invoice.service';
+import { LifecycleController } from './lifecycle.controller';
+import { LifecycleService } from './lifecycle.service';
 import { OnboardingController } from './onboarding.controller';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
 import { OnboardingService } from './onboarding.service';
@@ -26,6 +28,7 @@ import { TenantContextService } from './tenant-context.service';
     AppController,
     EvidenceController,
     InvoiceController,
+    LifecycleController,
     OnboardingController,
     OrganizationInvitationController,
     OrganizationController,
@@ -38,6 +41,7 @@ import { TenantContextService } from './tenant-context.service';
     EvidenceService,
     FactoryManifestService,
     InvoiceService,
+    LifecycleService,
     OnboardingService,
     ProvisioningWorkerService,
     OrganizationService,
