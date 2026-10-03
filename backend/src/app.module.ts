@@ -4,6 +4,8 @@ import { AgentService } from './agent.service';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DatabaseService } from './database.service';
+import { EvidenceController } from './evidence.controller';
+import { EvidenceService } from './evidence.service';
 import { FactoryManifestService } from './factory-manifest.service';
 import { OnboardingController } from './onboarding.controller';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
@@ -20,6 +22,7 @@ import { TenantContextService } from './tenant-context.service';
   controllers: [
     AgentController,
     AppController,
+    EvidenceController,
     OnboardingController,
     OrganizationInvitationController,
     OrganizationController,
@@ -29,6 +32,7 @@ import { TenantContextService } from './tenant-context.service';
     AgentService,
     AppService,
     DatabaseService,
+    EvidenceService,
     FactoryManifestService,
     OnboardingService,
     ProvisioningWorkerService,
