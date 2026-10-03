@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { FactoryManifestService } from './factory-manifest.service';
 
 interface OutboxEventRow {
   id: string;
@@ -7,11 +8,57 @@ interface OutboxEventRow {
   aggregate_id: string;
 }
 
+export interface ArcProvisioningSuccess {
+  organizationId: string;
+  provisioningBindingId: string;
+  vaultAddress: string;
+  escrowAddress: string;
+  transactionHash: string;
+  blockNumber: number;
+  sourceVerification: 'fully_verified' | 'unverified';
+}
+
 @Injectable()
 export class ProvisioningWorkerService {
   private readonly logger = new Logger(ProvisioningWorkerService.name);
 
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly factoryManifests: FactoryManifestService,
+  ) {}
+
+  async recordArcProvisioningSuccess(
+    result: ArcProvisioningSuccess,
+  ): Promise<void> {
+    const factory = this.factoryManifests.getArcTestnetFactory();
+    if (factory.verification !== 'fully_verified') {
+      throw new Error('Arc testnet factory is not verified');
+    }
+    if (result.sourceVerification !== 'fully_verified') {
+      throw new Error('Arc tenant contracts are not verified');
+    }
+
+    assertHexAddress('vaultAddress', result.vaultAddress);
+    assertHexAddress('escrowAddress', result.escrowAddress);
+    assertTransactionHash(result.transactionHash);
+
+    await this.database.withWorker(async (database) => {
+      await activateFactoryProvisioningBinding(database, result);
+      await upsertContractBinding(
+        database,
+        result,
+        'business_policy_vault_contract',
+        result.vaultAddress,
+      );
+      await upsertContractBinding(
+        database,
+        result,
+        'milestone_escrow_contract',
+        result.escrowAddress,
+      );
+      await markPrimaryAgentSetupRequired(database, result.organizationId);
+    });
+  }
 
   async processDueArcProvisioning(limit = 10): Promise<number> {
     let processed = 0;
@@ -111,4 +158,138 @@ async function failOutboxEvent(
     `,
     [eventId, reason],
   );
+}
+
+async function activateFactoryProvisioningBinding(
+  database: TenantDatabase,
+  result: ArcProvisioningSuccess,
+): Promise<void> {
+  const updated = await database.query(
+    `
+      UPDATE opes.tenant_resource_bindings
+         SET status = 'ACTIVE',
+             metadata = metadata || jsonb_build_object(
+               'vaultAddress', $3::text,
+               'escrowAddress', $4::text,
+               'transactionHash', $5::text,
+               'blockNumber', $6::integer,
+               'sourceVerification', $7::text,
+               'activatedAt', now()
+             ),
+             updated_at = now()
+       WHERE organization_id = $1
+         AND id = $2
+         AND provider = 'arc'
+         AND environment = 'arc-testnet'
+         AND resource_type = 'factory_provisioning'
+         AND status IN ('PENDING', 'FAILED', 'ACTIVE')
+       RETURNING id
+    `,
+    [
+      result.organizationId,
+      result.provisioningBindingId,
+      result.vaultAddress,
+      result.escrowAddress,
+      result.transactionHash,
+      result.blockNumber,
+      result.sourceVerification,
+    ],
+  );
+
+  if (updated.rows[0] === undefined) {
+    throw new Error('Arc factory provisioning binding not found');
+  }
+}
+
+async function upsertContractBinding(
+  database: TenantDatabase,
+  result: ArcProvisioningSuccess,
+  resourceType: string,
+  address: string,
+): Promise<void> {
+  const upserted = await database.query(
+    `
+      INSERT INTO opes.tenant_resource_bindings (
+        organization_id,
+        environment,
+        chain_id,
+        provider,
+        resource_type,
+        resource_id,
+        address,
+        status,
+        metadata
+      )
+      VALUES (
+        $1,
+        'arc-testnet',
+        5042002,
+        'arc',
+        $2,
+        $1,
+        $3,
+        'ACTIVE',
+        jsonb_build_object(
+          'provisioningBindingId', $4::uuid,
+          'transactionHash', $5::text,
+          'blockNumber', $6::integer,
+          'sourceVerification', $7::text
+        )
+      )
+      ON CONFLICT (provider, environment, resource_type, resource_id)
+      DO UPDATE
+            SET address = EXCLUDED.address,
+                status = 'ACTIVE',
+                metadata = opes.tenant_resource_bindings.metadata || EXCLUDED.metadata,
+                updated_at = now()
+          WHERE opes.tenant_resource_bindings.organization_id = EXCLUDED.organization_id
+            AND (
+              opes.tenant_resource_bindings.address IS NULL
+              OR lower(opes.tenant_resource_bindings.address) = lower(EXCLUDED.address)
+            )
+      RETURNING id
+    `,
+    [
+      result.organizationId,
+      resourceType,
+      address,
+      result.provisioningBindingId,
+      result.transactionHash,
+      result.blockNumber,
+      result.sourceVerification,
+    ],
+  );
+
+  if (upserted.rows[0] === undefined) {
+    throw new Error(`Conflicting Arc ${resourceType} binding`);
+  }
+}
+
+async function markPrimaryAgentSetupRequired(
+  database: TenantDatabase,
+  organizationId: string,
+): Promise<void> {
+  await database.query(
+    `
+      UPDATE opes.business_agents
+         SET lifecycle_status = 'SETUP_REQUIRED',
+             updated_at = now()
+       WHERE organization_id = $1
+         AND is_primary = true
+         AND lifecycle_status = 'PROVISIONING'
+    `,
+    [organizationId],
+  );
+}
+
+function assertHexAddress(label: string, value: string): void {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    throw new Error(`${label} must be an EVM address`);
+  }
+}
+
+function assertTransactionHash(value: string): void {
+  if (!/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error('transactionHash must be an EVM transaction hash');
+  }
 }
