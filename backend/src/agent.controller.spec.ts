@@ -52,4 +52,56 @@ describe('AgentController', () => {
     });
     expect(getPrimaryAgent).toHaveBeenCalledWith(context);
   });
+
+  it('requests Arc testnet provisioning through resolved context', async () => {
+    const binding = {
+      id: 'binding-1',
+      environment: 'arc-testnet',
+      chainId: 5042002,
+      provider: 'arc',
+      resourceType: 'factory_provisioning',
+      resourceId: 'organization-1',
+      address: null,
+      status: 'PENDING',
+      metadata: { verification: 'fully_verified' },
+    };
+    const requestArcTestnetProvisioning = jest.fn(() =>
+      Promise.resolve(binding),
+    );
+    const resolveUser = jest.fn(() =>
+      Promise.resolve({
+        id: 'user-1',
+        email: 'owner@example.com',
+        displayName: 'Owner',
+      }),
+    );
+    const context = {
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      membershipId: 'membership-1',
+      role: 'OWNER' as const,
+      agentId: 'agent-1',
+      requestId: 'request-1',
+    };
+    const resolve = jest.fn(() => Promise.resolve(context));
+    const controller = new AgentController(
+      { requestArcTestnetProvisioning } as unknown as AgentService,
+      { resolveUser } as unknown as SessionService,
+      { resolve } as unknown as TenantContextService,
+    );
+
+    await expect(
+      controller.requestArcTestnetProvisioning(
+        'organization-1',
+        'Bearer token-1',
+        'request-1',
+      ),
+    ).resolves.toEqual(binding);
+    expect(resolve).toHaveBeenCalledWith({
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      requestId: 'request-1',
+    });
+    expect(requestArcTestnetProvisioning).toHaveBeenCalledWith(context);
+  });
 });

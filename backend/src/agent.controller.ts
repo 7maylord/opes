@@ -3,9 +3,14 @@ import {
   Get,
   Headers,
   Param,
+  Post,
   UnauthorizedException,
 } from '@nestjs/common';
-import { AgentService, BusinessAgentDetail } from './agent.service';
+import type {
+  AgentResourceBinding,
+  BusinessAgentDetail,
+} from './agent.service';
+import { AgentService } from './agent.service';
 import { parseBearerToken } from './auth-header';
 import { resolveCorrelationId } from './correlation-id';
 import { SessionService } from './session.service';
@@ -42,5 +47,30 @@ export class AgentController {
     });
 
     return this.agents.getPrimaryAgent(context);
+  }
+
+  @Post('provisioning/arc-testnet')
+  async requestArcTestnetProvisioning(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ): Promise<AgentResourceBinding> {
+    const token = parseBearerToken(authorization);
+    if (token === undefined) {
+      throw new UnauthorizedException('Bearer session token is required');
+    }
+
+    const user = await this.sessions.resolveUser(token);
+    if (user === null) {
+      throw new UnauthorizedException('Session is invalid or expired');
+    }
+
+    const context = await this.tenantContexts.resolve({
+      organizationId,
+      userId: user.id,
+      requestId: resolveCorrelationId(correlationId),
+    });
+
+    return this.agents.requestArcTestnetProvisioning(context);
   }
 }
