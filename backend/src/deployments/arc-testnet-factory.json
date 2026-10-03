@@ -1,0 +1,75 @@
+{
+  "environment": "arc-testnet",
+  "chainId": 5042002,
+  "sourceCommit": "915b135003aca5eb859653b79267a6e344fe2ea8",
+  "compiler": "0.8.30+commit.73712a01",
+  "evmVersion": "cancun",
+  "optimizer": {
+    "enabled": true,
+    "runs": 200
+  },
+  "viaIR": true,
+  "deployer": "0xad6433f3a49eb065e6470f231a3dc3dee26f0f9d",
+  "token": "0x3600000000000000000000000000000000000000",
+  "admin": "0xad6433f3a49eb065e6470f231a3dc3dee26f0f9d",
+  "provisioner": "0xad6433f3a49eb065e6470f231a3dc3dee26f0f9d",
+  "transactionHash": "0xebab0843affef9717dbe32cfaf3b17187456272208fdd1ba9f5fb5be7a5e881e",
+  "blockNumber": 65091595,
+  "gasUsed": "7382296",
+  "effectiveGasPriceWei": "32500000000",
+  "gasCostNativeAtomic": "239924620000000000",
+  "nativeGasToken": {
+    "symbol": "USDC",
+    "decimals": 18
+  },
+  "contracts": {
+    "OrganizationFactory": {
+      "address": "0x6b3aa0d68fba3ff8add42071ba82e714b5a6a488",
+      "source": "src/OrganizationFactory.sol:OrganizationFactory",
+      "constructorArguments": [
+        "0x3600000000000000000000000000000000000000",
+        "0xad6433f3a49eb065e6470f231a3dc3dee26f0f9d",
+        "0xad6433f3a49eb065e6470f231a3dc3dee26f0f9d"
+      ],
+      "encodedConstructorArguments": "0x0000000000000000000000003600000000000000000000000000000000000000000000000000000000000000ad6433f3a49eb065e6470f231a3dc3dee26f0f9d000000000000000000000000ad6433f3a49eb065e6470f231a3dc3dee26f0f9d",
+      "runtimeBytes": 17517,
+      "runtimeKeccak256": "0xd84b91338b361e13764381cfe4d8677bddc074554ca7fc17be94e06111bcf84e",
+      "abiSha256": "c57feeab8172e3c7db8fd3d50912b5c78eb51017a86fa98bc164e908d85c8132",
+      "verification": "fully_verified",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x6b3aa0d68fba3ff8add42071ba82e714b5a6a488",
+      "verifiedAt": "2026-10-02T09:04:29.754929Z",
+      "verificationEvidenceUrl": "https://explorer.testnet.arc.io/api/v2/smart-contracts/0x6b3aa0d68fba3ff8add42071ba82e714b5a6a488"
+    },
+    "VaultDeployer": {
+      "address": "0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8",
+      "source": "src/OrganizationFactory.sol:VaultDeployer",
+      "constructorArguments": [
+        "0x3600000000000000000000000000000000000000"
+      ],
+      "encodedConstructorArguments": "0x0000000000000000000000003600000000000000000000000000000000000000",
+      "runtimeBytes": 15807,
+      "runtimeKeccak256": "0xa785da6010bcc9a5d6983c8faaacce947bbb1331c79abfea596292ec53b73007",
+      "abiSha256": "a4e7efe02457bc487ae96cfeef331e1e0a284a67282580eac6e11d7a304b5a5f",
+      "verification": "fully_verified",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8",
+      "verifiedAt": "2026-10-02T09:05:00.669342Z",
+      "verificationEvidenceUrl": "https://explorer.testnet.arc.io/api/v2/smart-contracts/0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8"
+    }
+  },
+  "checks": {
+    "receiptSuccess": true,
+    "creationInputMatchesArtifact": true,
+    "runtimeMatchesArtifactOutsideImmutables": true,
+    "immutableGettersMatch": true,
+    "platformRolesMatch": true,
+    "standardFoundryTests": {
+      "passed": 61,
+      "failed": 0,
+      "skipped": 0
+    },
+    "arcRpcCreationSimulation": true,
+    "arcFoundryLocalSuite": "not run",
+    "tenantSmokeTests": "pending"
+  },
+  "checkedAt": "2026-10-02T09:05:47.854Z"
+}

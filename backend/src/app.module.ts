@@ -4,6 +4,7 @@ import { AgentService } from './agent.service';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DatabaseService } from './database.service';
+import { FactoryManifestService } from './factory-manifest.service';
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingService } from './onboarding.service';
 import { OrganizationInvitationController } from './organization-invitation.controller';
@@ -27,6 +28,7 @@ import { TenantContextService } from './tenant-context.service';
     AgentService,
     AppService,
     DatabaseService,
+    FactoryManifestService,
     OnboardingService,
     OrganizationService,
     SessionService,

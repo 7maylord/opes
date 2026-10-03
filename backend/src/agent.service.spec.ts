@@ -43,13 +43,35 @@ describe('AgentService', () => {
         work: (database: TenantDatabase) => Promise<unknown>,
       ) => work({ query }),
     );
-    const service = new AgentService({
-      withTenant,
-    } as unknown as DatabaseService);
+    const service = new AgentService(
+      {
+        withTenant,
+      } as unknown as DatabaseService,
+      {
+        getArcTestnetFactory: jest.fn(() => ({
+          environment: 'arc-testnet',
+          chainId: 5042002,
+          factoryAddress: '0xfactory',
+          vaultDeployerAddress: '0xdeployer',
+          verification: 'fully_verified',
+          explorerUrl: 'https://explorer.testnet.arc.io/address/0xfactory',
+          checkedAt: '2026-10-02T09:05:47.854Z',
+        })),
+      },
+    );
 
     await expect(service.getPrimaryAgent(context)).resolves.toEqual({
       id: 'agent-1',
       lifecycleStatus: 'PROVISIONING',
+      arcTestnetFactory: {
+        environment: 'arc-testnet',
+        chainId: 5042002,
+        factoryAddress: '0xfactory',
+        vaultDeployerAddress: '0xdeployer',
+        verification: 'fully_verified',
+        explorerUrl: 'https://explorer.testnet.arc.io/address/0xfactory',
+        checkedAt: '2026-10-02T09:05:47.854Z',
+      },
       resourceBindings: [
         {
           id: 'binding-1',

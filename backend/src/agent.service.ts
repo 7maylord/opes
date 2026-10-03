@@ -1,5 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from './database.service';
+import {
+  FactoryManifestService,
+  VerifiedFactoryManifest,
+} from './factory-manifest.service';
 import { TenantContext } from './tenant-context';
 
 export interface AgentResourceBinding {
@@ -17,6 +21,7 @@ export interface AgentResourceBinding {
 export interface BusinessAgentDetail {
   id: string;
   lifecycleStatus: string;
+  arcTestnetFactory: VerifiedFactoryManifest;
   resourceBindings: AgentResourceBinding[];
 }
 
@@ -39,7 +44,10 @@ interface BindingRow {
 
 @Injectable()
 export class AgentService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly factoryManifests: FactoryManifestService,
+  ) {}
 
   async getPrimaryAgent(context: TenantContext): Promise<BusinessAgentDetail> {
     return this.database.withTenant(context, async (database) => {
@@ -81,6 +89,7 @@ export class AgentService {
       return {
         id: agent.id,
         lifecycleStatus: agent.lifecycle_status,
+        arcTestnetFactory: this.factoryManifests.getArcTestnetFactory(),
         resourceBindings: bindings.rows.map((row) => ({
           id: row.id,
           environment: row.environment,
