@@ -23,6 +23,7 @@ export interface PaymentExecutionResponse {
   vaultAddress: string;
   status: string;
   failureReason: string | null;
+  transactionHash?: string | null;
 }
 
 interface ExecutionCandidateRow {
@@ -63,6 +64,7 @@ interface ExecutionRow {
   vault_address: string;
   status: string;
   failure_reason: string | null;
+  transaction_hash?: string | null;
 }
 
 @Injectable()
@@ -203,9 +205,10 @@ async function insertExecution(
         route_chain_id,
         route_asset_symbol,
         vault_address,
+        expires_at,
         requested_by_membership_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
       ON CONFLICT (organization_id, decision_id)
       DO UPDATE SET updated_at = opes.payment_executions.updated_at
       RETURNING
@@ -223,7 +226,8 @@ async function insertExecution(
         route_asset_symbol,
         vault_address,
         status,
-        failure_reason
+        failure_reason,
+        transaction_hash
     `,
     [
       context.organizationId,
@@ -239,6 +243,7 @@ async function insertExecution(
       candidate.route_chain_id,
       candidate.route_asset_symbol,
       candidate.vault_address,
+      candidate.decision_expires_at.toISOString(),
       context.membershipId,
     ],
   );
@@ -308,5 +313,6 @@ function mapExecution(row: ExecutionRow): PaymentExecutionResponse {
     vaultAddress: row.vault_address,
     status: row.status,
     failureReason: row.failure_reason,
+    transactionHash: row.transaction_hash ?? null,
   };
 }

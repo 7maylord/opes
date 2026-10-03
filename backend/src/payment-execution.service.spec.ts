@@ -72,6 +72,7 @@ describe('PaymentExecutionService', () => {
             vault_address: '0x0000000000000000000000000000000000000003',
             status: 'PENDING',
             failure_reason: null,
+            transaction_hash: null,
           },
         ],
       })
@@ -106,6 +107,7 @@ describe('PaymentExecutionService', () => {
         5042002,
         'USDC',
         '0x0000000000000000000000000000000000000003',
+        expect.any(String),
         context.membershipId,
       ]),
     );
