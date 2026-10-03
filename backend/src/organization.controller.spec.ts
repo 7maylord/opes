@@ -78,7 +78,7 @@ describe('OrganizationController', () => {
       membershipId: 'membership-1',
       role: 'OWNER' as const,
       agentId: 'agent-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     };
     const resolve = jest.fn(() => Promise.resolve(context));
     const controller = new OrganizationController(
@@ -88,12 +88,16 @@ describe('OrganizationController', () => {
     );
 
     await expect(
-      controller.getOrganization('organization-1', 'Bearer token-1'),
+      controller.getOrganization(
+        'organization-1',
+        'Bearer token-1',
+        'request-1',
+      ),
     ).resolves.toEqual(organization);
     expect(resolve).toHaveBeenCalledWith({
       organizationId: 'organization-1',
       userId: 'user-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     });
     expect(getForTenant).toHaveBeenCalledWith(context);
   });
@@ -124,7 +128,7 @@ describe('OrganizationController', () => {
       membershipId: 'membership-1',
       role: 'OWNER' as const,
       agentId: 'agent-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     };
     const resolve = jest.fn(() => Promise.resolve(context));
     const controller = new OrganizationController(
@@ -134,12 +138,16 @@ describe('OrganizationController', () => {
     );
 
     await expect(
-      controller.listOrganizationMembers('organization-1', 'Bearer token-1'),
+      controller.listOrganizationMembers(
+        'organization-1',
+        'Bearer token-1',
+        'request-1',
+      ),
     ).resolves.toEqual(members);
     expect(resolve).toHaveBeenCalledWith({
       organizationId: 'organization-1',
       userId: 'user-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     });
     expect(listMembers).toHaveBeenCalledWith(context);
   });
@@ -169,7 +177,7 @@ describe('OrganizationController', () => {
       membershipId: 'membership-1',
       role: 'OWNER' as const,
       agentId: 'agent-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     };
     const resolve = jest.fn(() => Promise.resolve(context));
     const controller = new OrganizationController(
@@ -189,12 +197,13 @@ describe('OrganizationController', () => {
         'Bearer token-1',
         body,
         'invite-key-1',
+        'request-1',
       ),
     ).resolves.toEqual(member);
     expect(resolve).toHaveBeenCalledWith({
       organizationId: 'organization-1',
       userId: 'user-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     });
     expect(inviteMember).toHaveBeenCalledWith(context, body, 'invite-key-1');
   });
@@ -223,7 +232,7 @@ describe('OrganizationController', () => {
       membershipId: 'membership-1',
       role: 'OWNER' as const,
       agentId: 'agent-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     };
     const resolve = jest.fn(() => Promise.resolve(context));
     const controller = new OrganizationController(
@@ -243,12 +252,13 @@ describe('OrganizationController', () => {
         'Bearer token-1',
         body,
         'update-key-1',
+        'request-1',
       ),
     ).resolves.toEqual(member);
     expect(resolve).toHaveBeenCalledWith({
       organizationId: 'organization-1',
       userId: 'user-1',
-      requestId: 'http-request',
+      requestId: 'request-1',
     });
     expect(updateMember).toHaveBeenCalledWith(
       context,

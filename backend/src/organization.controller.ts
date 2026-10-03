@@ -9,6 +9,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { parseBearerToken } from './auth-header';
+import { resolveCorrelationId } from './correlation-id';
 import type {
   InviteOrganizationMemberRequest,
   InvitedOrganizationMember,
@@ -49,6 +50,7 @@ export class OrganizationController {
   async getOrganization(
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ): Promise<UserOrganization> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
@@ -63,7 +65,7 @@ export class OrganizationController {
     const context = await this.tenantContexts.resolve({
       organizationId,
       userId: user.id,
-      requestId: 'http-request',
+      requestId: resolveCorrelationId(correlationId),
     });
 
     return this.organizations.getForTenant(context);
@@ -73,6 +75,7 @@ export class OrganizationController {
   async listOrganizationMembers(
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ): Promise<OrganizationMember[]> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
@@ -87,7 +90,7 @@ export class OrganizationController {
     const context = await this.tenantContexts.resolve({
       organizationId,
       userId: user.id,
-      requestId: 'http-request',
+      requestId: resolveCorrelationId(correlationId),
     });
 
     return this.organizations.listMembers(context);
@@ -99,6 +102,7 @@ export class OrganizationController {
     @Headers('authorization') authorization: string | undefined,
     @Body() body: InviteOrganizationMemberRequest,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ): Promise<InvitedOrganizationMember> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
@@ -113,7 +117,7 @@ export class OrganizationController {
     const context = await this.tenantContexts.resolve({
       organizationId,
       userId: user.id,
-      requestId: 'http-request',
+      requestId: resolveCorrelationId(correlationId),
     });
 
     return this.organizations.inviteMember(context, body, idempotencyKey);
@@ -126,6 +130,7 @@ export class OrganizationController {
     @Headers('authorization') authorization: string | undefined,
     @Body() body: UpdateOrganizationMemberRequest,
     @Headers('idempotency-key') idempotencyKey: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ): Promise<OrganizationMember> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
@@ -140,7 +145,7 @@ export class OrganizationController {
     const context = await this.tenantContexts.resolve({
       organizationId,
       userId: user.id,
-      requestId: 'http-request',
+      requestId: resolveCorrelationId(correlationId),
     });
 
     return this.organizations.updateMember(
