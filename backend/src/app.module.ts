@@ -13,7 +13,9 @@ import { InvoiceController } from './invoice.controller';
 import { LedgerController } from './ledger.controller';
 import { InvoiceService } from './invoice.service';
 import { LifecycleController } from './lifecycle.controller';
+import { LiquidityController } from './liquidity.controller';
 import { LifecycleService } from './lifecycle.service';
+import { LiquidityService } from './liquidity.service';
 import { LedgerService } from './ledger.service';
 import { OnboardingController } from './onboarding.controller';
 import { PaymentExecutionService } from './payment-execution.service';
@@ -39,6 +41,7 @@ import { TenantContextService } from './tenant-context.service';
     InvoiceController,
     LedgerController,
     LifecycleController,
+    LiquidityController,
     OnboardingController,
     PaymentWebhookController,
     OrganizationInvitationController,
@@ -55,6 +58,7 @@ import { TenantContextService } from './tenant-context.service';
     InvoiceService,
     LedgerService,
     LifecycleService,
+    LiquidityService,
     OnboardingService,
     PaymentExecutionService,
     PaymentExecutionWorkerService,

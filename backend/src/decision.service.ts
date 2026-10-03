@@ -13,18 +13,14 @@ import {
   organizationDomain,
 } from './evm-decision-hash';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { evaluatePaymentRoute } from './liquidity-policy';
 import { TenantContext } from './tenant-context';
 
 type DecisionAction = 'PAY' | 'DELAY' | 'ESCALATE' | 'REJECT';
 type CheckStatus = 'PASS' | 'BLOCK' | 'REQUIRES_APPROVAL';
 
 const MAX_AUTONOMOUS_USDC_ATOMIC = 1_000_000_000n;
-const SUPPORTED_ROUTE = {
-  liquidityRoute: 'OPERATING',
-  environment: 'arc-testnet',
-  chainId: 5042002,
-  assetSymbol: 'USDC',
-};
+const ROUTE_POLICY_VERSION = 'b9-route-policy-v1';
 const ARC_TESTNET_USDC = factoryManifest.token;
 
 export interface EvaluateInvoiceDecisionRequest {
@@ -257,7 +253,7 @@ export class DecisionService {
       const policySnapshot = {
         policyVersion: 'b6-static-v1',
         maxAutonomousUsdcAtomic: MAX_AUTONOMOUS_USDC_ATOMIC.toString(),
-        supportedRoute: SUPPORTED_ROUTE,
+        routePolicyVersion: ROUTE_POLICY_VERSION,
       };
       const policySnapshotHash = hashStable(policySnapshot);
       const decisionVersion = await nextDecisionVersion(
@@ -581,7 +577,7 @@ function buildChecks(
     check(
       'route_supported',
       routeSupported(route) ? 'PASS' : 'BLOCK',
-      routeSupported(route) ? 'route is supported' : 'route is unsupported',
+      evaluatePaymentRoute(route).reason,
     ),
     check(
       'vault_binding_active',
@@ -626,12 +622,7 @@ function deriveAction(
 function routeSupported(
   route: EvaluateInvoiceDecisionRequest['route'],
 ): boolean {
-  return (
-    route.liquidityRoute === SUPPORTED_ROUTE.liquidityRoute &&
-    route.environment === SUPPORTED_ROUTE.environment &&
-    route.chainId === SUPPORTED_ROUTE.chainId &&
-    route.assetSymbol === SUPPORTED_ROUTE.assetSymbol
-  );
+  return evaluatePaymentRoute(route).executable;
 }
 
 function requireApprovalRole(context: TenantContext): void {
