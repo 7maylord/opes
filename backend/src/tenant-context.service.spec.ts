@@ -68,6 +68,6 @@ describe('TenantContextService', () => {
         userId: 'user-1',
         requestId: 'request-1',
       }),
-    ).rejects.toThrow('Active organization membership not found');
+    ).rejects.toThrow('Organization not found');
   });
 });

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from './database.service';
+import { TenantContext } from './tenant-context';
 
 export interface UserOrganization {
   id: string;
@@ -68,5 +69,48 @@ export class OrganizationService {
       agentId: row.agent_id,
       agentLifecycleStatus: row.agent_lifecycle_status,
     }));
+  }
+
+  async getForTenant(context: TenantContext): Promise<UserOrganization> {
+    const result = await this.database.withTenant(context, (database) =>
+      database.query<UserOrganizationRow>(
+        `
+          SELECT
+            organization.id,
+            organization.slug,
+            organization.display_name,
+            organization.lifecycle_status,
+            membership.id AS membership_id,
+            membership.role,
+            agent.id AS agent_id,
+            agent.lifecycle_status AS agent_lifecycle_status
+          FROM opes.organizations AS organization
+          JOIN opes.organization_memberships AS membership
+            ON membership.organization_id = organization.id
+           AND membership.id = $2
+          JOIN opes.business_agents AS agent
+            ON agent.organization_id = organization.id
+           AND agent.is_primary = true
+          WHERE organization.id = $1
+        `,
+        [context.organizationId, context.membershipId],
+      ),
+    );
+
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new Error('Organization not found');
+    }
+
+    return {
+      id: row.id,
+      slug: row.slug,
+      displayName: row.display_name,
+      lifecycleStatus: row.lifecycle_status,
+      membershipId: row.membership_id,
+      role: row.role,
+      agentId: row.agent_id,
+      agentLifecycleStatus: row.agent_lifecycle_status,
+    };
   }
 }

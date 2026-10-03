@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from './database.service';
 import { MembershipRole, TenantContext } from './tenant-context';
 
@@ -43,7 +43,7 @@ export class TenantContextService {
 
     const row = result.rows[0];
     if (row === undefined) {
-      throw new Error('Active organization membership not found');
+      throw new NotFoundException('Organization not found');
     }
 
     return {
