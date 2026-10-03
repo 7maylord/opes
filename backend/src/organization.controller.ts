@@ -1,16 +1,19 @@
 import {
+  Body,
   Controller,
   Get,
   Headers,
   Param,
+  Post,
   UnauthorizedException,
 } from '@nestjs/common';
 import { parseBearerToken } from './auth-header';
-import {
+import type {
+  InviteOrganizationMemberRequest,
   OrganizationMember,
-  OrganizationService,
   UserOrganization,
 } from './organization.service';
+import { OrganizationService } from './organization.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
 
@@ -85,5 +88,30 @@ export class OrganizationController {
     });
 
     return this.organizations.listMembers(context);
+  }
+
+  @Post(':organizationId/members')
+  async inviteOrganizationMember(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: InviteOrganizationMemberRequest,
+  ): Promise<OrganizationMember> {
+    const token = parseBearerToken(authorization);
+    if (token === undefined) {
+      throw new UnauthorizedException('Bearer session token is required');
+    }
+
+    const user = await this.sessions.resolveUser(token);
+    if (user === null) {
+      throw new UnauthorizedException('Session is invalid or expired');
+    }
+
+    const context = await this.tenantContexts.resolve({
+      organizationId,
+      userId: user.id,
+      requestId: 'http-request',
+    });
+
+    return this.organizations.inviteMember(context, body);
   }
 }

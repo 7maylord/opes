@@ -143,4 +143,57 @@ describe('OrganizationController', () => {
     });
     expect(listMembers).toHaveBeenCalledWith(context);
   });
+
+  it('invites organization members through resolved tenant context', async () => {
+    const member = {
+      id: 'membership-2',
+      userId: 'user-2',
+      email: 'ops@example.com',
+      displayName: 'Ops',
+      role: 'APPROVER',
+      status: 'INVITED',
+      createdAt: new Date('2026-10-03T10:00:00.000Z'),
+    };
+    const inviteMember = jest.fn(() => Promise.resolve(member));
+    const resolveUser = jest.fn(() =>
+      Promise.resolve({
+        id: 'user-1',
+        email: 'owner@example.com',
+        displayName: 'Owner',
+      }),
+    );
+    const context = {
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      membershipId: 'membership-1',
+      role: 'OWNER' as const,
+      agentId: 'agent-1',
+      requestId: 'http-request',
+    };
+    const resolve = jest.fn(() => Promise.resolve(context));
+    const controller = new OrganizationController(
+      { inviteMember } as unknown as OrganizationService,
+      { resolveUser } as unknown as SessionService,
+      { resolve } as unknown as TenantContextService,
+    );
+    const body = {
+      email: 'ops@example.com',
+      displayName: 'Ops',
+      role: 'APPROVER' as const,
+    };
+
+    await expect(
+      controller.inviteOrganizationMember(
+        'organization-1',
+        'Bearer token-1',
+        body,
+      ),
+    ).resolves.toEqual(member);
+    expect(resolve).toHaveBeenCalledWith({
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      requestId: 'http-request',
+    });
+    expect(inviteMember).toHaveBeenCalledWith(context, body);
+  });
 });
