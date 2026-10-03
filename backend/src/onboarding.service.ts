@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { SessionService } from './session.service';
 
@@ -60,6 +61,11 @@ interface AgentRow {
   lifecycle_status: string;
 }
 
+interface GlobalIdempotencyRecordRow {
+  request_hash: string;
+  status: string;
+}
+
 @Injectable()
 export class OnboardingService {
   constructor(
@@ -67,7 +73,10 @@ export class OnboardingService {
     private readonly sessions: SessionService,
   ) {}
 
-  async onboard(input: OnboardingRequest): Promise<OnboardingResult> {
+  async onboard(
+    input: OnboardingRequest,
+    idempotencyKey?: string,
+  ): Promise<OnboardingResult> {
     const email = normalizeEmail(input.email);
     const displayName = requireText(input.displayName, 'displayName');
     const organizationName = requireText(
@@ -77,8 +86,20 @@ export class OnboardingService {
     const organizationSlug = makeSlug(
       input.organizationSlug ?? organizationName,
     );
+    const request = {
+      email,
+      displayName,
+      organizationName,
+      organizationSlug,
+    };
 
     return this.database.withTransaction(async (database) => {
+      await reserveGlobalIdempotency(
+        database,
+        'POST /onboarding',
+        idempotencyKey,
+        request,
+      );
       const user = await upsertUser(database, email, displayName);
       const organization = await getOrCreateOrganization(
         database,
@@ -94,6 +115,11 @@ export class OnboardingService {
       const sessionToken = await this.sessions.createSessionRecord(
         database,
         user.id,
+      );
+      await completeGlobalIdempotency(
+        database,
+        'POST /onboarding',
+        idempotencyKey,
       );
 
       return {
@@ -120,6 +146,80 @@ export class OnboardingService {
       };
     });
   }
+}
+
+async function reserveGlobalIdempotency(
+  database: TenantDatabase,
+  route: string,
+  key: string | undefined,
+  request: unknown,
+): Promise<void> {
+  const idempotencyKey = key?.trim();
+  if (idempotencyKey === undefined || idempotencyKey === '') {
+    return;
+  }
+  if (idempotencyKey.length > 200) {
+    throw new BadRequestException('idempotency key is too long');
+  }
+
+  const requestHash = hashJson(request);
+  const inserted = await database.query(
+    `
+      INSERT INTO opes.global_idempotency_records (
+        route,
+        idempotency_key,
+        request_hash
+      )
+      VALUES ($1, $2, $3)
+      ON CONFLICT (route, idempotency_key) DO NOTHING
+    `,
+    [route, idempotencyKey, requestHash],
+  );
+
+  if (inserted.rowCount !== 0) {
+    return;
+  }
+
+  const existing = await database.query<GlobalIdempotencyRecordRow>(
+    `
+      SELECT request_hash, status
+        FROM opes.global_idempotency_records
+       WHERE route = $1
+         AND idempotency_key = $2
+    `,
+    [route, idempotencyKey],
+  );
+  const record = existing.rows[0];
+  if (record?.request_hash !== requestHash) {
+    throw new ConflictException(
+      'Idempotency key was used with a different request',
+    );
+  }
+  if (record.status !== 'COMPLETED') {
+    throw new ConflictException('Idempotency request is still processing');
+  }
+}
+
+async function completeGlobalIdempotency(
+  database: TenantDatabase,
+  route: string,
+  key: string | undefined,
+): Promise<void> {
+  const idempotencyKey = key?.trim();
+  if (idempotencyKey === undefined || idempotencyKey === '') {
+    return;
+  }
+
+  await database.query(
+    `
+      UPDATE opes.global_idempotency_records
+         SET status = 'COMPLETED',
+             updated_at = now()
+       WHERE route = $1
+         AND idempotency_key = $2
+    `,
+    [route, idempotencyKey],
+  );
 }
 
 async function upsertUser(
@@ -298,6 +398,10 @@ function makeSlug(value: string): string {
   }
 
   return slug;
+}
+
+function hashJson(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
 function requireRow<T>(row: T | undefined, name: string): T {

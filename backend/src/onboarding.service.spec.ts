@@ -123,6 +123,42 @@ describe('OnboardingService', () => {
     expect(createSessionRecord).not.toHaveBeenCalled();
   });
 
+  it('rejects reused onboarding idempotency keys with a different request', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            request_hash: 'different-request',
+            status: 'COMPLETED',
+          },
+        ],
+      });
+    const database = {
+      withTransaction: jest.fn((work: (database: TenantDatabase) => unknown) =>
+        work({ query }),
+      ),
+    } as unknown as DatabaseService;
+    const createSessionRecord = jest.fn();
+    const sessions = {
+      createSessionRecord,
+    } as unknown as SessionService;
+    const service = new OnboardingService(database, sessions);
+
+    await expect(
+      service.onboard(
+        {
+          email: 'owner@example.com',
+          displayName: 'Owner',
+          organizationName: 'Acme Design',
+        },
+        'onboarding-key-1',
+      ),
+    ).rejects.toThrow('Idempotency key was used with a different request');
+    expect(createSessionRecord).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid email before opening a transaction', async () => {
     const withTransaction = jest.fn();
     const database = {

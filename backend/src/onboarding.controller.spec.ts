@@ -21,16 +21,22 @@ describe('OnboardingController', () => {
     } as unknown as OnboardingService);
 
     await expect(
-      controller.onboard({
+      controller.onboard(
+        {
+          email: 'owner@example.com',
+          displayName: 'Owner',
+          organizationName: 'Acme',
+        },
+        'onboarding-key-1',
+      ),
+    ).resolves.toEqual(result);
+    expect(onboard).toHaveBeenCalledWith(
+      {
         email: 'owner@example.com',
         displayName: 'Owner',
         organizationName: 'Acme',
-      }),
-    ).resolves.toEqual(result);
-    expect(onboard).toHaveBeenCalledWith({
-      email: 'owner@example.com',
-      displayName: 'Owner',
-      organizationName: 'Acme',
-    });
+      },
+      'onboarding-key-1',
+    );
   });
 });
