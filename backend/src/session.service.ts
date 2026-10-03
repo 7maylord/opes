@@ -90,6 +90,24 @@ export class SessionService {
       displayName: row.display_name,
     };
   }
+
+  async revoke(token: string): Promise<void> {
+    if (token.trim() === '') {
+      return;
+    }
+
+    await this.database.withDatabase((database) =>
+      database.query(
+        `
+          UPDATE opes.user_sessions
+             SET status = 'REVOKED'
+           WHERE token_hash = $1
+             AND status = 'ACTIVE'
+        `,
+        [hashSessionToken(token)],
+      ),
+    );
+  }
 }
 
 function hashSessionToken(token: string): string {

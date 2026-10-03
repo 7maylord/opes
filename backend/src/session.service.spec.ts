@@ -75,4 +75,22 @@ describe('SessionService', () => {
     await expect(service.resolveUser('')).resolves.toBeNull();
     expect(withDatabase).not.toHaveBeenCalled();
   });
+
+  it('revokes an active token by hash', async () => {
+    const query = jest.fn(() => Promise.resolve({ rows: [] }));
+    const database = {
+      withDatabase: jest.fn(
+        (work: (database: TenantDatabase) => Promise<unknown>) =>
+          work({ query }),
+      ),
+    } as unknown as DatabaseService;
+    const service = new SessionService(database);
+
+    await service.revoke('token-1');
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('REVOKED'), [
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+    ]);
+    expect(query.mock.calls[0]?.[1]).not.toContain('token-1');
+  });
 });

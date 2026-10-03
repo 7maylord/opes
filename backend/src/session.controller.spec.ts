@@ -47,4 +47,28 @@ describe('SessionController', () => {
       'Session is invalid or expired',
     );
   });
+
+  it('revokes bearer sessions', async () => {
+    const revoke = jest.fn(() => Promise.resolve());
+    const controller = new SessionController({
+      revoke,
+    } as unknown as SessionService);
+
+    await expect(controller.revokeSession('Bearer token-1')).resolves.toEqual({
+      revoked: true,
+    });
+    expect(revoke).toHaveBeenCalledWith('token-1');
+  });
+
+  it('rejects revoke without a bearer token', async () => {
+    const revoke = jest.fn();
+    const controller = new SessionController({
+      revoke,
+    } as unknown as SessionService);
+
+    await expect(controller.revokeSession(undefined)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    expect(revoke).not.toHaveBeenCalled();
+  });
 });

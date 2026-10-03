@@ -1,11 +1,16 @@
 import {
   Controller,
+  Delete,
   Get,
   Headers,
   UnauthorizedException,
 } from '@nestjs/common';
 import { parseBearerToken } from './auth-header';
 import { SessionService, SessionUser } from './session.service';
+
+export interface RevokeSessionResponse {
+  revoked: true;
+}
 
 @Controller('session')
 export class SessionController {
@@ -26,5 +31,19 @@ export class SessionController {
     }
 
     return user;
+  }
+
+  @Delete()
+  async revokeSession(
+    @Headers('authorization') authorization: string | undefined,
+  ): Promise<RevokeSessionResponse> {
+    const token = parseBearerToken(authorization);
+    if (token === undefined) {
+      throw new UnauthorizedException('Bearer session token is required');
+    }
+
+    await this.sessions.revoke(token);
+
+    return { revoked: true };
   }
 }
