@@ -47,6 +47,7 @@ describe('ProvisioningWorkerService', () => {
                 id: 'event-1',
                 organization_id: 'organization-1',
                 aggregate_id: 'binding-1',
+                event_type: 'agent.provision.arc_testnet',
               },
             ],
           });
@@ -62,6 +63,8 @@ describe('ProvisioningWorkerService', () => {
     expect(queries[1]?.values).toEqual([
       'organization-1',
       'binding-1',
+      'arc',
+      'factory_provisioning',
       'Arc provisioning provider is not configured',
     ]);
     expect(queries[2]?.text).toContain(
@@ -70,6 +73,40 @@ describe('ProvisioningWorkerService', () => {
     expect(queries[2]?.values).toEqual([
       'event-1',
       'Arc provisioning provider is not configured',
+    ]);
+  });
+
+  it('marks unconfigured Arc wallet provisioning as failed and visible', async () => {
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const query = jest
+      .fn()
+      .mockImplementation((text: string, values?: readonly unknown[]) => {
+        queries.push({ text, values });
+
+        if (text.includes('RETURNING id, organization_id, aggregate_id')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'event-1',
+                organization_id: 'organization-1',
+                aggregate_id: 'binding-1',
+                event_type: 'agent.wallet.provision.arc_testnet',
+              },
+            ],
+          });
+        }
+
+        return Promise.resolve({ rows: [] });
+      });
+    const { service } = serviceWithWorker(query);
+
+    await expect(service.processDueArcProvisioning(1)).resolves.toBe(1);
+    expect(queries[1]?.values).toEqual([
+      'organization-1',
+      'binding-1',
+      'circle',
+      'operator_wallet',
+      'Arc wallet provider is not configured',
     ]);
   });
 

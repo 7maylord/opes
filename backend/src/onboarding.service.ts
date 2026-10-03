@@ -112,6 +112,7 @@ export class OnboardingService {
         user.id,
       );
       const agent = await getOrCreatePrimaryAgent(database, organization.id);
+      await ensureArcOperatorWalletProvisioning(database, organization.id);
       const sessionToken = await this.sessions.createSessionRecord(
         database,
         user.id,
@@ -366,6 +367,64 @@ async function getOrCreatePrimaryAgent(
   );
 
   return requireRow(existing.rows[0], 'agent');
+}
+
+async function ensureArcOperatorWalletProvisioning(
+  database: TenantDatabase,
+  organizationId: string,
+): Promise<void> {
+  const binding = await database.query<{ id: string }>(
+    `
+      INSERT INTO opes.tenant_resource_bindings (
+        organization_id,
+        environment,
+        chain_id,
+        provider,
+        resource_type,
+        resource_id,
+        status,
+        metadata
+      )
+      VALUES (
+        $1::uuid,
+        'arc-testnet',
+        5042002,
+        'circle',
+        'operator_wallet',
+        $1::text,
+        'PENDING',
+        '{"purpose":"tenant_operator"}'::jsonb
+      )
+      ON CONFLICT (provider, environment, resource_type, resource_id)
+      DO UPDATE SET updated_at = opes.tenant_resource_bindings.updated_at
+      RETURNING id
+    `,
+    [organizationId],
+  );
+  const row = requireRow(binding.rows[0], 'operator wallet binding');
+
+  await database.query(
+    `
+      INSERT INTO opes.outbox_events (
+        organization_id,
+        event_type,
+        aggregate_type,
+        aggregate_id,
+        payload
+      )
+      SELECT $1, 'agent.wallet.provision.arc_testnet', 'tenant_resource_binding', $2, '{}'::jsonb
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM opes.outbox_events
+         WHERE organization_id = $1
+           AND event_type = 'agent.wallet.provision.arc_testnet'
+           AND aggregate_type = 'tenant_resource_binding'
+           AND aggregate_id = $2
+           AND status IN ('PENDING', 'PROCESSING')
+      )
+    `,
+    [organizationId, row.id],
+  );
 }
 
 function normalizeEmail(value: string): string {

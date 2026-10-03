@@ -33,7 +33,9 @@ describe('OnboardingService', () => {
       })
       .mockResolvedValueOnce({
         rows: [{ id: 'agent-1', lifecycle_status: 'PROVISIONING' }],
-      });
+      })
+      .mockResolvedValueOnce({ rows: [{ id: 'wallet-binding-1' }] })
+      .mockResolvedValueOnce({ rows: [] });
     const database = {
       withTransaction: jest.fn((work: (database: TenantDatabase) => unknown) =>
         work({ query }),

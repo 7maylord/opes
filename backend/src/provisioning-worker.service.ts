@@ -6,6 +6,7 @@ interface OutboxEventRow {
   id: string;
   organization_id: string;
   aggregate_id: string;
+  event_type: string;
 }
 
 export interface ArcProvisioningSuccess {
@@ -88,14 +89,14 @@ export class ProvisioningWorkerService {
            WHERE id = (
              SELECT id
                FROM opes.outbox_events
-              WHERE event_type = 'agent.provision.arc_testnet'
+              WHERE event_type IN ('agent.provision.arc_testnet', 'agent.wallet.provision.arc_testnet')
                 AND status = 'PENDING'
                 AND available_at <= now()
               ORDER BY created_at ASC
               FOR UPDATE SKIP LOCKED
               LIMIT 1
            )
-           RETURNING id, organization_id, aggregate_id
+           RETURNING id, organization_id, aggregate_id, event_type
         `,
       );
 
@@ -106,10 +107,10 @@ export class ProvisioningWorkerService {
   private async failUnconfiguredArcProvisioning(
     event: OutboxEventRow,
   ): Promise<void> {
-    const reason = 'Arc provisioning provider is not configured';
+    const reason = provisioningFailureReason(event.event_type);
 
     await this.database.withWorker(async (database) => {
-      await updateProvisioningBinding(database, event, reason);
+      await updateFailedProvisioningBinding(database, event, reason);
       await failOutboxEvent(database, event.id, reason);
     });
 
@@ -117,29 +118,56 @@ export class ProvisioningWorkerService {
   }
 }
 
-async function updateProvisioningBinding(
+async function updateFailedProvisioningBinding(
   database: TenantDatabase,
   event: OutboxEventRow,
   reason: string,
 ): Promise<void> {
+  const expected = expectedProvisioningBinding(event.event_type);
+
   await database.query(
     `
       UPDATE opes.tenant_resource_bindings
          SET status = 'FAILED',
              metadata = metadata || jsonb_build_object(
-               'failureReason', $3::text,
+               'failureReason', $5::text,
                'failedAt', now()
              ),
              updated_at = now()
        WHERE organization_id = $1
          AND id = $2
-         AND provider = 'arc'
+         AND provider = $3
          AND environment = 'arc-testnet'
-         AND resource_type = 'factory_provisioning'
+         AND resource_type = $4
          AND status IN ('PENDING', 'FAILED')
     `,
-    [event.organization_id, event.aggregate_id, reason],
+    [
+      event.organization_id,
+      event.aggregate_id,
+      expected.provider,
+      expected.resourceType,
+      reason,
+    ],
   );
+}
+
+function provisioningFailureReason(eventType: string): string {
+  if (eventType === 'agent.wallet.provision.arc_testnet') {
+    return 'Arc wallet provider is not configured';
+  }
+
+  return 'Arc provisioning provider is not configured';
+}
+
+function expectedProvisioningBinding(eventType: string): {
+  provider: string;
+  resourceType: string;
+} {
+  if (eventType === 'agent.wallet.provision.arc_testnet') {
+    return { provider: 'circle', resourceType: 'operator_wallet' };
+  }
+
+  return { provider: 'arc', resourceType: 'factory_provisioning' };
 }
 
 async function failOutboxEvent(
