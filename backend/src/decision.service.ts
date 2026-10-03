@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -37,6 +39,19 @@ export interface DecisionCheckResponse {
   code: string;
   status: CheckStatus;
   message: string;
+}
+
+export interface DecisionApprovalResponse {
+  id: string;
+  decisionId: string;
+  decisionVersion: number;
+  sourceVersionId: string;
+  amountAtomic: string;
+  destinationAddress: string;
+  contextHash: string;
+  policySnapshotHash: string;
+  status: string;
+  expiresAt: string;
 }
 
 export interface PaymentDecisionResponse {
@@ -88,6 +103,19 @@ interface BindingRow {
   status: string;
 }
 
+interface ApprovalRow {
+  id: string;
+  decision_id: string;
+  decision_version: number;
+  source_version_id: string;
+  amount_atomic: string;
+  destination_address: string;
+  context_hash: string;
+  policy_snapshot_hash: string;
+  status: string;
+  expires_at: Date;
+}
+
 interface DecisionRow {
   id: string;
   source_type: string;
@@ -114,6 +142,76 @@ interface DecisionRow {
 @Injectable()
 export class DecisionService {
   constructor(private readonly database: DatabaseService) {}
+
+  async approveDecision(
+    context: TenantContext,
+    decisionId: string,
+  ): Promise<DecisionApprovalResponse> {
+    requireApprovalRole(context);
+    const targetDecisionId = requireUuid(decisionId, 'decisionId');
+
+    return this.database.withTenant(context, async (database) => {
+      const decision = await getDecision(
+        database,
+        context.organizationId,
+        targetDecisionId,
+      );
+      if (decision.derived_action === 'REJECT') {
+        throw new ConflictException('Rejected decisions cannot be approved');
+      }
+      if (decision.expires_at.getTime() <= Date.now()) {
+        throw new ConflictException('Expired decisions cannot be approved');
+      }
+      if (decision.checks.some((item) => item.status === 'BLOCK')) {
+        throw new ConflictException('Blocked decisions cannot be approved');
+      }
+
+      const inserted = await database.query<ApprovalRow>(
+        `
+          INSERT INTO opes.payment_decision_approvals (
+            organization_id,
+            decision_id,
+            decision_version,
+            source_version_id,
+            amount_atomic,
+            destination_address,
+            context_hash,
+            policy_snapshot_hash,
+            approved_by_membership_id,
+            expires_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (organization_id, decision_id, status)
+          DO UPDATE SET approved_at = opes.payment_decision_approvals.approved_at
+          RETURNING
+            id,
+            decision_id,
+            decision_version,
+            source_version_id,
+            amount_atomic::text AS amount_atomic,
+            destination_address,
+            context_hash,
+            policy_snapshot_hash,
+            status,
+            expires_at
+        `,
+        [
+          context.organizationId,
+          decision.id,
+          decision.decision_version,
+          decision.source_version_id,
+          decision.amount_atomic,
+          decision.destination_address,
+          decision.context_hash,
+          decision.policy_snapshot_hash,
+          context.membershipId,
+          decision.expires_at.toISOString(),
+        ],
+      );
+
+      return mapApproval(requireRow(inserted.rows[0], 'decision approval'));
+    });
+  }
 
   async evaluateInvoicePayment(
     context: TenantContext,
@@ -272,6 +370,44 @@ export class DecisionService {
       return mapDecision(requireRow(inserted.rows[0], 'payment decision'));
     });
   }
+}
+
+async function getDecision(
+  database: TenantDatabase,
+  organizationId: string,
+  decisionId: string,
+): Promise<DecisionRow> {
+  const result = await database.query<DecisionRow>(
+    `
+      SELECT
+        id,
+        source_type,
+        source_id,
+        source_version_id,
+        decision_version,
+        payment_mode,
+        model_action,
+        derived_action,
+        liquidity_route,
+        route_environment,
+        route_chain_id,
+        route_asset_symbol,
+        amount_atomic::text AS amount_atomic,
+        destination_address,
+        evidence_bundle_hash,
+        policy_snapshot_hash,
+        context_hash,
+        decision_hash,
+        checks,
+        expires_at
+      FROM opes.payment_decisions
+      WHERE organization_id = $1
+        AND id = $2
+      LIMIT 1
+    `,
+    [organizationId, decisionId],
+  );
+  return requireRow(result.rows[0], 'payment decision');
 }
 
 async function getInvoiceVersion(
@@ -441,6 +577,18 @@ function routeSupported(
   );
 }
 
+function requireApprovalRole(context: TenantContext): void {
+  if (
+    context.role !== 'OWNER' &&
+    context.role !== 'ADMIN' &&
+    context.role !== 'APPROVER'
+  ) {
+    throw new ForbiddenException(
+      'Only owners, admins and approvers can approve decisions',
+    );
+  }
+}
+
 function validateRoute(
   route: EvaluateInvoiceDecisionRequest['route'],
 ): EvaluateInvoiceDecisionRequest['route'] {
@@ -524,6 +672,21 @@ function stableStringify(value: unknown): string {
         `${JSON.stringify(key)}:${stableStringify((value as Record<string, unknown>)[key])}`,
     )
     .join(',')}}`;
+}
+
+function mapApproval(row: ApprovalRow): DecisionApprovalResponse {
+  return {
+    id: row.id,
+    decisionId: row.decision_id,
+    decisionVersion: row.decision_version,
+    sourceVersionId: row.source_version_id,
+    amountAtomic: row.amount_atomic,
+    destinationAddress: row.destination_address,
+    contextHash: row.context_hash,
+    policySnapshotHash: row.policy_snapshot_hash,
+    status: row.status,
+    expiresAt: row.expires_at.toISOString(),
+  };
 }
 
 function mapDecision(row: DecisionRow): PaymentDecisionResponse {

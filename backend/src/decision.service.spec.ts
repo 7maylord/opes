@@ -236,3 +236,123 @@ describe('DecisionService', () => {
     );
   });
 });
+
+describe('DecisionService approvals', () => {
+  it('binds approval to the exact stored decision fields', async () => {
+    const expiresAt = new Date(Date.now() + 86_400_000);
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: '55555555-5555-5555-5555-555555555555',
+            source_type: 'INVOICE',
+            source_id: '66666666-6666-6666-6666-666666666666',
+            source_version_id: request.invoiceVersionId,
+            decision_version: 2,
+            payment_mode: 'DIRECT',
+            model_action: 'PAY',
+            derived_action: 'ESCALATE',
+            liquidity_route: 'OPERATING',
+            route_environment: 'arc-testnet',
+            route_chain_id: 5042002,
+            route_asset_symbol: 'USDC',
+            amount_atomic: '1000000001',
+            destination_address: '0x0000000000000000000000000000000000000002',
+            evidence_bundle_hash: 'c'.repeat(64),
+            policy_snapshot_hash: 'd'.repeat(64),
+            context_hash: 'e'.repeat(64),
+            decision_hash: null,
+            checks: [
+              {
+                code: 'autonomous_amount_limit',
+                status: 'REQUIRES_APPROVAL',
+                message: 'amount requires approval',
+              },
+            ],
+            expires_at: expiresAt,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'approval-1',
+            decision_id: '55555555-5555-5555-5555-555555555555',
+            decision_version: 2,
+            source_version_id: request.invoiceVersionId,
+            amount_atomic: '1000000001',
+            destination_address: '0x0000000000000000000000000000000000000002',
+            context_hash: 'e'.repeat(64),
+            policy_snapshot_hash: 'd'.repeat(64),
+            status: 'ACTIVE',
+            expires_at: expiresAt,
+          },
+        ],
+      });
+    const service = serviceWithQuery(query);
+
+    await expect(
+      service.approveDecision(context, '55555555-5555-5555-5555-555555555555'),
+    ).resolves.toMatchObject({
+      decisionVersion: 2,
+      amountAtomic: '1000000001',
+      contextHash: 'e'.repeat(64),
+      status: 'ACTIVE',
+    });
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining('INSERT INTO opes.payment_decision_approvals'),
+      expect.arrayContaining([
+        '55555555-5555-5555-5555-555555555555',
+        2,
+        request.invoiceVersionId,
+        '1000000001',
+        '0x0000000000000000000000000000000000000002',
+        'e'.repeat(64),
+        'd'.repeat(64),
+      ]),
+    );
+  });
+
+  it('does not approve blocked decisions', async () => {
+    const query = jest.fn().mockResolvedValueOnce({
+      rows: [
+        {
+          id: '55555555-5555-5555-5555-555555555555',
+          source_type: 'INVOICE',
+          source_id: '66666666-6666-6666-6666-666666666666',
+          source_version_id: request.invoiceVersionId,
+          decision_version: 1,
+          payment_mode: 'DIRECT',
+          model_action: 'PAY',
+          derived_action: 'REJECT',
+          liquidity_route: 'CCTP',
+          route_environment: 'base-mainnet',
+          route_chain_id: 8453,
+          route_asset_symbol: 'USDC',
+          amount_atomic: '12340001',
+          destination_address: '0x0000000000000000000000000000000000000002',
+          evidence_bundle_hash: 'c'.repeat(64),
+          policy_snapshot_hash: 'd'.repeat(64),
+          context_hash: 'e'.repeat(64),
+          decision_hash: null,
+          checks: [
+            {
+              code: 'route_supported',
+              status: 'BLOCK',
+              message: 'route unsupported',
+            },
+          ],
+          expires_at: new Date(Date.now() + 86_400_000),
+        },
+      ],
+    });
+    const service = serviceWithQuery(query);
+
+    await expect(
+      service.approveDecision(context, '55555555-5555-5555-5555-555555555555'),
+    ).rejects.toThrow('Rejected decisions cannot be approved');
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+});
