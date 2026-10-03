@@ -1,5 +1,6 @@
 import { DatabaseService, TenantDatabase } from './database.service';
 import { OrganizationService } from './organization.service';
+import { SessionService } from './session.service';
 import { TenantContext } from './tenant-context';
 
 describe('OrganizationService', () => {
@@ -191,6 +192,8 @@ describe('OrganizationService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
     const withTenant = jest.fn(
       (
@@ -203,13 +206,13 @@ describe('OrganizationService', () => {
     } as unknown as DatabaseService;
     const service = new OrganizationService(database);
 
-    await expect(
-      service.inviteMember(context, {
-        email: 'OPS@example.com',
-        displayName: 'Ops',
-        role: 'APPROVER',
-      }),
-    ).resolves.toEqual({
+    const result = await service.inviteMember(context, {
+      email: 'OPS@example.com',
+      displayName: 'Ops',
+      role: 'APPROVER',
+    });
+
+    expect(result).toEqual({
       id: 'membership-2',
       userId: 'user-2',
       email: 'ops@example.com',
@@ -217,8 +220,20 @@ describe('OrganizationService', () => {
       role: 'APPROVER',
       status: 'INVITED',
       createdAt,
+      invitationToken: result.invitationToken,
     });
+    expect(result.invitationToken).toHaveLength(43);
     expect(withTenant).toHaveBeenCalledWith(context, expect.any(Function));
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO opes.organization_invitations'),
+      [
+        'organization-1',
+        'membership-2',
+        'owner-membership-1',
+        expect.any(String),
+        'APPROVER',
+      ],
+    );
     expect(query).toHaveBeenLastCalledWith(
       expect.stringContaining('organization.member.invited'),
       [
@@ -348,5 +363,76 @@ describe('OrganizationService', () => {
         },
       ),
     ).rejects.toThrow('Cannot update your own membership');
+  });
+
+  it('accepts an invitation and creates a session in one transaction', async () => {
+    const createdAt = new Date('2026-10-03T10:00:00.000Z');
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'invitation-1',
+            organization_id: 'organization-1',
+            membership_id: 'membership-2',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'membership-2',
+            user_id: 'user-2',
+            email: 'ops@example.com',
+            display_name: 'Ops',
+            role: 'APPROVER',
+            status: 'ACTIVE',
+            created_at: createdAt,
+            organization_id: 'organization-1',
+            organization_slug: 'acme',
+            organization_display_name: 'Acme',
+            organization_lifecycle_status: 'PROVISIONING',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const withTransaction = jest.fn(
+      (work: (database: TenantDatabase) => Promise<unknown>) => work({ query }),
+    );
+    const database = {
+      withTransaction,
+    } as unknown as DatabaseService;
+    const createSessionRecord = jest.fn(() => Promise.resolve('session-token'));
+    const service = new OrganizationService(database, {
+      createSessionRecord,
+    } as unknown as SessionService);
+
+    await expect(service.acceptInvitation('invite-token')).resolves.toEqual({
+      user: {
+        id: 'user-2',
+        email: 'ops@example.com',
+        displayName: 'Ops',
+      },
+      organization: {
+        id: 'organization-1',
+        slug: 'acme',
+        displayName: 'Acme',
+        lifecycleStatus: 'PROVISIONING',
+      },
+      membership: {
+        id: 'membership-2',
+        userId: 'user-2',
+        email: 'ops@example.com',
+        displayName: 'Ops',
+        role: 'APPROVER',
+        status: 'ACTIVE',
+        createdAt,
+      },
+      sessionToken: 'session-token',
+    });
+    expect(withTransaction).toHaveBeenCalledWith(expect.any(Function));
+    expect(createSessionRecord).toHaveBeenCalledWith({ query }, 'user-2');
   });
 });

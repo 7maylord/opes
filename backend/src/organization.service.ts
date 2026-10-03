@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
@@ -6,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { SessionService } from './session.service';
 import { MembershipRole, TenantContext } from './tenant-context';
 
 export interface UserOrganization {
@@ -35,9 +37,29 @@ export interface InviteOrganizationMemberRequest {
   role: MembershipRole;
 }
 
+export interface InvitedOrganizationMember extends OrganizationMember {
+  invitationToken: string;
+}
+
 export interface UpdateOrganizationMemberRequest {
   role?: MembershipRole;
   status?: 'REVOKED';
+}
+
+export interface AcceptOrganizationInvitationResult {
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+  };
+  organization: {
+    id: string;
+    slug: string;
+    displayName: string;
+    lifecycleStatus: string;
+  };
+  membership: OrganizationMember;
+  sessionToken: string;
 }
 
 interface UserOrganizationRow {
@@ -67,9 +89,25 @@ interface MemberUserRow {
   display_name: string;
 }
 
+interface InvitationLookupRow {
+  id: string;
+  organization_id: string;
+  membership_id: string;
+}
+
+interface AcceptedInvitationRow extends OrganizationMemberRow {
+  organization_id: string;
+  organization_slug: string;
+  organization_display_name: string;
+  organization_lifecycle_status: string;
+}
+
 @Injectable()
 export class OrganizationService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly sessions?: SessionService,
+  ) {}
 
   async listForUser(userId: string): Promise<UserOrganization[]> {
     if (userId.trim() === '') {
@@ -185,7 +223,7 @@ export class OrganizationService {
   async inviteMember(
     context: TenantContext,
     input: InviteOrganizationMemberRequest,
-  ): Promise<OrganizationMember> {
+  ): Promise<InvitedOrganizationMember> {
     if (context.role !== 'OWNER' && context.role !== 'ADMIN') {
       throw new ForbiddenException('Only owners and admins can invite members');
     }
@@ -194,6 +232,7 @@ export class OrganizationService {
     const role = validateInvitedRole(input.role);
     const displayName = input.displayName?.trim() || email.split('@')[0];
 
+    const invitationToken = createToken();
     const result = await this.database.withTenant(context, async (database) => {
       const user = await findOrCreateMemberUser(database, email, displayName);
 
@@ -284,6 +323,38 @@ export class OrganizationService {
       const member = requireMember(invited.rows[0]);
       await database.query(
         `
+          UPDATE opes.organization_invitations
+             SET status = 'REVOKED',
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND membership_id = $2
+             AND status = 'PENDING'
+        `,
+        [context.organizationId, member.id],
+      );
+      await database.query(
+        `
+          INSERT INTO opes.organization_invitations (
+            organization_id,
+            membership_id,
+            invited_by_membership_id,
+            token_hash,
+            role,
+            status,
+            expires_at
+          )
+          VALUES ($1, $2, $3, $4, $5, 'PENDING', now() + interval '7 days')
+        `,
+        [
+          context.organizationId,
+          member.id,
+          context.membershipId,
+          hashToken(invitationToken),
+          member.role,
+        ],
+      );
+      await database.query(
+        `
           INSERT INTO opes.audit_events (
             organization_id,
             actor_user_id,
@@ -307,7 +378,10 @@ export class OrganizationService {
       return member;
     });
 
-    return mapMember(result);
+    return {
+      ...mapMember(result),
+      invitationToken,
+    };
   }
 
   async updateMember(
@@ -409,6 +483,121 @@ export class OrganizationService {
 
     return mapMember(result);
   }
+
+  async acceptInvitation(
+    token: string,
+  ): Promise<AcceptOrganizationInvitationResult> {
+    const invitationToken = requireText(token, 'token');
+    const sessions = this.requireSessions();
+
+    return this.database.withTransaction(async (database) => {
+      const invitationResult = await database.query<InvitationLookupRow>(
+        `
+          SELECT id, organization_id, membership_id
+            FROM opes.organization_invitations
+           WHERE token_hash = $1
+             AND status = 'PENDING'
+             AND expires_at > now()
+           LIMIT 1
+        `,
+        [hashToken(invitationToken)],
+      );
+
+      const invitation = invitationResult.rows[0];
+      if (invitation === undefined) {
+        throw new NotFoundException('Organization invitation not found');
+      }
+
+      await database.query(
+        `SELECT set_config('opes.organization_id', $1, true)`,
+        [invitation.organization_id],
+      );
+
+      const memberResult = await database.query<AcceptedInvitationRow>(
+        `
+          UPDATE opes.organization_memberships AS membership
+             SET status = 'ACTIVE',
+                 updated_at = now()
+            FROM opes.app_users AS app_user,
+                 opes.organizations AS organization
+           WHERE membership.organization_id = $1
+             AND membership.id = $2
+             AND membership.status = 'INVITED'
+             AND app_user.id = membership.user_id
+             AND organization.id = membership.organization_id
+          RETURNING
+            membership.id,
+            membership.user_id,
+            app_user.email,
+            app_user.display_name,
+            membership.role,
+            membership.status,
+            membership.created_at,
+            organization.id AS organization_id,
+            organization.slug AS organization_slug,
+            organization.display_name AS organization_display_name,
+            organization.lifecycle_status AS organization_lifecycle_status
+        `,
+        [invitation.organization_id, invitation.membership_id],
+      );
+
+      const member = requireMember(memberResult.rows[0]);
+      await database.query(
+        `
+          UPDATE opes.organization_invitations
+             SET status = 'ACCEPTED',
+                 accepted_at = now(),
+                 updated_at = now()
+           WHERE id = $1
+        `,
+        [invitation.id],
+      );
+      await database.query(
+        `
+          INSERT INTO opes.audit_events (
+            organization_id,
+            actor_user_id,
+            actor_membership_id,
+            event_type,
+            subject_type,
+            subject_id,
+            payload
+          )
+          VALUES ($1, $2, $3, 'organization.invitation.accepted', 'organization_membership', $3, '{}'::jsonb)
+        `,
+        [invitation.organization_id, member.user_id, member.id],
+      );
+
+      const sessionToken = await sessions.createSessionRecord(
+        database,
+        member.user_id,
+      );
+
+      return {
+        user: {
+          id: member.user_id,
+          email: member.email,
+          displayName: member.display_name,
+        },
+        organization: {
+          id: member.organization_id,
+          slug: member.organization_slug,
+          displayName: member.organization_display_name,
+          lifecycleStatus: member.organization_lifecycle_status,
+        },
+        membership: mapMember(member),
+        sessionToken,
+      };
+    });
+  }
+
+  private requireSessions(): SessionService {
+    if (this.sessions === undefined) {
+      throw new Error('SessionService is required');
+    }
+
+    return this.sessions;
+  }
 }
 
 async function findOrCreateMemberUser(
@@ -499,9 +688,15 @@ function requireText(value: string | undefined, name: string): string {
   return text;
 }
 
-function requireMember(
-  row: OrganizationMemberRow | undefined,
-): OrganizationMemberRow {
+function createToken(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function requireMember<T extends OrganizationMemberRow>(row: T | undefined): T {
   if (row === undefined) {
     throw new Error('Expected membership row');
   }

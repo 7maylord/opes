@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 import { DatabaseService } from './database.service';
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingService } from './onboarding.service';
+import { OrganizationInvitationController } from './organization-invitation.controller';
 import { OrganizationController } from './organization.controller';
 import { OrganizationService } from './organization.service';
 import { SessionController } from './session.controller';
@@ -15,6 +16,7 @@ import { TenantContextService } from './tenant-context.service';
   controllers: [
     AppController,
     OnboardingController,
+    OrganizationInvitationController,
     OrganizationController,
     SessionController,
   ],

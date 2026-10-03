@@ -11,6 +11,7 @@ import {
 import { parseBearerToken } from './auth-header';
 import type {
   InviteOrganizationMemberRequest,
+  InvitedOrganizationMember,
   OrganizationMember,
   UpdateOrganizationMemberRequest,
   UserOrganization,
@@ -97,7 +98,7 @@ export class OrganizationController {
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
     @Body() body: InviteOrganizationMemberRequest,
-  ): Promise<OrganizationMember> {
+  ): Promise<InvitedOrganizationMember> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
       throw new UnauthorizedException('Bearer session token is required');

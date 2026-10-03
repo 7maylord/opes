@@ -153,6 +153,7 @@ describe('OrganizationController', () => {
       role: 'APPROVER',
       status: 'INVITED',
       createdAt: new Date('2026-10-03T10:00:00.000Z'),
+      invitationToken: 'invite-token',
     };
     const inviteMember = jest.fn(() => Promise.resolve(member));
     const resolveUser = jest.fn(() =>
