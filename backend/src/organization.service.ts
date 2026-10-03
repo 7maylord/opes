@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { MembershipRole, TenantContext } from './tenant-context';
@@ -32,6 +33,11 @@ export interface InviteOrganizationMemberRequest {
   email: string;
   displayName?: string;
   role: MembershipRole;
+}
+
+export interface UpdateOrganizationMemberRequest {
+  role?: MembershipRole;
+  status?: 'REVOKED';
 }
 
 interface UserOrganizationRow {
@@ -303,6 +309,106 @@ export class OrganizationService {
 
     return mapMember(result);
   }
+
+  async updateMember(
+    context: TenantContext,
+    membershipId: string,
+    input: UpdateOrganizationMemberRequest,
+  ): Promise<OrganizationMember> {
+    if (context.role !== 'OWNER' && context.role !== 'ADMIN') {
+      throw new ForbiddenException('Only owners and admins can manage members');
+    }
+
+    const targetMembershipId = requireText(membershipId, 'membershipId');
+    if (targetMembershipId === context.membershipId) {
+      throw new BadRequestException('Cannot update your own membership');
+    }
+
+    const nextRole =
+      input.role === undefined ? undefined : validateInvitedRole(input.role);
+    const nextStatus = validateUpdatedStatus(input.status);
+    if (nextRole === undefined && nextStatus === undefined) {
+      throw new BadRequestException('role or status is required');
+    }
+
+    const result = await this.database.withTenant(context, async (database) => {
+      const existing = await database.query<OrganizationMemberRow>(
+        `
+          SELECT
+            membership.id,
+            membership.user_id,
+            app_user.email,
+            app_user.display_name,
+            membership.role,
+            membership.status,
+            membership.created_at
+          FROM opes.organization_memberships AS membership
+          JOIN opes.app_users AS app_user
+            ON app_user.id = membership.user_id
+          WHERE membership.organization_id = $1
+            AND membership.id = $2
+        `,
+        [context.organizationId, targetMembershipId],
+      );
+
+      const existingMember = existing.rows[0];
+      if (existingMember === undefined) {
+        throw new NotFoundException('Organization member not found');
+      }
+      if (existingMember.role === 'OWNER') {
+        throw new ForbiddenException('Owner membership cannot be changed here');
+      }
+
+      const updated = await database.query<OrganizationMemberRow>(
+        `
+          UPDATE opes.organization_memberships AS membership
+             SET role = COALESCE($3, membership.role),
+                 status = COALESCE($4, membership.status),
+                 updated_at = now()
+            FROM opes.app_users AS app_user
+           WHERE membership.organization_id = $1
+             AND membership.id = $2
+             AND app_user.id = membership.user_id
+          RETURNING
+            membership.id,
+            membership.user_id,
+            app_user.email,
+            app_user.display_name,
+            membership.role,
+            membership.status,
+            membership.created_at
+        `,
+        [context.organizationId, targetMembershipId, nextRole, nextStatus],
+      );
+
+      const member = requireMember(updated.rows[0]);
+      await database.query(
+        `
+          INSERT INTO opes.audit_events (
+            organization_id,
+            actor_user_id,
+            actor_membership_id,
+            event_type,
+            subject_type,
+            subject_id,
+            payload
+          )
+          VALUES ($1, $2, $3, 'organization.member.updated', 'organization_membership', $4, $5::jsonb)
+        `,
+        [
+          context.organizationId,
+          context.userId,
+          context.membershipId,
+          member.id,
+          JSON.stringify({ role: member.role, status: member.status }),
+        ],
+      );
+
+      return member;
+    });
+
+    return mapMember(result);
+  }
 }
 
 async function findOrCreateMemberUser(
@@ -353,7 +459,7 @@ function mapMember(row: OrganizationMemberRow): OrganizationMember {
 }
 
 function normalizeEmail(value: string): string {
-  const email = value.trim().toLowerCase();
+  const email = requireText(value, 'email').toLowerCase();
   if (email === '' || !email.includes('@')) {
     throw new BadRequestException('email must be valid');
   }
@@ -372,6 +478,25 @@ function validateInvitedRole(role: MembershipRole): MembershipRole {
   }
 
   return role;
+}
+
+function validateUpdatedStatus(
+  status: UpdateOrganizationMemberRequest['status'],
+): UpdateOrganizationMemberRequest['status'] {
+  if (status === undefined || status === 'REVOKED') {
+    return status;
+  }
+
+  throw new BadRequestException('status cannot be updated');
+}
+
+function requireText(value: string | undefined, name: string): string {
+  const text = value?.trim();
+  if (text === undefined || text === '') {
+    throw new BadRequestException(`${name} is required`);
+  }
+
+  return text;
 }
 
 function requireMember(

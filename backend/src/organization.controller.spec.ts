@@ -196,4 +196,57 @@ describe('OrganizationController', () => {
     });
     expect(inviteMember).toHaveBeenCalledWith(context, body);
   });
+
+  it('updates organization members through resolved tenant context', async () => {
+    const member = {
+      id: 'membership-2',
+      userId: 'user-2',
+      email: 'ops@example.com',
+      displayName: 'Ops',
+      role: 'AUDITOR',
+      status: 'REVOKED',
+      createdAt: new Date('2026-10-03T10:00:00.000Z'),
+    };
+    const updateMember = jest.fn(() => Promise.resolve(member));
+    const resolveUser = jest.fn(() =>
+      Promise.resolve({
+        id: 'user-1',
+        email: 'owner@example.com',
+        displayName: 'Owner',
+      }),
+    );
+    const context = {
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      membershipId: 'membership-1',
+      role: 'OWNER' as const,
+      agentId: 'agent-1',
+      requestId: 'http-request',
+    };
+    const resolve = jest.fn(() => Promise.resolve(context));
+    const controller = new OrganizationController(
+      { updateMember } as unknown as OrganizationService,
+      { resolveUser } as unknown as SessionService,
+      { resolve } as unknown as TenantContextService,
+    );
+    const body = {
+      role: 'AUDITOR' as const,
+      status: 'REVOKED' as const,
+    };
+
+    await expect(
+      controller.updateOrganizationMember(
+        'organization-1',
+        'membership-2',
+        'Bearer token-1',
+        body,
+      ),
+    ).resolves.toEqual(member);
+    expect(resolve).toHaveBeenCalledWith({
+      organizationId: 'organization-1',
+      userId: 'user-1',
+      requestId: 'http-request',
+    });
+    expect(updateMember).toHaveBeenCalledWith(context, 'membership-2', body);
+  });
 });
