@@ -86,6 +86,25 @@ export class DatabaseService implements OnModuleDestroy {
     }
   }
 
+  async withWorker<T>(
+    work: (database: TenantDatabase) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.getPool().connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('opes.worker', 'true', true)");
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async onModuleDestroy(): Promise<void> {
     await this.pool?.end();
   }

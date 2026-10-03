@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { DatabaseService } from './database.service';
 import { FactoryManifestService } from './factory-manifest.service';
 import { OnboardingController } from './onboarding.controller';
+import { ProvisioningWorkerService } from './provisioning-worker.service';
 import { OnboardingService } from './onboarding.service';
 import { OrganizationInvitationController } from './organization-invitation.controller';
 import { OrganizationController } from './organization.controller';
@@ -30,6 +31,7 @@ import { TenantContextService } from './tenant-context.service';
     DatabaseService,
     FactoryManifestService,
     OnboardingService,
+    ProvisioningWorkerService,
     OrganizationService,
     SessionService,
     TenantContextService,
