@@ -98,6 +98,7 @@ export class OrganizationController {
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
     @Body() body: InviteOrganizationMemberRequest,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
   ): Promise<InvitedOrganizationMember> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
@@ -115,7 +116,7 @@ export class OrganizationController {
       requestId: 'http-request',
     });
 
-    return this.organizations.inviteMember(context, body);
+    return this.organizations.inviteMember(context, body, idempotencyKey);
   }
 
   @Patch(':organizationId/members/:membershipId')
@@ -124,6 +125,7 @@ export class OrganizationController {
     @Param('membershipId') membershipId: string,
     @Headers('authorization') authorization: string | undefined,
     @Body() body: UpdateOrganizationMemberRequest,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
   ): Promise<OrganizationMember> {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
@@ -141,6 +143,11 @@ export class OrganizationController {
       requestId: 'http-request',
     });
 
-    return this.organizations.updateMember(context, membershipId, body);
+    return this.organizations.updateMember(
+      context,
+      membershipId,
+      body,
+      idempotencyKey,
+    );
   }
 }

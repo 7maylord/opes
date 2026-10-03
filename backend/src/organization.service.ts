@@ -102,6 +102,12 @@ interface AcceptedInvitationRow extends OrganizationMemberRow {
   organization_lifecycle_status: string;
 }
 
+interface IdempotencyRecordRow {
+  request_hash: string;
+  status: string;
+  response_payload: unknown;
+}
+
 @Injectable()
 export class OrganizationService {
   constructor(
@@ -223,6 +229,7 @@ export class OrganizationService {
   async inviteMember(
     context: TenantContext,
     input: InviteOrganizationMemberRequest,
+    idempotencyKey?: string,
   ): Promise<InvitedOrganizationMember> {
     if (context.role !== 'OWNER' && context.role !== 'ADMIN') {
       throw new ForbiddenException('Only owners and admins can invite members');
@@ -231,13 +238,17 @@ export class OrganizationService {
     const email = normalizeEmail(input.email);
     const role = validateInvitedRole(input.role);
     const displayName = input.displayName?.trim() || email.split('@')[0];
-
     const invitationToken = createToken();
-    const result = await this.database.withTenant(context, async (database) => {
-      const user = await findOrCreateMemberUser(database, email, displayName);
 
-      const existing = await database.query<OrganizationMemberRow>(
-        `
+    return this.withTenantIdempotency(
+      context,
+      idempotencyKey,
+      { action: 'organization.member.invite', input },
+      async (database) => {
+        const user = await findOrCreateMemberUser(database, email, displayName);
+
+        const existing = await database.query<OrganizationMemberRow>(
+          `
           SELECT
             membership.id,
             membership.user_id,
@@ -252,20 +263,23 @@ export class OrganizationService {
           WHERE membership.organization_id = $1
             AND membership.user_id = $2
         `,
-        [context.organizationId, user.id],
-      );
-
-      const existingMember = existing.rows[0];
-      if (existingMember !== undefined && existingMember.status !== 'REVOKED') {
-        throw new ConflictException(
-          'User already has an organization membership',
+          [context.organizationId, user.id],
         );
-      }
 
-      const invited =
-        existingMember === undefined
-          ? await database.query<OrganizationMemberRow>(
-              `
+        const existingMember = existing.rows[0];
+        if (
+          existingMember !== undefined &&
+          existingMember.status !== 'REVOKED'
+        ) {
+          throw new ConflictException(
+            'User already has an organization membership',
+          );
+        }
+
+        const invited =
+          existingMember === undefined
+            ? await database.query<OrganizationMemberRow>(
+                `
                 INSERT INTO opes.organization_memberships (
                   organization_id,
                   user_id,
@@ -283,17 +297,17 @@ export class OrganizationService {
                   status,
                   created_at
               `,
-              [
-                context.organizationId,
-                user.id,
-                role,
-                context.membershipId,
-                user.email,
-                user.display_name,
-              ],
-            )
-          : await database.query<OrganizationMemberRow>(
-              `
+                [
+                  context.organizationId,
+                  user.id,
+                  role,
+                  context.membershipId,
+                  user.email,
+                  user.display_name,
+                ],
+              )
+            : await database.query<OrganizationMemberRow>(
+                `
                 UPDATE opes.organization_memberships
                    SET role = $3,
                        status = 'INVITED',
@@ -310,19 +324,19 @@ export class OrganizationService {
                   status,
                   created_at
               `,
-              [
-                context.organizationId,
-                user.id,
-                role,
-                context.membershipId,
-                user.email,
-                user.display_name,
-              ],
-            );
+                [
+                  context.organizationId,
+                  user.id,
+                  role,
+                  context.membershipId,
+                  user.email,
+                  user.display_name,
+                ],
+              );
 
-      const member = requireMember(invited.rows[0]);
-      await database.query(
-        `
+        const member = requireMember(invited.rows[0]);
+        await database.query(
+          `
           UPDATE opes.organization_invitations
              SET status = 'REVOKED',
                  updated_at = now()
@@ -330,10 +344,10 @@ export class OrganizationService {
              AND membership_id = $2
              AND status = 'PENDING'
         `,
-        [context.organizationId, member.id],
-      );
-      await database.query(
-        `
+          [context.organizationId, member.id],
+        );
+        await database.query(
+          `
           INSERT INTO opes.organization_invitations (
             organization_id,
             membership_id,
@@ -345,16 +359,16 @@ export class OrganizationService {
           )
           VALUES ($1, $2, $3, $4, $5, 'PENDING', now() + interval '7 days')
         `,
-        [
-          context.organizationId,
-          member.id,
-          context.membershipId,
-          hashToken(invitationToken),
-          member.role,
-        ],
-      );
-      await database.query(
-        `
+          [
+            context.organizationId,
+            member.id,
+            context.membershipId,
+            hashToken(invitationToken),
+            member.role,
+          ],
+        );
+        await database.query(
+          `
           INSERT INTO opes.audit_events (
             organization_id,
             actor_user_id,
@@ -366,28 +380,30 @@ export class OrganizationService {
           )
           VALUES ($1, $2, $3, 'organization.member.invited', 'organization_membership', $4, $5::jsonb)
         `,
-        [
-          context.organizationId,
-          context.userId,
-          context.membershipId,
-          member.id,
-          JSON.stringify({ email: member.email, role: member.role }),
-        ],
-      );
+          [
+            context.organizationId,
+            context.userId,
+            context.membershipId,
+            member.id,
+            JSON.stringify({ email: member.email, role: member.role }),
+          ],
+        );
 
-      return member;
-    });
-
-    return {
-      ...mapMember(result),
-      invitationToken,
-    };
+        return member;
+      },
+      (member) => ({
+        ...mapMember(member),
+        invitationToken,
+      }),
+      reviveInvitedMember,
+    );
   }
 
   async updateMember(
     context: TenantContext,
     membershipId: string,
     input: UpdateOrganizationMemberRequest,
+    idempotencyKey?: string,
   ): Promise<OrganizationMember> {
     if (context.role !== 'OWNER' && context.role !== 'ADMIN') {
       throw new ForbiddenException('Only owners and admins can manage members');
@@ -405,9 +421,17 @@ export class OrganizationService {
       throw new BadRequestException('role or status is required');
     }
 
-    const result = await this.database.withTenant(context, async (database) => {
-      const existing = await database.query<OrganizationMemberRow>(
-        `
+    return this.withTenantIdempotency(
+      context,
+      idempotencyKey,
+      {
+        action: 'organization.member.update',
+        membershipId: targetMembershipId,
+        input,
+      },
+      async (database) => {
+        const existing = await database.query<OrganizationMemberRow>(
+          `
           SELECT
             membership.id,
             membership.user_id,
@@ -422,19 +446,21 @@ export class OrganizationService {
           WHERE membership.organization_id = $1
             AND membership.id = $2
         `,
-        [context.organizationId, targetMembershipId],
-      );
+          [context.organizationId, targetMembershipId],
+        );
 
-      const existingMember = existing.rows[0];
-      if (existingMember === undefined) {
-        throw new NotFoundException('Organization member not found');
-      }
-      if (existingMember.role === 'OWNER') {
-        throw new ForbiddenException('Owner membership cannot be changed here');
-      }
+        const existingMember = existing.rows[0];
+        if (existingMember === undefined) {
+          throw new NotFoundException('Organization member not found');
+        }
+        if (existingMember.role === 'OWNER') {
+          throw new ForbiddenException(
+            'Owner membership cannot be changed here',
+          );
+        }
 
-      const updated = await database.query<OrganizationMemberRow>(
-        `
+        const updated = await database.query<OrganizationMemberRow>(
+          `
           UPDATE opes.organization_memberships AS membership
              SET role = COALESCE($3, membership.role),
                  status = COALESCE($4, membership.status),
@@ -452,12 +478,12 @@ export class OrganizationService {
             membership.status,
             membership.created_at
         `,
-        [context.organizationId, targetMembershipId, nextRole, nextStatus],
-      );
+          [context.organizationId, targetMembershipId, nextRole, nextStatus],
+        );
 
-      const member = requireMember(updated.rows[0]);
-      await database.query(
-        `
+        const member = requireMember(updated.rows[0]);
+        await database.query(
+          `
           INSERT INTO opes.audit_events (
             organization_id,
             actor_user_id,
@@ -469,19 +495,20 @@ export class OrganizationService {
           )
           VALUES ($1, $2, $3, 'organization.member.updated', 'organization_membership', $4, $5::jsonb)
         `,
-        [
-          context.organizationId,
-          context.userId,
-          context.membershipId,
-          member.id,
-          JSON.stringify({ role: member.role, status: member.status }),
-        ],
-      );
+          [
+            context.organizationId,
+            context.userId,
+            context.membershipId,
+            member.id,
+            JSON.stringify({ role: member.role, status: member.status }),
+          ],
+        );
 
-      return member;
-    });
-
-    return mapMember(result);
+        return member;
+      },
+      mapMember,
+      reviveMember,
+    );
   }
 
   async acceptInvitation(
@@ -598,6 +625,82 @@ export class OrganizationService {
 
     return this.sessions;
   }
+
+  private async withTenantIdempotency<T>(
+    context: TenantContext,
+    key: string | undefined,
+    request: unknown,
+    work: (database: TenantDatabase) => Promise<OrganizationMemberRow>,
+    mapResult: (row: OrganizationMemberRow) => T,
+    revive: (payload: unknown) => T,
+  ): Promise<T> {
+    const idempotencyKey = key?.trim();
+    if (idempotencyKey === undefined || idempotencyKey === '') {
+      const row = await this.database.withTenant(context, work);
+      return mapResult(row);
+    }
+
+    if (idempotencyKey.length > 200) {
+      throw new BadRequestException('idempotency key is too long');
+    }
+
+    const requestHash = hashJson(request);
+    return this.database.withTenant(context, async (database) => {
+      const inserted = await database.query(
+        `
+          INSERT INTO opes.idempotency_records (
+            organization_id,
+            idempotency_key,
+            request_hash
+          )
+          VALUES ($1, $2, $3)
+          ON CONFLICT (organization_id, idempotency_key) DO NOTHING
+        `,
+        [context.organizationId, idempotencyKey, requestHash],
+      );
+
+      if (inserted.rowCount === 0) {
+        const existing = await database.query<IdempotencyRecordRow>(
+          `
+            SELECT request_hash, status, response_payload
+              FROM opes.idempotency_records
+             WHERE organization_id = $1
+               AND idempotency_key = $2
+          `,
+          [context.organizationId, idempotencyKey],
+        );
+        const record = existing.rows[0];
+        if (record?.request_hash !== requestHash) {
+          throw new ConflictException(
+            'Idempotency key was used with a different request',
+          );
+        }
+        if (record.status !== 'COMPLETED') {
+          throw new ConflictException(
+            'Idempotency request is still processing',
+          );
+        }
+
+        return revive(record.response_payload);
+      }
+
+      const row = await work(database);
+      const response = mapResult(row);
+      await database.query(
+        `
+          UPDATE opes.idempotency_records
+             SET status = 'COMPLETED',
+                 response_payload = $3::jsonb,
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND idempotency_key = $2
+        `,
+        [context.organizationId, idempotencyKey, JSON.stringify(response)],
+      );
+
+      return response;
+    });
+  }
 }
 
 async function findOrCreateMemberUser(
@@ -644,6 +747,24 @@ function mapMember(row: OrganizationMemberRow): OrganizationMember {
     role: row.role,
     status: row.status,
     createdAt: row.created_at,
+  };
+}
+
+function reviveMember(payload: unknown): OrganizationMember {
+  const member = payload as OrganizationMember & { createdAt: string | Date };
+  return {
+    ...member,
+    createdAt: new Date(member.createdAt),
+  };
+}
+
+function reviveInvitedMember(payload: unknown): InvitedOrganizationMember {
+  const member = payload as InvitedOrganizationMember & {
+    createdAt: string | Date;
+  };
+  return {
+    ...member,
+    createdAt: new Date(member.createdAt),
   };
 }
 
@@ -694,6 +815,10 @@ function createToken(): string {
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
+}
+
+function hashJson(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
 function requireMember<T extends OrganizationMemberRow>(row: T | undefined): T {

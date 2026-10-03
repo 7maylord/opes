@@ -188,6 +188,7 @@ describe('OrganizationController', () => {
         'organization-1',
         'Bearer token-1',
         body,
+        'invite-key-1',
       ),
     ).resolves.toEqual(member);
     expect(resolve).toHaveBeenCalledWith({
@@ -195,7 +196,7 @@ describe('OrganizationController', () => {
       userId: 'user-1',
       requestId: 'http-request',
     });
-    expect(inviteMember).toHaveBeenCalledWith(context, body);
+    expect(inviteMember).toHaveBeenCalledWith(context, body, 'invite-key-1');
   });
 
   it('updates organization members through resolved tenant context', async () => {
@@ -241,6 +242,7 @@ describe('OrganizationController', () => {
         'membership-2',
         'Bearer token-1',
         body,
+        'update-key-1',
       ),
     ).resolves.toEqual(member);
     expect(resolve).toHaveBeenCalledWith({
@@ -248,6 +250,11 @@ describe('OrganizationController', () => {
       userId: 'user-1',
       requestId: 'http-request',
     });
-    expect(updateMember).toHaveBeenCalledWith(context, 'membership-2', body);
+    expect(updateMember).toHaveBeenCalledWith(
+      context,
+      'membership-2',
+      body,
+      'update-key-1',
+    );
   });
 });

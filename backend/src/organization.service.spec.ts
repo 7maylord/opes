@@ -365,6 +365,65 @@ describe('OrganizationService', () => {
     ).rejects.toThrow('Cannot update your own membership');
   });
 
+  it('replays a completed idempotent member update', async () => {
+    const context: TenantContext = {
+      organizationId: 'organization-1',
+      userId: 'owner-user-1',
+      membershipId: 'owner-membership-1',
+      role: 'OWNER',
+      agentId: 'agent-1',
+      requestId: 'request-1',
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            request_hash:
+              'e292363bbea4928b2800fbf22e3ce9aedbb17f243683ef3f410d9b2895ca1368',
+            status: 'COMPLETED',
+            response_payload: {
+              id: 'membership-2',
+              userId: 'user-2',
+              email: 'ops@example.com',
+              displayName: 'Ops',
+              role: 'AUDITOR',
+              status: 'REVOKED',
+              createdAt: '2026-10-03T10:00:00.000Z',
+            },
+          },
+        ],
+      });
+    const withTenant = jest.fn(
+      (
+        _context: TenantContext,
+        work: (database: TenantDatabase) => Promise<unknown>,
+      ) => work({ query }),
+    );
+    const service = new OrganizationService({
+      withTenant,
+    } as unknown as DatabaseService);
+
+    await expect(
+      service.updateMember(
+        context,
+        'membership-2',
+        { role: 'AUDITOR', status: 'REVOKED' },
+        'update-key-1',
+      ),
+    ).resolves.toEqual({
+      id: 'membership-2',
+      userId: 'user-2',
+      email: 'ops@example.com',
+      displayName: 'Ops',
+      role: 'AUDITOR',
+      status: 'REVOKED',
+      createdAt: new Date('2026-10-03T10:00:00.000Z'),
+    });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   it('accepts an invitation and creates a session in one transaction', async () => {
     const createdAt = new Date('2026-10-03T10:00:00.000Z');
     const query = jest
