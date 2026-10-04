@@ -116,6 +116,11 @@ describe('ProvisioningWorkerService', () => {
 
     await expect(service.processDueArcProvisioning()).resolves.toBe(0);
     expect(withWorker).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "status = 'PROCESSING' AND updated_at < now() - interval '5 minutes'",
+      ),
+    );
   });
 
   it('records verified Arc provisioning results as active tenant bindings', async () => {

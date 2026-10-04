@@ -159,5 +159,26 @@ describe('PaymentExecutionWorkerService', () => {
 
     await expect(service.processDuePaymentExecutions()).resolves.toBe(0);
     expect(withWorker).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "status = 'PROCESSING' AND updated_at < now() - interval '5 minutes'",
+      ),
+    );
+  });
+
+  it('can reclaim stale processing payment executions after worker restart', async () => {
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const query = recordingQuery(queries, workRow());
+    const { service } = serviceWithWorker(query);
+
+    await service.processDuePaymentExecutions(1);
+
+    expect(
+      queries.some((item) =>
+        item.text.includes(
+          "execution.status = 'PROCESSING' AND execution.updated_at < now() - interval '5 minutes'",
+        ),
+      ),
+    ).toBe(true);
   });
 });

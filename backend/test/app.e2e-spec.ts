@@ -36,6 +36,12 @@ describe('AppController (e2e)', () => {
       });
   });
 
+  it('/operations/outbox requires an operations token', () => {
+    return request(app.getHttpAdapter().getInstance() as App)
+      .get('/operations/outbox')
+      .expect(401);
+  });
+
   afterEach(async () => {
     await app.close();
   });

@@ -91,8 +91,10 @@ export class ProvisioningWorkerService {
              SELECT id
                FROM opes.outbox_events
               WHERE event_type IN ('agent.provision.arc_testnet', 'agent.wallet.provision.arc_testnet')
-                AND status = 'PENDING'
-                AND available_at <= now()
+                AND (
+                      (status = 'PENDING' AND available_at <= now())
+                   OR (status = 'PROCESSING' AND updated_at < now() - interval '5 minutes')
+                    )
               ORDER BY created_at ASC
               FOR UPDATE SKIP LOCKED
               LIMIT 1

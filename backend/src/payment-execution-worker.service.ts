@@ -73,8 +73,10 @@ export class PaymentExecutionWorkerService {
              SELECT id
                FROM opes.outbox_events
               WHERE event_type = 'payment.execute.direct.arc_testnet'
-                AND status = 'PENDING'
-                AND available_at <= now()
+                AND (
+                      (status = 'PENDING' AND available_at <= now())
+                   OR (status = 'PROCESSING' AND updated_at < now() - interval '5 minutes')
+                    )
               ORDER BY created_at ASC
               FOR UPDATE SKIP LOCKED
               LIMIT 1
@@ -167,7 +169,10 @@ export class PaymentExecutionWorkerService {
             FROM opes.tenant_resource_bindings AS wallet
            WHERE execution.organization_id = $1
              AND execution.id = $2
-             AND execution.status = 'PENDING'
+             AND (
+                   execution.status = 'PENDING'
+                OR (execution.status = 'PROCESSING' AND execution.updated_at < now() - interval '5 minutes')
+             )
              AND wallet.organization_id = execution.organization_id
              AND wallet.provider = 'circle'
              AND wallet.environment = 'arc-testnet'

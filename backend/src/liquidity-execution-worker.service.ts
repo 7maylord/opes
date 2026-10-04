@@ -173,8 +173,10 @@ export class LiquidityExecutionWorkerService {
                       'liquidity.execute.cctp',
                       'liquidity.execute.gateway'
                     )
-                AND status = 'PENDING'
-                AND available_at <= now()
+                AND (
+                      (status = 'PENDING' AND available_at <= now())
+                   OR (status = 'PROCESSING' AND updated_at < now() - interval '5 minutes')
+                    )
               ORDER BY created_at ASC
               FOR UPDATE SKIP LOCKED
               LIMIT 1

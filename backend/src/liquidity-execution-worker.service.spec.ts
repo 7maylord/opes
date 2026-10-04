@@ -529,8 +529,14 @@ describe('LiquidityExecutionWorkerService', () => {
   });
 
   it('stops when no liquidity event is ready', async () => {
-    const service = serviceWithWorker(jest.fn(() => queryResult([])));
+    const query = jest.fn(() => queryResult([]));
+    const service = serviceWithWorker(query);
 
     await expect(service.processDueLiquidityActions()).resolves.toBe(0);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "status = 'PROCESSING' AND updated_at < now() - interval '5 minutes'",
+      ),
+    );
   });
 });

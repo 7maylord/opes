@@ -19,6 +19,8 @@ import { LifecycleService } from './lifecycle.service';
 import { LiquidityService } from './liquidity.service';
 import { LedgerService } from './ledger.service';
 import { OnboardingController } from './onboarding.controller';
+import { OperationsController } from './operations.controller';
+import { OperationsService } from './operations.service';
 import { PaymentExecutionService } from './payment-execution.service';
 import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { PaymentWebhookController } from './payment-webhook.controller';
@@ -44,6 +46,7 @@ import { TenantContextService } from './tenant-context.service';
     LifecycleController,
     LiquidityController,
     OnboardingController,
+    OperationsController,
     PaymentWebhookController,
     OrganizationInvitationController,
     OrganizationController,
@@ -62,6 +65,7 @@ import { TenantContextService } from './tenant-context.service';
     LiquidityService,
     LiquidityExecutionWorkerService,
     OnboardingService,
+    OperationsService,
     PaymentExecutionService,
     PaymentExecutionWorkerService,
     PaymentReconciliationService,
