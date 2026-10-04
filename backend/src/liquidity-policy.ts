@@ -12,6 +12,21 @@ export interface CctpNetworkContracts {
   messageTransmitterV2: string;
 }
 
+export interface GatewayNetworkContracts {
+  usdc: string;
+  gatewayWallet: string;
+  gatewayMinter: string;
+}
+
+export interface BaseSwapRoute {
+  provider: string;
+  router: string;
+  inputToken: string;
+  outputToken: string;
+  inputAssetSymbol: 'USDC';
+  outputAssetSymbol: 'USDT';
+}
+
 export interface RouteCapabilityResult {
   supported: boolean;
   executable: boolean;
@@ -25,6 +40,7 @@ export interface NetworkCapability {
   tier: 'mainnet' | 'testnet';
   cctpDomain: number | null;
   cctpContracts: CctpNetworkContracts | null;
+  gatewayContracts: GatewayNetworkContracts | null;
   gateway: boolean;
 }
 
@@ -33,6 +49,11 @@ const TOKEN_MESSENGER_V2_TESTNET = '0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA';
 const MESSAGE_TRANSMITTER_V2 = '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64';
 const MESSAGE_TRANSMITTER_V2_TESTNET =
   '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275';
+
+const GATEWAY_WALLET = '0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE';
+const GATEWAY_MINTER = '0x2222222d7164433c4C09B0b0D809a9b52C04C205';
+const GATEWAY_WALLET_TESTNET = '0x0077777d7EBA4688BDeF3E311b846F25870A19B9';
+const GATEWAY_MINTER_TESTNET = '0x0022222ABE238Cc2C7Bb1f21003F0a260052475B';
 
 const NETWORKS: NetworkCapability[] = [
   cctpNetwork(
@@ -58,6 +79,7 @@ const NETWORKS: NetworkCapability[] = [
     'mainnet',
     6,
     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    true,
   ),
   cctpNetwork(
     'base-sepolia',
@@ -66,6 +88,7 @@ const NETWORKS: NetworkCapability[] = [
     'testnet',
     6,
     '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    true,
   ),
   cctpNetwork(
     'arc-mainnet',
@@ -74,6 +97,7 @@ const NETWORKS: NetworkCapability[] = [
     'mainnet',
     26,
     '0x3600000000000000000000000000000000000000',
+    true,
   ),
   cctpNetwork(
     'arc-testnet',
@@ -82,6 +106,7 @@ const NETWORKS: NetworkCapability[] = [
     'testnet',
     26,
     '0x3600000000000000000000000000000000000000',
+    true,
   ),
   usdcOnlyNetwork('celo-mainnet', 42220, 'celo', 'mainnet'),
   usdcOnlyNetwork('celo-sepolia', 11142220, 'celo', 'testnet'),
@@ -185,18 +210,22 @@ export function evaluateLiquidityAction(input: {
       reason: 'same-chain liquidity transfer is not a crosschain action',
     };
   }
-  if (
-    normalizeAsset(input.source.assetSymbol) !== 'USDC' ||
-    normalizeAsset(input.destination.assetSymbol) !== 'USDC'
-  ) {
+  if (normalizeAsset(input.source.assetSymbol) !== 'USDC') {
     return {
       supported: false,
       executable: false,
-      reason: 'liquidity actions move USDC only; token conversion is separate',
+      reason: 'liquidity actions must start from USDC',
     };
   }
 
   if (input.actionType === 'CCTP_TRANSFER') {
+    if (normalizeAsset(input.destination.assetSymbol) !== 'USDC') {
+      return {
+        supported: false,
+        executable: false,
+        reason: 'CCTP moves USDC only; token conversion is separate',
+      };
+    }
     if (source.family !== 'arc') {
       return {
         supported: false,
@@ -218,11 +247,38 @@ export function evaluateLiquidityAction(input: {
     };
   }
 
-  if (!source.gateway || !destination.gateway) {
+  if (
+    source.family !== 'arc' ||
+    destination.family !== 'base' ||
+    !source.gateway ||
+    !destination.gateway
+  ) {
     return {
       supported: false,
       executable: false,
-      reason: 'Gateway route is not enabled for these chains',
+      reason: 'Gateway route is enabled only for Arc to Base USDC liquidity',
+    };
+  }
+  if (normalizeAsset(input.destination.assetSymbol) === 'USDT') {
+    if (baseUsdcToUsdtSwapRouteDetails(input.destination) === null) {
+      return {
+        supported: true,
+        executable: false,
+        reason: 'Base USDC to USDT swap route is not configured',
+      };
+    }
+    return {
+      supported: true,
+      executable: true,
+      reason: 'Gateway route with Base USDT swap is supported',
+    };
+  }
+  if (normalizeAsset(input.destination.assetSymbol) !== 'USDC') {
+    return {
+      supported: false,
+      executable: false,
+      reason:
+        'Gateway can deliver USDC; only configured Base USDT swaps are supported',
     };
   }
   return {
@@ -237,6 +293,8 @@ export function supportedNetworks(): NetworkCapability[] {
     ...item,
     cctpContracts:
       item.cctpContracts === null ? null : { ...item.cctpContracts },
+    gatewayContracts:
+      item.gatewayContracts === null ? null : { ...item.gatewayContracts },
   }));
 }
 
@@ -253,6 +311,59 @@ export function cctpRouteDetails(input: {
     return null;
   }
   return { source, destination };
+}
+
+export function gatewayRouteDetails(input: {
+  source: ChainRoutePoint;
+  destination: ChainRoutePoint;
+}): { source: NetworkCapability; destination: NetworkCapability } | null {
+  const source = findNetwork(input.source);
+  const destination = findNetwork(input.destination);
+  if (source === undefined || destination === undefined) {
+    return null;
+  }
+  if (
+    source.gatewayContracts === null ||
+    destination.gatewayContracts === null
+  ) {
+    return null;
+  }
+  return { source, destination };
+}
+
+export function baseUsdcToUsdtSwapRouteDetails(
+  destination: ChainRoutePoint,
+): BaseSwapRoute | null {
+  const network = findNetwork(destination);
+  if (
+    network === undefined ||
+    network.family !== 'base' ||
+    normalizeAsset(destination.assetSymbol) !== 'USDT'
+  ) {
+    return null;
+  }
+  const prefix = `OPES_${network.environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  const provider = process.env[`${prefix}_USDC_USDT_SWAP_PROVIDER`]?.trim();
+  const router = process.env[`${prefix}_USDC_USDT_SWAP_ROUTER`]?.trim();
+  const outputToken = process.env[`${prefix}_USDT_ADDRESS`]?.trim();
+  const inputToken = network.cctpContracts?.usdc;
+  if (
+    provider === undefined ||
+    provider === '' ||
+    !isAddress(router) ||
+    !isAddress(outputToken) ||
+    inputToken === undefined
+  ) {
+    return null;
+  }
+  return {
+    provider,
+    router,
+    inputToken,
+    outputToken,
+    inputAssetSymbol: 'USDC',
+    outputAssetSymbol: 'USDT',
+  };
 }
 
 function findNetwork(point: ChainRoutePoint): NetworkCapability | undefined {
@@ -273,7 +384,17 @@ function cctpNetwork(
   tier: 'mainnet' | 'testnet',
   cctpDomain: number,
   usdc: string,
+  gateway = false,
 ): NetworkCapability {
+  const gatewayContracts = gateway
+    ? {
+        usdc,
+        gatewayWallet:
+          tier === 'mainnet' ? GATEWAY_WALLET : GATEWAY_WALLET_TESTNET,
+        gatewayMinter:
+          tier === 'mainnet' ? GATEWAY_MINTER : GATEWAY_MINTER_TESTNET,
+      }
+    : null;
   return {
     environment,
     chainId,
@@ -289,7 +410,8 @@ function cctpNetwork(
           ? MESSAGE_TRANSMITTER_V2
           : MESSAGE_TRANSMITTER_V2_TESTNET,
     },
-    gateway: false,
+    gatewayContracts,
+    gateway,
   };
 }
 
@@ -306,6 +428,11 @@ function usdcOnlyNetwork(
     tier,
     cctpDomain: null,
     cctpContracts: null,
+    gatewayContracts: null,
     gateway: false,
   };
+}
+
+function isAddress(value: string | undefined): value is string {
+  return value !== undefined && /^0x[0-9a-fA-F]{40}$/.test(value);
 }

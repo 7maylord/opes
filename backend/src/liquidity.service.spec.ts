@@ -29,6 +29,23 @@ const request = {
   quoteExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
 };
 
+const gatewayRequest = {
+  actionType: 'GATEWAY_TRANSFER' as const,
+  idempotencyKey: 'c'.repeat(64),
+  source: {
+    environment: 'arc-mainnet',
+    chainId: 5042001,
+    assetSymbol: 'USDC',
+  },
+  destination: {
+    environment: 'base-mainnet',
+    chainId: 8453,
+    assetSymbol: 'USDC',
+  },
+  amountAtomic: '25000000',
+  quoteExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+};
+
 function serviceWithQuery(query: TenantDatabase['query']): LiquidityService {
   const withTenant = jest.fn(
     (_context: TenantContext, work: (database: TenantDatabase) => unknown) =>
@@ -67,6 +84,12 @@ describe('LiquidityService', () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalAllowedOrigins = process.env.OPES_ALLOWED_ORIGINS;
   const originalSignerUrl = process.env.OPES_PAYMENT_SIGNER_URL;
+  const originalGatewayApiUrl = process.env.OPES_GATEWAY_API_URL;
+  const originalBaseUsdt = process.env.OPES_BASE_MAINNET_USDT_ADDRESS;
+  const originalBaseSwapProvider =
+    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER;
+  const originalBaseSwapRouter =
+    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER;
 
   afterEach(() => {
     if (originalSandbox === undefined) {
@@ -88,6 +111,28 @@ describe('LiquidityService', () => {
       delete process.env.OPES_PAYMENT_SIGNER_URL;
     } else {
       process.env.OPES_PAYMENT_SIGNER_URL = originalSignerUrl;
+    }
+    if (originalGatewayApiUrl === undefined) {
+      delete process.env.OPES_GATEWAY_API_URL;
+    } else {
+      process.env.OPES_GATEWAY_API_URL = originalGatewayApiUrl;
+    }
+    if (originalBaseUsdt === undefined) {
+      delete process.env.OPES_BASE_MAINNET_USDT_ADDRESS;
+    } else {
+      process.env.OPES_BASE_MAINNET_USDT_ADDRESS = originalBaseUsdt;
+    }
+    if (originalBaseSwapProvider === undefined) {
+      delete process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER;
+    } else {
+      process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER =
+        originalBaseSwapProvider;
+    }
+    if (originalBaseSwapRouter === undefined) {
+      delete process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER;
+    } else {
+      process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER =
+        originalBaseSwapRouter;
     }
   });
 
@@ -254,6 +299,134 @@ describe('LiquidityService', () => {
     expect(action.providerPayload.provider).toBe('cctp-v2');
     expect(action.providerPayload.source).toMatchObject({
       messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+    });
+  });
+
+  it('prepares a live Gateway action from Arc USDC to Base USDC', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
+    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.OPES_GATEWAY_API_URL = 'https://gateway.example.test/transfer';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+      })
+      .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
+        Promise.resolve({
+          rows: [
+            row({
+              action_type: 'GATEWAY_TRANSFER',
+              idempotency_key: gatewayRequest.idempotencyKey,
+              source_environment: 'arc-mainnet',
+              source_chain_id: 5042001,
+              source_asset_symbol: 'USDC',
+              destination_environment: 'base-mainnet',
+              destination_chain_id: 8453,
+              destination_asset_symbol: 'USDC',
+              provider: values[4],
+              simulated: values[5],
+              request_hash: values[3],
+              provider_reference: values[14],
+              provider_payload: JSON.parse(values[15] as string),
+            }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce({ rows: [] });
+    const service = serviceWithQuery(query);
+
+    const action = await service.planLiquidityAction(context, gatewayRequest);
+
+    expect(action).toMatchObject({
+      actionType: 'GATEWAY_TRANSFER',
+      provider: 'circle-gateway',
+      simulated: false,
+      source: { environment: 'arc-mainnet' },
+      destination: { environment: 'base-mainnet', assetSymbol: 'USDC' },
+    });
+    expect(action.providerPayload).toMatchObject({
+      provider: 'circle-gateway',
+      gatewayRequest: {
+        action: 'transferUnifiedUsdc',
+        gatewayApiUrl: 'https://gateway.example.test/transfer',
+        sourceChainId: 5042001,
+        destinationChainId: 8453,
+      },
+    });
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining('INSERT INTO opes.outbox_events'),
+      expect.arrayContaining([
+        context.organizationId,
+        'action-1',
+        'liquidity.execute.gateway',
+      ]),
+    );
+  });
+
+  it('adds the configured Base USDC to USDT swap leg to Gateway actions', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
+    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.OPES_BASE_MAINNET_USDT_ADDRESS =
+      '0x0000000000000000000000000000000000000003';
+    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER = 'configured';
+    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER =
+      '0x0000000000000000000000000000000000000004';
+    const usdtGatewayRequest = {
+      ...gatewayRequest,
+      idempotencyKey: 'd'.repeat(64),
+      destination: { ...gatewayRequest.destination, assetSymbol: 'USDT' },
+    };
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+      })
+      .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
+        Promise.resolve({
+          rows: [
+            row({
+              action_type: 'GATEWAY_TRANSFER',
+              idempotency_key: usdtGatewayRequest.idempotencyKey,
+              destination_environment: 'base-mainnet',
+              destination_chain_id: 8453,
+              destination_asset_symbol: 'USDT',
+              provider: values[4],
+              simulated: values[5],
+              request_hash: values[3],
+              provider_payload: JSON.parse(values[15] as string),
+            }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce({ rows: [] });
+    const service = serviceWithQuery(query);
+
+    const action = await service.planLiquidityAction(
+      context,
+      usdtGatewayRequest,
+    );
+
+    expect(action.destination.assetSymbol).toBe('USDT');
+    expect(action.providerPayload.destinationSwap).toMatchObject({
+      provider: 'configured',
+      inputAssetSymbol: 'USDC',
+      outputAssetSymbol: 'USDT',
+      outputToken: '0x0000000000000000000000000000000000000003',
+    });
+    const gatewayRequestPayload = action.providerPayload
+      .gatewayRequest as Record<string, unknown>;
+    expect(gatewayRequestPayload.destinationSwap).toMatchObject({
+      outputAssetSymbol: 'USDT',
     });
   });
 

@@ -8,18 +8,20 @@ interface OutboxEventRow {
   id: string;
   organization_id: string;
   aggregate_id: string;
+  event_type: string;
 }
 
 interface LiquidityWorkRow {
   id: string;
   organization_id: string;
+  action_type: string;
   status: string;
   source_chain_id: number;
   destination_chain_id: number;
   provider_payload: Record<string, unknown>;
 }
 
-interface SignerRequest {
+interface ContractSignerRequest {
   provider: 'circle';
   chainId: number;
   from: string;
@@ -29,6 +31,27 @@ interface SignerRequest {
   idempotencyKey: string;
   liquidityActionId: string;
 }
+
+interface GatewaySignerRequest {
+  provider: 'circle-gateway';
+  action: 'transferUnifiedUsdc';
+  sourceChainId: number;
+  destinationChainId: number;
+  sourceDomain: number;
+  destinationDomain: number;
+  sourceDepositor: string;
+  destinationRecipient: string;
+  sourceToken: string;
+  destinationToken: string;
+  amountAtomic: string;
+  quoteExpiresAt: string;
+  gatewayApiUrl: string;
+  destinationSwap?: unknown;
+  idempotencyKey: string;
+  liquidityActionId: string;
+}
+
+type SignerRequest = ContractSignerRequest | GatewaySignerRequest;
 
 interface AttestationResponse {
   status?: unknown;
@@ -48,6 +71,11 @@ interface TransactionReceipt {
 interface CctpSourceMessage {
   sourceMessage: string;
   sourceMessageHash: string;
+}
+
+interface GatewaySubmissionResponse {
+  providerReference: string;
+  transactionHash: string | null;
 }
 
 class SignerUnavailableError extends Error {}
@@ -89,14 +117,17 @@ export class LiquidityExecutionWorkerService {
            WHERE id = (
              SELECT id
                FROM opes.outbox_events
-              WHERE event_type = 'liquidity.execute.cctp'
+              WHERE event_type IN (
+                      'liquidity.execute.cctp',
+                      'liquidity.execute.gateway'
+                    )
                 AND status = 'PENDING'
                 AND available_at <= now()
               ORDER BY created_at ASC
               FOR UPDATE SKIP LOCKED
               LIMIT 1
            )
-           RETURNING id, organization_id, aggregate_id
+           RETURNING id, organization_id, aggregate_id, event_type
         `,
       );
 
@@ -107,6 +138,11 @@ export class LiquidityExecutionWorkerService {
   private async processLiquidityAction(event: OutboxEventRow): Promise<void> {
     const action = await this.prepareLiquidityAction(event);
     if (action === null) {
+      return;
+    }
+
+    if (action.action_type === 'GATEWAY_TRANSFER') {
+      await this.processGatewayTransfer(event, action);
       return;
     }
 
@@ -126,6 +162,43 @@ export class LiquidityExecutionWorkerService {
     }
 
     await markOutboxProcessed(this.database, event.id);
+  }
+
+  private async processGatewayTransfer(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    if (action.status !== 'PLANNED') {
+      await markOutboxProcessed(this.database, event.id);
+      return;
+    }
+
+    let request: GatewaySignerRequest;
+    try {
+      request = buildGatewayTransferRequest(action);
+    } catch (error) {
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'Gateway action is invalid',
+      );
+      return;
+    }
+
+    try {
+      await this.recordGatewaySubmitted(
+        event,
+        await submitGatewaySignerRequest(request),
+      );
+    } catch (error) {
+      if (error instanceof UnknownSubmissionError) {
+        await this.recordUnknown(event, 'Gateway signer submission is unknown');
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'Gateway signer failed',
+      );
+    }
   }
 
   private async submitSourceBurn(
@@ -247,6 +320,7 @@ export class LiquidityExecutionWorkerService {
           SELECT
              id,
              organization_id,
+             action_type,
              status,
              source_chain_id,
              destination_chain_id,
@@ -254,11 +328,14 @@ export class LiquidityExecutionWorkerService {
            FROM opes.liquidity_actions
            WHERE organization_id = $1
              AND id = $2
-             AND action_type = 'CCTP_TRANSFER'
+             AND (
+                   ($3 = 'liquidity.execute.cctp' AND action_type = 'CCTP_TRANSFER')
+                OR ($3 = 'liquidity.execute.gateway' AND action_type = 'GATEWAY_TRANSFER')
+             )
              AND status IN ('PLANNED', 'SUBMITTED', 'ATTESTED')
            LIMIT 1
         `,
-        [event.organization_id, event.aggregate_id],
+        [event.organization_id, event.aggregate_id, event.event_type],
       );
       const row = result.rows[0];
       if (row !== undefined) {
@@ -267,6 +344,41 @@ export class LiquidityExecutionWorkerService {
 
       await markOutboxProcessed(database, event.id);
       return null;
+    });
+  }
+
+  private async recordGatewaySubmitted(
+    event: OutboxEventRow,
+    response: GatewaySubmissionResponse,
+  ): Promise<void> {
+    const status = response.transactionHash === null ? 'SUBMITTED' : 'MINTED';
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = $3,
+                 provider_reference = $4,
+                 provider_payload = provider_payload || jsonb_strip_nulls(
+                   jsonb_build_object(
+                     'gatewayTransferReference', $4::text,
+                     'destinationMintTransactionHash', $5::text
+                   )
+                 ),
+                 submitted_at = COALESCE(submitted_at, now()),
+                 confirmed_at = CASE WHEN $3 = 'MINTED' THEN now() ELSE confirmed_at END,
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+        `,
+        [
+          event.organization_id,
+          event.aggregate_id,
+          status,
+          response.providerReference,
+          response.transactionHash,
+        ],
+      );
+      await markOutboxProcessed(database, event.id);
     });
   }
 
@@ -319,6 +431,7 @@ export class LiquidityExecutionWorkerService {
            RETURNING
              id,
              organization_id,
+             action_type,
              status,
              source_chain_id,
              destination_chain_id,
@@ -357,6 +470,7 @@ export class LiquidityExecutionWorkerService {
            RETURNING
              id,
              organization_id,
+             action_type,
              status,
              source_chain_id,
              destination_chain_id,
@@ -496,6 +610,80 @@ function buildDestinationMintRequest(action: LiquidityWorkRow): SignerRequest {
     idempotencyKey: `${action.id}:mint`,
     liquidityActionId: action.id,
   };
+}
+
+function buildGatewayTransferRequest(
+  action: LiquidityWorkRow,
+): GatewaySignerRequest {
+  const request = objectAt(
+    action.provider_payload.gatewayRequest,
+    'gatewayRequest',
+  );
+  const sourceDomain = requireNumber(
+    request.sourceDomain,
+    'gatewayRequest.sourceDomain',
+  );
+  const destinationDomain = requireNumber(
+    request.destinationDomain,
+    'gatewayRequest.destinationDomain',
+  );
+  const gatewayRequest: GatewaySignerRequest = {
+    provider: 'circle-gateway',
+    action: 'transferUnifiedUsdc',
+    sourceChainId: requireNumber(
+      request.sourceChainId,
+      'gatewayRequest.sourceChainId',
+    ),
+    destinationChainId: requireNumber(
+      request.destinationChainId,
+      'gatewayRequest.destinationChainId',
+    ),
+    sourceDomain,
+    destinationDomain,
+    sourceDepositor: requireAddress(
+      request.sourceDepositor,
+      'gatewayRequest.sourceDepositor',
+    ),
+    destinationRecipient: requireAddress(
+      request.destinationRecipient,
+      'gatewayRequest.destinationRecipient',
+    ),
+    sourceToken: requireAddress(
+      request.sourceToken,
+      'gatewayRequest.sourceToken',
+    ),
+    destinationToken: requireAddress(
+      request.destinationToken,
+      'gatewayRequest.destinationToken',
+    ),
+    amountAtomic: requireIntegerString(
+      request.amountAtomic,
+      'gatewayRequest.amountAtomic',
+    ),
+    quoteExpiresAt: requireIsoTimestamp(
+      request.quoteExpiresAt,
+      'gatewayRequest.quoteExpiresAt',
+    ),
+    gatewayApiUrl: requireUrl(
+      request.gatewayApiUrl,
+      'gatewayRequest.gatewayApiUrl',
+    ),
+    idempotencyKey: action.id,
+    liquidityActionId: action.id,
+  };
+  if (
+    request.destinationSwap !== undefined &&
+    request.destinationSwap !== null
+  ) {
+    gatewayRequest.destinationSwap = request.destinationSwap;
+  }
+  if (
+    gatewayRequest.sourceChainId !== action.source_chain_id ||
+    gatewayRequest.destinationChainId !== action.destination_chain_id
+  ) {
+    throw new Error('Gateway signer request violates route policy');
+  }
+  return gatewayRequest;
 }
 
 async function fetchSourceMessage(
@@ -659,6 +847,45 @@ function attestationBaseUrl(payload: Record<string, unknown>): string {
 }
 
 async function submitSignerRequest(request: SignerRequest): Promise<string> {
+  const body = await submitSignerRequestBody(request);
+  if (
+    typeof body.transactionHash !== 'string' ||
+    !/^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
+  ) {
+    throw new Error('Payment signer returned an invalid transaction hash');
+  }
+  return body.transactionHash.toLowerCase();
+}
+
+async function submitGatewaySignerRequest(
+  request: GatewaySignerRequest,
+): Promise<GatewaySubmissionResponse> {
+  const body = await submitSignerRequestBody(request);
+  const providerReference =
+    typeof body.providerReference === 'string'
+      ? body.providerReference
+      : typeof body.transferId === 'string'
+        ? body.transferId
+        : typeof body.transactionHash === 'string'
+          ? body.transactionHash
+          : null;
+  if (providerReference === null || providerReference.trim() === '') {
+    throw new Error('Payment signer returned an invalid Gateway reference');
+  }
+  const transactionHash =
+    typeof body.transactionHash === 'string' &&
+    /^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
+      ? body.transactionHash.toLowerCase()
+      : null;
+  return {
+    providerReference,
+    transactionHash,
+  };
+}
+
+async function submitSignerRequestBody(
+  request: SignerRequest,
+): Promise<Record<string, unknown>> {
   const url = process.env.OPES_PAYMENT_SIGNER_URL;
   if (url === undefined || url.trim() === '') {
     throw new SignerUnavailableError(
@@ -687,14 +914,7 @@ async function submitSignerRequest(request: SignerRequest): Promise<string> {
       throw new Error(`Payment signer returned HTTP ${response.status}`);
     }
 
-    const body = (await response.json()) as { transactionHash?: unknown };
-    if (
-      typeof body.transactionHash !== 'string' ||
-      !/^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
-    ) {
-      throw new Error('Payment signer returned an invalid transaction hash');
-    }
-    return body.transactionHash.toLowerCase();
+    return (await response.json()) as Record<string, unknown>;
   } catch (error) {
     if (error instanceof SignerUnavailableError) {
       throw error;
@@ -827,6 +1047,31 @@ function requireHex(value: unknown, name: string): string {
     throw new Error(`${name} is invalid`);
   }
   return value.toLowerCase();
+}
+
+function requireIntegerString(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
+}
+
+function requireIsoTimestamp(value: unknown, name: string): string {
+  if (typeof value !== 'string' || Number.isNaN(new Date(value).getTime())) {
+    throw new Error(`${name} is invalid`);
+  }
+  return new Date(value).toISOString();
+}
+
+function requireUrl(value: unknown, name: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${name} is invalid`);
+  }
+  try {
+    return new URL(value).toString();
+  } catch {
+    throw new Error(`${name} is invalid`);
+  }
 }
 
 function requireHex32(value: unknown, name: string): string {

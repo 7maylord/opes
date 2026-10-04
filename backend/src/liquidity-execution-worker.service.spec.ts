@@ -27,6 +27,7 @@ function workRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'action-1',
     organization_id: 'organization-1',
+    action_type: 'CCTP_TRANSFER',
     status: 'PLANNED',
     source_chain_id: 5042001,
     destination_chain_id: 42161,
@@ -65,6 +66,10 @@ function recordingQuery(
           id: 'event-1',
           organization_id: 'organization-1',
           aggregate_id: 'action-1',
+          event_type:
+            work?.action_type === 'GATEWAY_TRANSFER'
+              ? 'liquidity.execute.gateway'
+              : 'liquidity.execute.cctp',
         },
       ]);
     }
@@ -78,6 +83,7 @@ function recordingQuery(
       return queryResult([
         {
           ...workRow({ status: 'ATTESTED' }),
+          action_type: 'CCTP_TRANSFER',
           provider_payload: {
             ...(workRow({}).provider_payload as Record<string, unknown>),
             sourceMessage: '0x123456',
@@ -94,6 +100,7 @@ function recordingQuery(
       return queryResult([
         {
           ...workRow({ status: 'SUBMITTED' }),
+          action_type: 'CCTP_TRANSFER',
           provider_payload: {
             ...(work?.provider_payload as Record<string, unknown>),
             sourceMessage: values?.[2],
@@ -125,6 +132,40 @@ function abiBytes(value: string): string {
 
 function pad64(value: string): string {
   return value.padStart(64, '0');
+}
+
+function gatewayWorkRow() {
+  return workRow({
+    action_type: 'GATEWAY_TRANSFER',
+    status: 'PLANNED',
+    source_chain_id: 5042001,
+    destination_chain_id: 8453,
+    provider_payload: {
+      gatewayRequest: {
+        provider: 'circle-gateway',
+        action: 'transferUnifiedUsdc',
+        sourceChainId: 5042001,
+        destinationChainId: 8453,
+        sourceDomain: 26,
+        destinationDomain: 6,
+        sourceDepositor: '0x0000000000000000000000000000000000000001',
+        destinationRecipient: '0x0000000000000000000000000000000000000002',
+        sourceToken: '0x3600000000000000000000000000000000000000',
+        destinationToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        amountAtomic: '25000000',
+        quoteExpiresAt: '2030-01-01T00:00:00.000Z',
+        gatewayApiUrl: 'https://gateway.example.test/transfer',
+        destinationSwap: {
+          provider: 'configured',
+          router: '0x0000000000000000000000000000000000000004',
+          inputToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          outputToken: '0x0000000000000000000000000000000000000003',
+          inputAssetSymbol: 'USDC',
+          outputAssetSymbol: 'USDT',
+        },
+      },
+    },
+  });
 }
 
 describe('LiquidityExecutionWorkerService', () => {
@@ -187,6 +228,51 @@ describe('LiquidityExecutionWorkerService', () => {
         (item) =>
           item.text.includes('liquidity.execute.cctp') &&
           item.text.includes("interval '15 seconds'"),
+      ),
+    ).toBe(true);
+  });
+
+  it('submits a Gateway transfer request through the signer adapter', async () => {
+    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          transferId: 'gateway-transfer-1',
+          transactionHash: `0x${'c'.repeat(64)}`,
+        }),
+    });
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const service = serviceWithWorker(
+      recordingQuery(queries, gatewayWorkRow()),
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    const calls = (global.fetch as jest.MockedFunction<typeof fetch>).mock
+      .calls;
+    const requestInit = calls[0]?.[1];
+    if (
+      requestInit === undefined ||
+      typeof requestInit !== 'object' ||
+      typeof requestInit.body !== 'string'
+    ) {
+      throw new Error('expected signer request body');
+    }
+    const body = JSON.parse(requestInit.body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      provider: 'circle-gateway',
+      action: 'transferUnifiedUsdc',
+      sourceChainId: 5042001,
+      destinationChainId: 8453,
+      amountAtomic: '25000000',
+    });
+    expect(body.destinationSwap).toMatchObject({ outputAssetSymbol: 'USDT' });
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes('SET status = $3') &&
+          item.values?.includes('MINTED') &&
+          item.values?.includes('gateway-transfer-1'),
       ),
     ).toBe(true);
   });

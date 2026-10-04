@@ -11,8 +11,10 @@ import { DatabaseService, TenantDatabase } from './database.service';
 import { isEvmAddress } from './evm-decision-hash';
 import {
   ChainRoutePoint,
+  baseUsdcToUsdtSwapRouteDetails,
   cctpRouteDetails,
   evaluateLiquidityAction,
+  gatewayRouteDetails,
   supportedNetworks,
 } from './liquidity-policy';
 import { loadRuntimeConfig } from './runtime.config';
@@ -120,7 +122,12 @@ export class LiquidityService {
         context.organizationId,
         action,
       );
-      const provider = mode === 'sandbox' ? 'sandbox' : 'cctp-v2';
+      const provider =
+        mode === 'sandbox'
+          ? 'sandbox'
+          : action.actionType === 'GATEWAY_TRANSFER'
+            ? 'circle-gateway'
+            : 'cctp-v2';
       const simulated = mode === 'sandbox';
       const providerReference = simulated
         ? `sim_${requestHash.slice(0, 24)}`
@@ -198,7 +205,12 @@ export class LiquidityService {
       );
 
       const row = requireRow(inserted.rows[0], 'liquidity action');
-      await enqueueLiquidityAction(database, context.organizationId, row.id);
+      await enqueueLiquidityAction(
+        database,
+        context.organizationId,
+        row.id,
+        row.action_type,
+      );
       return mapAction(row);
     });
   }
@@ -263,7 +275,12 @@ export class LiquidityService {
         ],
       );
       const row = requireRow(result.rows[0], 'submitted CCTP liquidity action');
-      await enqueueLiquidityAction(database, context.organizationId, row.id);
+      await enqueueLiquidityAction(
+        database,
+        context.organizationId,
+        row.id,
+        row.action_type,
+      );
       return mapAction(row);
     });
   }
@@ -318,7 +335,7 @@ async function buildProviderPayload(
   action: LiquidityActionRequest,
 ): Promise<Record<string, unknown>> {
   if (action.actionType !== 'CCTP_TRANSFER') {
-    return { provider: 'gateway', status: 'not_configured' };
+    return buildGatewayProviderPayload(database, organizationId, action);
   }
   const route = cctpRouteDetails(action);
   if (route === null) {
@@ -382,6 +399,80 @@ async function buildProviderPayload(
   };
 }
 
+async function buildGatewayProviderPayload(
+  database: TenantDatabase,
+  organizationId: string,
+  action: LiquidityActionRequest,
+): Promise<Record<string, unknown>> {
+  const route = gatewayRouteDetails(action);
+  if (route === null) {
+    throw new ConflictException('Gateway route details are unavailable');
+  }
+  const sourceWallet = await getActiveWalletBinding(
+    database,
+    organizationId,
+    action.source.environment,
+  );
+  const destinationWallet = await getActiveWalletBinding(
+    database,
+    organizationId,
+    action.destination.environment,
+  );
+  if (!isEvmAddress(sourceWallet.address)) {
+    throw new ConflictException('Active source wallet binding is missing');
+  }
+  if (!isEvmAddress(destinationWallet.address)) {
+    throw new ConflictException('Active destination wallet binding is missing');
+  }
+
+  const destinationSwap =
+    action.destination.assetSymbol === 'USDT'
+      ? baseUsdcToUsdtSwapRouteDetails(action.destination)
+      : null;
+
+  return {
+    provider: 'circle-gateway',
+    mode: 'unified-balance-transfer',
+    source: {
+      environment: route.source.environment,
+      chainId: route.source.chainId,
+      domain: route.source.cctpDomain,
+      tier: route.source.tier,
+      walletAddress: sourceWallet.address,
+      usdc: route.source.gatewayContracts?.usdc,
+      gatewayWallet: route.source.gatewayContracts?.gatewayWallet,
+    },
+    destination: {
+      environment: route.destination.environment,
+      chainId: route.destination.chainId,
+      domain: route.destination.cctpDomain,
+      tier: route.destination.tier,
+      walletAddress: destinationWallet.address,
+      requestedAssetSymbol: action.destination.assetSymbol,
+      deliveredAssetSymbol: 'USDC',
+      usdc: route.destination.gatewayContracts?.usdc,
+      gatewayMinter: route.destination.gatewayContracts?.gatewayMinter,
+    },
+    destinationSwap,
+    gatewayRequest: {
+      provider: 'circle-gateway',
+      action: 'transferUnifiedUsdc',
+      sourceChainId: route.source.chainId,
+      destinationChainId: route.destination.chainId,
+      sourceDomain: route.source.cctpDomain,
+      destinationDomain: route.destination.cctpDomain,
+      sourceDepositor: sourceWallet.address,
+      destinationRecipient: destinationWallet.address,
+      sourceToken: route.source.gatewayContracts?.usdc,
+      destinationToken: route.destination.gatewayContracts?.usdc,
+      amountAtomic: action.amountAtomic,
+      quoteExpiresAt: action.quoteExpiresAt,
+      gatewayApiUrl: gatewayApiUrl(route.source.tier),
+      destinationSwap,
+    },
+  };
+}
+
 async function getActiveWalletBinding(
   database: TenantDatabase,
   organizationId: string,
@@ -407,7 +498,12 @@ async function enqueueLiquidityAction(
   database: TenantDatabase,
   organizationId: string,
   actionId: string,
+  actionType: string,
 ): Promise<void> {
+  const eventType =
+    actionType === 'GATEWAY_TRANSFER'
+      ? 'liquidity.execute.gateway'
+      : 'liquidity.execute.cctp';
   await database.query(
     `
       INSERT INTO opes.outbox_events (
@@ -417,19 +513,29 @@ async function enqueueLiquidityAction(
         aggregate_id,
         payload
       )
-      SELECT $1, 'liquidity.execute.cctp', 'liquidity_action', $2, '{}'::jsonb
+      SELECT $1, $3, 'liquidity_action', $2, '{}'::jsonb
       WHERE NOT EXISTS (
         SELECT 1
           FROM opes.outbox_events
          WHERE organization_id = $1
-           AND event_type = 'liquidity.execute.cctp'
+           AND event_type = $3
            AND aggregate_type = 'liquidity_action'
            AND aggregate_id = $2
            AND status IN ('PENDING', 'PROCESSING')
       )
     `,
-    [organizationId, actionId],
+    [organizationId, actionId, eventType],
   );
+}
+
+function gatewayApiUrl(tier: 'mainnet' | 'testnet'): string {
+  const configured = process.env.OPES_GATEWAY_API_URL?.trim();
+  if (configured !== undefined && configured !== '') {
+    return configured;
+  }
+  return tier === 'testnet'
+    ? 'https://gateway-api-testnet.circle.com/v1/transfer'
+    : 'https://gateway-api.circle.com/v1/transfer';
 }
 
 async function getExistingAction(
