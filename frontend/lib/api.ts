@@ -492,3 +492,143 @@ export async function executeDecision(
     { method: "POST" },
   );
 }
+
+export interface SubscriptionResponse {
+  id: string;
+  versionId: string;
+  version: number;
+  status: string;
+  cadence: string;
+  anchorDate: string;
+  timezone: string;
+  amountAtomic: string;
+}
+
+export interface SubscriptionCycleResponse {
+  id: string;
+  subscriptionId: string;
+  subscriptionVersionId: string;
+  servicePeriodStart: string;
+  servicePeriodEnd: string;
+  dueAt: string;
+  amountAtomic: string;
+  status: string;
+}
+
+export interface EscrowMilestoneResponse {
+  id: string;
+  agreementId: string;
+  milestoneIndex: number;
+  title: string;
+  amountAtomic: string;
+  status: string;
+  evidenceDocumentId: string | null;
+}
+
+export interface EscrowAgreementResponse {
+  id: string;
+  status: string;
+  totalAmountAtomic: string;
+  milestones: EscrowMilestoneResponse[];
+}
+
+export async function createSubscription(
+  token: string,
+  organizationId: string,
+  input: {
+    vendorId: string;
+    vendorAddressId: string;
+    cadence: "WEEKLY" | "MONTHLY" | "QUARTERLY" | "ANNUAL";
+    anchorDate: string;
+    timezone: string;
+    amount: string;
+    termsDocumentId?: string;
+  },
+) {
+  return request<SubscriptionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/subscriptions`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function createSubscriptionCycle(
+  token: string,
+  organizationId: string,
+  subscriptionId: string,
+  input: { servicePeriodStart: string },
+) {
+  return request<SubscriptionCycleResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/subscriptions/${encodeURIComponent(subscriptionId)}/cycles`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function cancelSubscription(
+  token: string,
+  organizationId: string,
+  subscriptionId: string,
+) {
+  return request<{ id: string; status: string }>(
+    `/organizations/${encodeURIComponent(organizationId)}/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function createEscrowAgreement(
+  token: string,
+  organizationId: string,
+  input: {
+    vendorId: string;
+    vendorAddressId: string;
+    agreementDocumentId?: string;
+    totalAmount: string;
+    milestones: Array<{ title: string; amount: string }>;
+  },
+) {
+  return request<EscrowAgreementResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/escrow-agreements`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function submitMilestoneEvidence(
+  token: string,
+  organizationId: string,
+  milestoneId: string,
+  evidenceDocumentId: string,
+) {
+  return request<EscrowMilestoneResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/escrow-milestones/${encodeURIComponent(milestoneId)}/submissions`,
+    token,
+    { method: "POST", body: JSON.stringify({ evidenceDocumentId }) },
+  );
+}
+
+export async function acceptMilestone(
+  token: string,
+  organizationId: string,
+  milestoneId: string,
+) {
+  return request<EscrowMilestoneResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/escrow-milestones/${encodeURIComponent(milestoneId)}/accept`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function disputeMilestone(
+  token: string,
+  organizationId: string,
+  milestoneId: string,
+  reason: string,
+) {
+  return request<EscrowMilestoneResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/escrow-milestones/${encodeURIComponent(milestoneId)}/dispute`,
+    token,
+    { method: "POST", body: JSON.stringify({ reason }) },
+  );
+}
