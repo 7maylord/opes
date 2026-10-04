@@ -11,6 +11,7 @@ import { parseBearerToken } from './auth-header';
 import { resolveCorrelationId } from './correlation-id';
 import { LiquidityService } from './liquidity.service';
 import type {
+  CctpSourceMessageRequest,
   LiquidityActionRequest,
   LiquidityActionResponse,
   TreasuryPositionResponse,
@@ -39,6 +40,22 @@ export class LiquidityController {
       correlationId,
     );
     return this.liquidity.planLiquidityAction(context, body);
+  }
+
+  @Post('liquidity-actions/:actionId/cctp-source-message')
+  async recordCctpSourceMessage(
+    @Param('organizationId') organizationId: string,
+    @Param('actionId') actionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: CctpSourceMessageRequest,
+  ): Promise<LiquidityActionResponse> {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.liquidity.recordCctpSourceMessage(context, actionId, body);
   }
 
   @Get('treasury/position')

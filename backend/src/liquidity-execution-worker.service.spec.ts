@@ -26,8 +26,15 @@ function workRow(overrides: Record<string, unknown> = {}) {
   return {
     id: 'action-1',
     organization_id: 'organization-1',
+    status: 'PLANNED',
     source_chain_id: 5042001,
+    destination_chain_id: 42161,
     provider_payload: {
+      source: { tier: 'mainnet' },
+      destination: {
+        walletAddress: '0x0000000000000000000000000000000000000002',
+        messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+      },
       signerRequest: {
         provider: 'circle',
         chainId: 5042001,
@@ -57,10 +64,23 @@ function recordingQuery(
       ]);
     }
     if (
-      text.includes('UPDATE opes.liquidity_actions') &&
-      text.includes('RETURNING')
+      text.includes('FROM opes.liquidity_actions') &&
+      text.includes('LIMIT 1')
     ) {
       return queryResult(work === null ? [] : [work]);
+    }
+    if (text.includes("SET status = 'ATTESTED'")) {
+      return queryResult([
+        {
+          ...workRow({ status: 'ATTESTED' }),
+          provider_payload: {
+            ...(workRow({}).provider_payload as Record<string, unknown>),
+            sourceMessage: '0x123456',
+            sourceMessageHash: `0x${'1'.repeat(64)}`,
+            attestation: '0xabcdef01',
+          },
+        },
+      ]);
     }
     return queryResult([]);
   });
@@ -68,6 +88,7 @@ function recordingQuery(
 
 describe('LiquidityExecutionWorkerService', () => {
   const originalUrl = process.env.OPES_PAYMENT_SIGNER_URL;
+  const originalAttestationUrl = process.env.OPES_CCTP_ATTESTATION_URL;
   const originalFetch = global.fetch;
 
   afterEach(() => {
@@ -75,6 +96,11 @@ describe('LiquidityExecutionWorkerService', () => {
       delete process.env.OPES_PAYMENT_SIGNER_URL;
     } else {
       process.env.OPES_PAYMENT_SIGNER_URL = originalUrl;
+    }
+    if (originalAttestationUrl === undefined) {
+      delete process.env.OPES_CCTP_ATTESTATION_URL;
+    } else {
+      process.env.OPES_CCTP_ATTESTATION_URL = originalAttestationUrl;
     }
     global.fetch = originalFetch;
   });
@@ -108,6 +134,84 @@ describe('LiquidityExecutionWorkerService', () => {
     );
     expect(
       queries.some((item) => item.values?.includes(`0x${'a'.repeat(64)}`)),
+    ).toBe(true);
+  });
+
+  it('reschedules when attestation is still pending', async () => {
+    process.env.OPES_CCTP_ATTESTATION_URL = 'https://iris.example.test';
+    global.fetch = jest.fn().mockResolvedValue({ status: 404, ok: false });
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        workRow({
+          status: 'SUBMITTED',
+          provider_payload: {
+            source: { tier: 'mainnet' },
+            sourceMessage: '0x123456',
+            sourceMessageHash: `0x${'1'.repeat(64)}`,
+          },
+        }),
+      ),
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes("SET status = 'PENDING'") &&
+          item.values?.includes('60'),
+      ),
+    ).toBe(true);
+  });
+
+  it('records attestation and submits destination receiveMessage', async () => {
+    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.OPES_CCTP_ATTESTATION_URL = 'https://iris.example.test';
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ status: 'complete', attestation: '0xabcdef01' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ transactionHash: `0x${'b'.repeat(64)}` }),
+      });
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        workRow({
+          status: 'SUBMITTED',
+          provider_payload: {
+            source: { tier: 'mainnet' },
+            destination: {
+              walletAddress: '0x0000000000000000000000000000000000000002',
+              messageTransmitterV2:
+                '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+            },
+            sourceMessage: '0x123456',
+            sourceMessageHash: `0x${'1'.repeat(64)}`,
+          },
+        }),
+      ),
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      1,
+      `https://iris.example.test/v1/attestations/0x${'1'.repeat(64)}`,
+    );
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://signer.example.test/tx',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(
+      queries.some((item) => item.values?.includes(`0x${'b'.repeat(64)}`)),
     ).toBe(true);
   });
 

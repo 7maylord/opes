@@ -5,6 +5,7 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 import { buildCctpDepositForBurnCalldata } from './cctp-calldata';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { isEvmAddress } from './evm-decision-hash';
@@ -16,6 +17,11 @@ import {
 } from './liquidity-policy';
 import { loadRuntimeConfig } from './runtime.config';
 import { TenantContext } from './tenant-context';
+
+export interface CctpSourceMessageRequest {
+  sourceMessage: string;
+  sourceMessageHash: string;
+}
 
 export interface LiquidityActionRequest {
   actionType: 'GATEWAY_TRANSFER' | 'CCTP_TRANSFER';
@@ -197,6 +203,71 @@ export class LiquidityService {
     });
   }
 
+  async recordCctpSourceMessage(
+    context: TenantContext,
+    actionId: string,
+    input: CctpSourceMessageRequest,
+  ): Promise<LiquidityActionResponse> {
+    requireLiquidityRole(context);
+    const targetActionId = requireUuid(actionId, 'actionId');
+    const sourceMessage = requireHexBytes(input.sourceMessage, 'sourceMessage');
+    const sourceMessageHash = requireHex32(
+      input.sourceMessageHash,
+      'sourceMessageHash',
+    );
+    if (hashHexBytes(sourceMessage) !== sourceMessageHash.toLowerCase()) {
+      throw new BadRequestException(
+        'sourceMessageHash does not match sourceMessage',
+      );
+    }
+
+    return this.database.withTenant(context, async (database) => {
+      const result = await database.query<LiquidityActionRow>(
+        `
+          UPDATE opes.liquidity_actions
+             SET provider_payload = provider_payload || jsonb_build_object(
+                   'sourceMessage', $3::text,
+                   'sourceMessageHash', $4::text
+                 ),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+             AND action_type = 'CCTP_TRANSFER'
+             AND status = 'SUBMITTED'
+          RETURNING
+            id,
+            action_type,
+            idempotency_key,
+            request_hash,
+            provider,
+            simulated,
+            status,
+            source_environment,
+            source_chain_id,
+            source_asset_symbol,
+            destination_environment,
+            destination_chain_id,
+            destination_asset_symbol,
+            amount_atomic::text AS amount_atomic,
+            fee_atomic::text AS fee_atomic,
+            quote_expires_at,
+            provider_reference,
+            provider_payload,
+            failure_reason
+        `,
+        [
+          context.organizationId,
+          targetActionId,
+          sourceMessage,
+          sourceMessageHash,
+        ],
+      );
+      const row = requireRow(result.rows[0], 'submitted CCTP liquidity action');
+      await enqueueLiquidityAction(database, context.organizationId, row.id);
+      return mapAction(row);
+    });
+  }
+
   async getTreasuryPosition(
     context: TenantContext,
   ): Promise<TreasuryPositionResponse> {
@@ -284,6 +355,7 @@ async function buildProviderPayload(
       environment: route.source.environment,
       chainId: route.source.chainId,
       domain: route.source.cctpDomain,
+      tier: route.source.tier,
       walletAddress: sourceWallet.address,
       usdc: route.source.cctpContracts?.usdc,
       tokenMessengerV2: route.source.cctpContracts?.tokenMessengerV2,
@@ -292,6 +364,7 @@ async function buildProviderPayload(
       environment: route.destination.environment,
       chainId: route.destination.chainId,
       domain: route.destination.cctpDomain,
+      tier: route.destination.tier,
       walletAddress: destinationWallet.address,
       usdc: route.destination.cctpContracts?.usdc,
       messageTransmitterV2:
@@ -393,6 +466,37 @@ async function getExistingAction(
     [organizationId, idempotencyKey],
   );
   return result.rows[0] ?? null;
+}
+
+function requireUuid(value: string, name: string): string {
+  const text = requireText(value, name);
+  if (!/^[0-9a-fA-F-]{36}$/.test(text)) {
+    throw new BadRequestException(`${name} is invalid`);
+  }
+  return text;
+}
+
+function requireHex32(value: string, name: string): string {
+  const text = requireHexBytes(value, name).toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(text)) {
+    throw new BadRequestException(`${name} must be 32 bytes`);
+  }
+  return text;
+}
+
+function requireHexBytes(value: string, name: string): string {
+  const text = requireText(value, name);
+  const hex = text.startsWith('0x') ? text : `0x${text}`;
+  if (hex.length % 2 !== 0 || !/^0x[0-9a-fA-F]*$/.test(hex)) {
+    throw new BadRequestException(`${name} must be hex bytes`);
+  }
+  return hex.toLowerCase();
+}
+
+function hashHexBytes(value: string): string {
+  return `0x${Buffer.from(
+    keccak_256(Buffer.from(value.slice(2), 'hex')),
+  ).toString('hex')}`;
 }
 
 function validateLiquidityAction(

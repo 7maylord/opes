@@ -1,6 +1,11 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { isEvmAddress } from './evm-decision-hash';
 
+export interface CctpReceiveMessageInput {
+  message: string;
+  attestation: string;
+}
+
 export interface CctpDepositForBurnInput {
   amount: string;
   destinationDomain: number;
@@ -14,7 +19,24 @@ export interface CctpDepositForBurnInput {
 const DEPOSIT_FOR_BURN_SELECTOR = selector(
   'depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)',
 );
+const RECEIVE_MESSAGE_SELECTOR = selector('receiveMessage(bytes,bytes)');
 const ZERO_BYTES32 = Buffer.alloc(32);
+
+export function buildCctpReceiveMessageCalldata(
+  input: CctpReceiveMessageInput,
+): string {
+  const message = bytes(input.message, 'message');
+  const attestation = bytes(input.attestation, 'attestation');
+  const encodedMessage = dynamicBytes(message);
+  const encodedAttestation = dynamicBytes(attestation);
+  return `0x${Buffer.concat([
+    RECEIVE_MESSAGE_SELECTOR,
+    word(64n),
+    word(BigInt(64 + encodedMessage.length)),
+    encodedMessage,
+    encodedAttestation,
+  ]).toString('hex')}`;
+}
 
 export function buildCctpDepositForBurnCalldata(
   input: CctpDepositForBurnInput,
@@ -50,6 +72,23 @@ function word(value: bigint): Buffer {
     throw new Error('ABI word exceeds uint256');
   }
   return Buffer.from(text.padStart(64, '0'), 'hex');
+}
+
+function dynamicBytes(value: Buffer): Buffer {
+  const padding = (32 - (value.length % 32)) % 32;
+  return Buffer.concat([
+    word(BigInt(value.length)),
+    value,
+    Buffer.alloc(padding),
+  ]);
+}
+
+function bytes(value: string, name: string): Buffer {
+  const text = value.startsWith('0x') ? value.slice(2) : value;
+  if (text.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(text)) {
+    throw new Error(`${name} must be hex bytes`);
+  }
+  return Buffer.from(text.toLowerCase(), 'hex');
 }
 
 function addressWord(value: string): Buffer {

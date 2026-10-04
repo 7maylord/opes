@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { buildCctpReceiveMessageCalldata } from './cctp-calldata';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { isEvmAddress } from './evm-decision-hash';
 
@@ -11,7 +12,9 @@ interface OutboxEventRow {
 interface LiquidityWorkRow {
   id: string;
   organization_id: string;
+  status: string;
   source_chain_id: number;
+  destination_chain_id: number;
   provider_payload: Record<string, unknown>;
 }
 
@@ -26,8 +29,14 @@ interface SignerRequest {
   liquidityActionId: string;
 }
 
+interface AttestationResponse {
+  status?: unknown;
+  attestation?: unknown;
+}
+
 class SignerUnavailableError extends Error {}
 class UnknownSubmissionError extends Error {}
+class AttestationPendingError extends Error {}
 
 @Injectable()
 export class LiquidityExecutionWorkerService {
@@ -84,9 +93,31 @@ export class LiquidityExecutionWorkerService {
       return;
     }
 
+    if (action.status === 'PLANNED') {
+      await this.submitSourceBurn(event, action);
+      return;
+    }
+
+    if (action.status === 'SUBMITTED') {
+      await this.attestAndMint(event, action);
+      return;
+    }
+
+    if (action.status === 'ATTESTED') {
+      await this.submitDestinationMint(event, action);
+      return;
+    }
+
+    await markOutboxProcessed(this.database, event.id);
+  }
+
+  private async submitSourceBurn(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
     let request: SignerRequest;
     try {
-      request = buildSignerRequest(action);
+      request = buildSourceBurnRequest(action);
     } catch (error) {
       await this.failLiquidityAction(
         event,
@@ -113,25 +144,78 @@ export class LiquidityExecutionWorkerService {
     }
   }
 
+  private async attestAndMint(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    try {
+      const attestation = await fetchAttestation(action);
+      const refreshed = await this.recordAttested(event, attestation);
+      await this.submitDestinationMint(event, refreshed);
+    } catch (error) {
+      if (error instanceof AttestationPendingError) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'CCTP attestation failed',
+      );
+    }
+  }
+
+  private async submitDestinationMint(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    let request: SignerRequest;
+    try {
+      request = buildDestinationMintRequest(action);
+    } catch (error) {
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'Destination mint is invalid',
+      );
+      return;
+    }
+
+    try {
+      const transactionHash = await submitSignerRequest(request);
+      await this.recordMinted(event, transactionHash);
+    } catch (error) {
+      if (error instanceof UnknownSubmissionError) {
+        await this.recordUnknown(
+          event,
+          'Destination mint submission is unknown',
+        );
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'Destination mint failed',
+      );
+    }
+  }
+
   private async prepareLiquidityAction(
     event: OutboxEventRow,
   ): Promise<LiquidityWorkRow | null> {
     return this.database.withWorker(async (database) => {
       const result = await database.query<LiquidityWorkRow>(
         `
-          UPDATE opes.liquidity_actions
-             SET status = 'PLANNED',
-                 failure_reason = NULL,
-                 updated_at = now()
+          SELECT
+             id,
+             organization_id,
+             status,
+             source_chain_id,
+             destination_chain_id,
+             provider_payload
+           FROM opes.liquidity_actions
            WHERE organization_id = $1
              AND id = $2
              AND action_type = 'CCTP_TRANSFER'
-             AND status = 'PLANNED'
-           RETURNING
-             id,
-             organization_id,
-             source_chain_id,
-             provider_payload
+             AND status IN ('PLANNED', 'SUBMITTED', 'ATTESTED')
+           LIMIT 1
         `,
         [event.organization_id, event.aggregate_id],
       );
@@ -159,6 +243,62 @@ export class LiquidityExecutionWorkerService {
                    'sourceBurnTransactionHash', $3::text
                  ),
                  submitted_at = now(),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+        `,
+        [event.organization_id, event.aggregate_id, transactionHash],
+      );
+      await markOutboxProcessed(database, event.id);
+    });
+  }
+
+  private async recordAttested(
+    event: OutboxEventRow,
+    attestation: string,
+  ): Promise<LiquidityWorkRow> {
+    return this.database.withWorker(async (database) => {
+      const result = await database.query<LiquidityWorkRow>(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = 'ATTESTED',
+                 provider_payload = provider_payload || jsonb_build_object(
+                   'attestation', $3::text
+                 ),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+           RETURNING
+             id,
+             organization_id,
+             status,
+             source_chain_id,
+             destination_chain_id,
+             provider_payload
+        `,
+        [event.organization_id, event.aggregate_id, attestation],
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        throw new Error('Expected attested liquidity action row');
+      }
+      return row;
+    });
+  }
+
+  private async recordMinted(
+    event: OutboxEventRow,
+    transactionHash: string,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = 'MINTED',
+                 provider_payload = provider_payload || jsonb_build_object(
+                   'destinationMintTransactionHash', $3::text
+                 ),
+                 confirmed_at = now(),
                  updated_at = now()
            WHERE organization_id = $1
              AND id = $2
@@ -212,7 +352,7 @@ export class LiquidityExecutionWorkerService {
   }
 }
 
-function buildSignerRequest(action: LiquidityWorkRow): SignerRequest {
+function buildSourceBurnRequest(action: LiquidityWorkRow): SignerRequest {
   const request = (action.provider_payload as { signerRequest?: unknown })
     .signerRequest;
   if (request === null || typeof request !== 'object') {
@@ -240,6 +380,69 @@ function buildSignerRequest(action: LiquidityWorkRow): SignerRequest {
   }
 
   return signerRequest;
+}
+
+function buildDestinationMintRequest(action: LiquidityWorkRow): SignerRequest {
+  const payload = action.provider_payload;
+  const destination = objectAt(payload.destination, 'destination');
+  const sourceMessage = requireHex(payload.sourceMessage, 'sourceMessage');
+  const attestation = requireHex(payload.attestation, 'attestation');
+  const messageTransmitter = requireAddress(
+    destination.messageTransmitterV2,
+    'destination.messageTransmitterV2',
+  );
+  const walletAddress = requireAddress(
+    destination.walletAddress,
+    'destination.walletAddress',
+  );
+  const data = buildCctpReceiveMessageCalldata({
+    message: sourceMessage,
+    attestation,
+  });
+
+  return {
+    provider: 'circle',
+    chainId: action.destination_chain_id,
+    from: walletAddress,
+    to: messageTransmitter,
+    data,
+    value: '0',
+    idempotencyKey: `${action.id}:mint`,
+    liquidityActionId: action.id,
+  };
+}
+
+async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
+  const sourceMessageHash = requireHex(
+    action.provider_payload.sourceMessageHash,
+    'sourceMessageHash',
+  );
+  const baseUrl = attestationBaseUrl(action.provider_payload);
+  const response = await fetch(
+    `${baseUrl.replace(/\/$/, '')}/v1/attestations/${sourceMessageHash}`,
+  );
+  if (response.status === 404) {
+    throw new AttestationPendingError('CCTP attestation is pending');
+  }
+  if (!response.ok) {
+    throw new Error(`CCTP attestation returned HTTP ${response.status}`);
+  }
+  const body = (await response.json()) as AttestationResponse;
+  if (body.status !== 'complete') {
+    throw new AttestationPendingError('CCTP attestation is pending');
+  }
+  return requireHex(body.attestation, 'attestation');
+}
+
+function attestationBaseUrl(payload: Record<string, unknown>): string {
+  const configured = process.env.OPES_CCTP_ATTESTATION_URL?.trim();
+  if (configured !== undefined && configured !== '') {
+    return configured;
+  }
+  const source = objectAt(payload.source, 'source');
+  return source.tier === 'testnet'
+    ? 'https://iris-api-sandbox.circle.com'
+    : 'https://iris-api.circle.com';
 }
 
 async function submitSignerRequest(request: SignerRequest): Promise<string> {
@@ -296,19 +499,25 @@ async function submitSignerRequest(request: SignerRequest): Promise<string> {
 }
 
 async function markOutboxProcessed(
-  database: TenantDatabase,
+  databaseOrService: TenantDatabase | DatabaseService,
   eventId: string,
 ): Promise<void> {
-  await database.query(
-    `
-      UPDATE opes.outbox_events
-         SET status = 'PROCESSED',
-             processed_at = now(),
-             updated_at = now()
-       WHERE id = $1
-    `,
-    [eventId],
-  );
+  const work = (database: TenantDatabase) =>
+    database.query(
+      `
+        UPDATE opes.outbox_events
+           SET status = 'PROCESSED',
+               processed_at = now(),
+               updated_at = now()
+         WHERE id = $1
+      `,
+      [eventId],
+    );
+  if ('withWorker' in databaseOrService) {
+    await databaseOrService.withWorker(work);
+    return;
+  }
+  await work(databaseOrService);
 }
 
 async function markOutboxFailed(
@@ -327,6 +536,32 @@ async function markOutboxFailed(
     `,
     [eventId, reason],
   );
+}
+
+async function markOutboxPendingLater(
+  database: DatabaseService,
+  eventId: string,
+  delaySeconds: number,
+): Promise<void> {
+  await database.withWorker((workerDatabase) =>
+    workerDatabase.query(
+      `
+        UPDATE opes.outbox_events
+           SET status = 'PENDING',
+               available_at = now() + ($2::text || ' seconds')::interval,
+               updated_at = now()
+         WHERE id = $1
+      `,
+      [eventId, delaySeconds.toString()],
+    ),
+  );
+}
+
+function objectAt(value: unknown, name: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value as Record<string, unknown>;
 }
 
 function requireNumber(value: unknown, name: string): number {

@@ -1,6 +1,9 @@
-import { buildCctpDepositForBurnCalldata } from './cctp-calldata';
+import {
+  buildCctpDepositForBurnCalldata,
+  buildCctpReceiveMessageCalldata,
+} from './cctp-calldata';
 
-describe('buildCctpDepositForBurnCalldata', () => {
+describe('CCTP calldata builders', () => {
   it('builds TokenMessengerV2 depositForBurn calldata', () => {
     const data = buildCctpDepositForBurnCalldata({
       amount: '25000000',
@@ -26,5 +29,28 @@ describe('buildCctpDepositForBurnCalldata', () => {
         '00000000000000000000000000000000000000000000000000000000000007d0',
       ),
     ).toBe(true);
+  });
+
+  it('builds MessageTransmitterV2 receiveMessage calldata', () => {
+    const data = buildCctpReceiveMessageCalldata({
+      message: '0x123456',
+      attestation: '0xabcdef01',
+    });
+
+    expect(data.slice(0, 10)).toBe('0x57ecfd28');
+    expect(data).toContain(
+      '0000000000000000000000000000000000000000000000000000000000000040',
+    );
+    expect(data).toContain(
+      '0000000000000000000000000000000000000000000000000000000000000080',
+    );
+    expect(data).toContain(
+      '0000000000000000000000000000000000000000000000000000000000000003',
+    );
+    expect(data).toContain('123456');
+    expect(data).toContain(
+      '0000000000000000000000000000000000000000000000000000000000000004',
+    );
+    expect(data).toContain('abcdef01');
   });
 });
