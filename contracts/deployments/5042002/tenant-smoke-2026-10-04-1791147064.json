@@ -1,0 +1,216 @@
+{
+  "environment": "arc-testnet",
+  "chainId": 5042002,
+  "runLabel": "2026-10-04-1791147064",
+  "recordedAt": "2026-10-04T20:59:23.094209Z",
+  "sourceCommit": "c0dc13969b30e45339fa17df0b37d6648c53e385",
+  "factory": "0x6B3aa0d68Fba3Ff8add42071ba82E714b5a6a488",
+  "token": "0x3600000000000000000000000000000000000000",
+  "organization": "0x8132ff3a7fdc23a6ccc1b3c23017b65231e9fd63f9898fb0f58a1c1181555a4f",
+  "configurationHash": "0xa4062ca20872b5a2d7c6514d41776d69a8aeda5f1fbdec82b79054b1166fd513",
+  "roles": {
+    "provisioner": "0xAD6433f3a49eb065e6470F231a3dc3Dee26F0f9d",
+    "owner": "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350",
+    "operator": "0x22B6fddA95693daF88ae3c8E9177da514a2793C5",
+    "pauser": "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350",
+    "recovery": "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350"
+  },
+  "contracts": {
+    "BusinessPolicyVault": {
+      "address": "0x9724517578dEBd835CD387376e636d44FaC44B69",
+      "source": "src/BusinessPolicyVault.sol:BusinessPolicyVault",
+      "constructorArguments": [
+        "0x3600000000000000000000000000000000000000",
+        "0x8132ff3a7fdc23a6ccc1b3c23017b65231e9fd63f9898fb0f58a1c1181555a4f",
+        "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350",
+        "0x22B6fddA95693daF88ae3c8E9177da514a2793C5",
+        "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350",
+        "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350"
+      ],
+      "verification": "fully_verified",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x9724517578dEBd835CD387376e636d44FaC44B69",
+      "verificationEvidenceUrl": "https://explorer.testnet.arc.io/api/v2/smart-contracts/0x9724517578dEBd835CD387376e636d44FaC44B69"
+    },
+    "MilestoneEscrow": {
+      "address": "0x0b833714f0fA42016BB4b2527a6C926454A75b3b",
+      "source": "src/MilestoneEscrow.sol:MilestoneEscrow",
+      "constructorArguments": [
+        "0x9724517578dEBd835CD387376e636d44FaC44B69",
+        "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350",
+        "0x22B6fddA95693daF88ae3c8E9177da514a2793C5",
+        "0x1Af00C7785beaD8AA60377Df7B4C7674B14B5350"
+      ],
+      "verification": "fully_verified",
+      "explorerUrl": "https://explorer.testnet.arc.io/address/0x0b833714f0fA42016BB4b2527a6C926454A75b3b",
+      "verificationEvidenceUrl": "https://explorer.testnet.arc.io/api/v2/smart-contracts/0x0b833714f0fA42016BB4b2527a6C926454A75b3b"
+    }
+  },
+  "smoke": {
+    "amountsAtomic": {
+      "directPayment": 1000,
+      "escrowMilestone": 2000
+    },
+    "directVendor": "0x78fE87E4d1DaE884BE5Ba4bf11147c99DdAC1B99",
+    "escrowPayee": "0x9898759B6fF0841a1e06D56448E9ae2866908e23",
+    "agreementId": "0x62c89daea163a2f9bc817f610ee6e8215384019e41e6f68a94dd198df106a21b",
+    "directDecisionHash": "0x99a605dbe4b22a1be1a1604b676d3c03c5ec433fa37664e847a26afd559a7af2",
+    "transactions": {
+      "topup-owner": {
+        "transactionHash": "0x36520797d7396fc1de3018830683f43d341da970f818e63cd6ce6e687e76fa61",
+        "blockNumber": 65514770,
+        "status": "0x1",
+        "gasUsed": 21000,
+        "effectiveGasPriceWei": "64543436950",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x36520797d7396fc1de3018830683f43d341da970f818e63cd6ce6e687e76fa61"
+      },
+      "topup-operator": {
+        "transactionHash": "0xd723f3d3fb4ad722326be64cdf92528ba9fef5d672c2dc4691d83d24ac3287cb",
+        "blockNumber": 65514778,
+        "status": "0x1",
+        "gasUsed": 21000,
+        "effectiveGasPriceWei": "61176860584",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0xd723f3d3fb4ad722326be64cdf92528ba9fef5d672c2dc4691d83d24ac3287cb"
+      },
+      "create-organization": {
+        "transactionHash": "0xd4d95d7b43b7af1d29016d14bae25e65aeeb8e4b0054f73326aaeceec2b3e822",
+        "blockNumber": 65514783,
+        "status": "0x1",
+        "gasUsed": 5601492,
+        "effectiveGasPriceWei": "37500000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0xd4d95d7b43b7af1d29016d14bae25e65aeeb8e4b0054f73326aaeceec2b3e822"
+      },
+      "fund-vault": {
+        "transactionHash": "0x047c7d2d1917e16fb44ac62a662c8f40870a7d96c5b4d77f1bf731b9de51ebc4",
+        "blockNumber": 65514794,
+        "status": "0x1",
+        "gasUsed": 48938,
+        "effectiveGasPriceWei": "37500000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x047c7d2d1917e16fb44ac62a662c8f40870a7d96c5b4d77f1bf731b9de51ebc4"
+      },
+      "set-limits": {
+        "transactionHash": "0xb80f5aa5ca99f4bfc81cd7bec2d85b84789ed1a0614a462adaab1bd526a5e596",
+        "blockNumber": 65514907,
+        "status": "0x1",
+        "gasUsed": 91985,
+        "effectiveGasPriceWei": "37500000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0xb80f5aa5ca99f4bfc81cd7bec2d85b84789ed1a0614a462adaab1bd526a5e596"
+      },
+      "set-direct-vendor": {
+        "transactionHash": "0xb48349c150924499d1f8ff2492036bd7bea159c5e622f2b11a7b5e8b41c60ff7",
+        "blockNumber": 65514911,
+        "status": "0x1",
+        "gasUsed": 71828,
+        "effectiveGasPriceWei": "32500000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0xb48349c150924499d1f8ff2492036bd7bea159c5e622f2b11a7b5e8b41c60ff7"
+      },
+      "set-escrow-payee": {
+        "transactionHash": "0x1b733f15ce2ff6e2ca77bcdca100919f9bd6ace4dfe020754592c051776cc0b8",
+        "blockNumber": 65514917,
+        "status": "0x1",
+        "gasUsed": 71828,
+        "effectiveGasPriceWei": "37500000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x1b733f15ce2ff6e2ca77bcdca100919f9bd6ace4dfe020754592c051776cc0b8"
+      },
+      "set-escrow": {
+        "transactionHash": "0x3394e471a7af3c2e6ee100dccc97cc6dac7acdd0878b43c1de36252c80db5faf",
+        "blockNumber": 65514925,
+        "status": "0x1",
+        "gasUsed": 54787,
+        "effectiveGasPriceWei": "43125000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x3394e471a7af3c2e6ee100dccc97cc6dac7acdd0878b43c1de36252c80db5faf"
+      },
+      "unpause-vault": {
+        "transactionHash": "0xdccf2eb8c2ef1b90cf3b11af7bee782f115e5171b1a9435cdac3c5bed60750ec",
+        "blockNumber": 65514931,
+        "status": "0x1",
+        "gasUsed": 29399,
+        "effectiveGasPriceWei": "57161073749",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0xdccf2eb8c2ef1b90cf3b11af7bee782f115e5171b1a9435cdac3c5bed60750ec"
+      },
+      "unpause-escrow": {
+        "transactionHash": "0x69231c6b872100838503144514e328c067cd93efae6b4a99c483cff486a5793b",
+        "blockNumber": 65514938,
+        "status": "0x1",
+        "gasUsed": 24901,
+        "effectiveGasPriceWei": "56117448750",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x69231c6b872100838503144514e328c067cd93efae6b4a99c483cff486a5793b"
+      },
+      "create-agreement": {
+        "transactionHash": "0x314ad004d3c00233470c9a272218c0f3c90cb023654268ca636607fe8136d4ff",
+        "blockNumber": 65514944,
+        "status": "0x1",
+        "gasUsed": 236885,
+        "effectiveGasPriceWei": "40416968750",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x314ad004d3c00233470c9a272218c0f3c90cb023654268ca636607fe8136d4ff"
+      },
+      "approve-escrow-funding": {
+        "transactionHash": "0x39eaf8d92e1e876530179cd8006526796de81305278ba6e6f4b10266114e906d",
+        "blockNumber": 65514957,
+        "status": "0x1",
+        "gasUsed": 48863,
+        "effectiveGasPriceWei": "51391604375",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x39eaf8d92e1e876530179cd8006526796de81305278ba6e6f4b10266114e906d"
+      },
+      "execute-direct-payment": {
+        "transactionHash": "0x0b76c5e400cc7b12f964934450df0bd46a4c52080d877fd9b2318859800227fb",
+        "blockNumber": 65514963,
+        "status": "0x1",
+        "gasUsed": 174691,
+        "effectiveGasPriceWei": "49434000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x0b76c5e400cc7b12f964934450df0bd46a4c52080d877fd9b2318859800227fb"
+      },
+      "fund-escrow": {
+        "transactionHash": "0x706bea6db2a367b4479b8497ebaa653ed239d9f2fe31a4b3f9cf5c987bbf563a",
+        "blockNumber": 65514971,
+        "status": "0x1",
+        "gasUsed": 233538,
+        "effectiveGasPriceWei": "43950500000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x706bea6db2a367b4479b8497ebaa653ed239d9f2fe31a4b3f9cf5c987bbf563a"
+      },
+      "approve-milestone": {
+        "transactionHash": "0xe2eacca9e92e29543554f0dd331204bd4a54420c5b991d7fd47faffd2687256e",
+        "blockNumber": 65514976,
+        "status": "0x1",
+        "gasUsed": 132320,
+        "effectiveGasPriceWei": "27500000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0xe2eacca9e92e29543554f0dd331204bd4a54420c5b991d7fd47faffd2687256e"
+      },
+      "release-milestone": {
+        "transactionHash": "0x2949f0fbe53c69a5d143b8411e8f5379678dee8b88e097d8ccbeea724070bc54",
+        "blockNumber": 65514982,
+        "status": "0x1",
+        "gasUsed": 163783,
+        "effectiveGasPriceWei": "26250000000",
+        "explorerUrl": "https://explorer.testnet.arc.io/tx/0x2949f0fbe53c69a5d143b8411e8f5379678dee8b88e097d8ccbeea724070bc54"
+      }
+    },
+    "finalBalancesAtomic": {
+      "vault": 0,
+      "escrow": 0,
+      "directVendor": 1000,
+      "escrowPayee": 2000
+    },
+    "expiresAt": 1791233687,
+    "completionDeadline": 1791320087,
+    "escrowDecisionHash": "0x88150771cfc4946a554bf76448f6ea750a5db264c6e69e02254b899ac79bfc9f",
+    "milestoneDecisionHash": "0x60449555fa0209d01904ea402710f992c719bff19783df39944c8b0a94512f62",
+    "evidenceHash": "0x680701c25dabd098fcef281928353123b7a2e1371c010897139a30be36fadd0e",
+    "directObligationKey": "0x6dd0d3902b8823c4c322889784a18cbc9e9403f88dc3da373346211b3b1ae60c",
+    "directContextHash": "0xa4ac0c3d0e148dbb0817448ca3d62c06ef648f5564d248133076c4d68567359d",
+    "escrowObligationKey": "0xad80973774b790f6a329d80e9b9b42b8ee3718f7bfdf7c56b082c4647ed2e3af",
+    "escrowContextHash": "0xbf5c9205e7497738c817f798f0d1ee0c174fa8550e7ecec5ebcc38fb85b30064",
+    "termsHash": "0xe519acc1c05e11df0149aa324e8b528dcc8c57d9561ce743b51af57ba10c36b2",
+    "acceptanceCriteriaHash": "0xb28a10bd663d55b0aa38be4868645fdfc828d62c7476e01bac70d3f965719c3f"
+  },
+  "checks": {
+    "tenantProvisionedByFactory": true,
+    "vaultImmutableBindingsMatch": true,
+    "escrowImmutableBindingsMatch": true,
+    "tenantRolesMatch": true,
+    "sourceVerified": true,
+    "directPaymentExecuted": true,
+    "escrowFundedReleased": true,
+    "vaultAndEscrowFinalBalancesZero": true
+  },
+  "notes": "Smoke role private keys were generated locally for this Arc testnet run and are not committed. Manifest contains public addresses and transaction evidence only."
+}

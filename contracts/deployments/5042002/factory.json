@@ -69,7 +69,12 @@
     },
     "arcRpcCreationSimulation": true,
     "arcFoundryLocalSuite": "not run",
-    "tenantSmokeTests": "pending"
+    "tenantSmokeTests": "passed",
+    "tenantSmokeManifest": "contracts/deployments/5042002/tenant-smoke-2026-10-04-1791147064.json",
+    "tenantSmokeVault": "0x9724517578dEBd835CD387376e636d44FaC44B69",
+    "tenantSmokeEscrow": "0x0b833714f0fA42016BB4b2527a6C926454A75b3b",
+    "tenantSmokeDirectPayment": "0x0b76c5e400cc7b12f964934450df0bd46a4c52080d877fd9b2318859800227fb",
+    "tenantSmokeEscrowRelease": "0x2949f0fbe53c69a5d143b8411e8f5379678dee8b88e097d8ccbeea724070bc54"
   },
-  "checkedAt": "2026-10-02T09:05:47.854Z"
+  "checkedAt": "2026-10-04T20:56:00Z"
 }
