@@ -149,6 +149,11 @@ export function LifecycleWorkflows({
           <button disabled={pending} className="btn">Create subscription</button>
           <button type="button" disabled={pending || subscription === null} onClick={submitCycle} className="btn-secondary">Create current cycle</button>
           <button type="button" disabled={pending || subscription === null} onClick={submitCancel} className="btn-secondary">Cancel</button>
+          {subscription !== null ? (
+            <p className="rounded-xl border border-slate-200 p-3 text-sm">
+              Subscription status: <span className="font-semibold">{subscription.status}</span>
+            </p>
+          ) : null}
           <Result value={cycle ?? subscription} />
         </form>
 

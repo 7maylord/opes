@@ -1,0 +1,196 @@
+import { expect, test, type Page, type Route } from "@playwright/test";
+
+const orgId = "11111111-1111-1111-1111-111111111111";
+const secondOrgId = "22222222-2222-2222-2222-222222222222";
+const user = { id: "user-1", email: "owner@example.com", displayName: "Owner User" };
+const organizations = [
+  { id: orgId, slug: "alpha-co", displayName: "Alpha Co", lifecycleStatus: "SETUP_REQUIRED", membershipId: "member-owner", role: "OWNER", agentId: "agent-1", agentLifecycleStatus: "SETUP_REQUIRED" },
+  { id: secondOrgId, slug: "beta-co", displayName: "Beta Co", lifecycleStatus: "PROVISIONING", membershipId: "member-admin", role: "ADMIN", agentId: "agent-2", agentLifecycleStatus: "PROVISIONING" },
+];
+const members = [{ id: "member-owner", userId: "user-1", email: "owner@example.com", displayName: "Owner User", role: "OWNER", status: "ACTIVE", createdAt: "2026-10-04T00:00:00.000Z" }];
+
+async function installApiMock(page: Page) {
+  await page.route("http://mock.api/**", async (route) => respond(route));
+}
+
+async function openSignedIn(page: Page) {
+  await installApiMock(page);
+  await page.goto("/");
+  await page.getByLabel("Backend session token").fill("mock-session-token");
+  await page.getByRole("button", { name: "Load workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Alpha Co" })).toBeVisible();
+}
+
+test("journey 1: owner creates organization and sees setup checklist", async ({ page }) => {
+  await installApiMock(page);
+  await page.goto("/");
+  await page.getByLabel("Work email").fill("owner@example.com");
+  await page.getByLabel("Your name").fill("Owner User");
+  await page.getByLabel("Organization name").fill("Alpha Co");
+  await page.getByRole("button", { name: "Create and queue setup" }).click();
+  await expect(page.getByText("Organization created. Arc setup is queued.")).toBeVisible();
+  await expect(page.getByText("Factory verified")).toBeVisible();
+  await expect(page.getByText("Execution ready")).toBeVisible();
+});
+
+test("journey 2: invite and accept member", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByLabel("Email").fill("approver@example.com");
+  await page.getByLabel("Display name").fill("Approver User");
+  await page.getByRole("button", { name: "Invite" }).click();
+  await expect(page.getByText("Invitation token:")).toBeVisible();
+  await page.getByRole("button", { name: "Logout" }).click();
+  await page.getByLabel("Invitation token").fill("invite-token-123");
+  await page.getByRole("button", { name: "Accept invitation" }).click();
+  await expect(page.getByText("Invitation accepted. Workspace loaded.")).toBeVisible();
+});
+
+test("journey 3: invoice source flows to decision execution", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByLabel("Vendor name").fill("Canteen Supplies");
+  await page.getByRole("button", { name: "Create vendor" }).click();
+  await page.getByLabel("Arc USDC payout address").fill("0x4000000000000000000000000000000000000004");
+  await page.getByRole("button", { name: "Add address" }).click();
+  await page.getByRole("button", { name: "Verify address" }).click();
+  await page.getByLabel("Invoice number").fill("INV-100");
+  await page.getByLabel("Evidence SHA-256 hex").fill("a".repeat(64));
+  await page.getByRole("button", { name: "Record document" }).click();
+  await page.getByRole("button", { name: "Record extraction" }).click();
+  await page.getByRole("button", { name: "Verify invoice" }).click({ force: true });
+  await page.getByRole("button", { name: "Dry-run decision" }).click({ force: true });
+  await expect(page.getByText('"status": "PASS"')).toBeVisible();
+  await page.getByRole("button", { name: "Approve" }).click({ force: true });
+  await page.getByRole("button", { name: "Request execution" }).click({ force: true });
+  await expect(page.getByText('"status": "PENDING"')).toBeVisible();
+});
+
+test("journey 4: recurring subscription cycle and cancellation", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByLabel("Vendor ID").first().fill("vendor-1");
+  await page.getByLabel("Vendor address ID").first().fill("address-1");
+  await page.getByRole("button", { name: "Create subscription" }).click();
+  await expect(page.getByText('"status": "ACTIVE"')).toBeVisible();
+  await page.getByRole("button", { name: "Create current cycle" }).click();
+  await expect(page.getByText('"status": "DUE"')).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByText("Subscription status: CANCELLED")).toBeVisible();
+});
+
+test("journey 5: escrow evidence acceptance and dispute views", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByLabel("Vendor ID").nth(1).fill("vendor-1");
+  await page.getByLabel("Vendor address ID").nth(1).fill("address-1");
+  await page.getByLabel("Agreement/evidence document ID").fill("doc-1");
+  await page.getByRole("button", { name: "Create escrow" }).click();
+  await page.getByRole("button", { name: "Submit first milestone evidence" }).click();
+  await expect(page.getByText('"status": "SUBMITTED"')).toBeVisible();
+  await page.getByRole("button", { name: "Accept milestone" }).click();
+  await expect(page.getByText('"status": "ACCEPTED"')).toBeVisible();
+  await page.getByRole("button", { name: "Dispute milestone" }).click();
+  await expect(page.getByText('"status": "DISPUTED"')).toBeVisible();
+});
+
+test("journey 6: treasury separates planned from settled", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Planned liquidity", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Plan route" }).click();
+  await expect(page.getByText('"status": "PLANNED"')).toBeVisible();
+  await page.getByLabel("Invoice version ID").fill("invoice-version-1");
+  await page.getByRole("button", { name: "Accrue invoice" }).click();
+  await expect(page.getByText("INVOICE_ACCEPTED")).toBeVisible();
+  await page.getByLabel("Payment execution ID").fill("execution-1");
+  await page.getByRole("button", { name: "Settle payment" }).click();
+  await expect(page.getByText("PAYMENT_SETTLED")).toBeVisible();
+});
+
+test("journey 7: keyboard tenant switching and responsive shell", async ({ page }) => {
+  await openSignedIn(page);
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  await page.getByLabel("Organization").selectOption(secondOrgId);
+  await expect(page.getByRole("heading", { name: "Beta Co" })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByText("OPES command center")).toBeVisible();
+});
+
+test("basic accessibility landmarks and labels are present", async ({ page }) => {
+  await openSignedIn(page);
+  await expect(page.locator("main")).toBeVisible();
+  await expect(page.getByLabel("Organization")).toBeVisible();
+  await expect(page.getByLabel("Network")).toBeVisible();
+  await expect(page.getByLabel("Mode")).toBeVisible();
+});
+
+async function respond(route: Route) {
+  const request = route.request();
+  const path = new URL(request.url()).pathname.slice(1);
+  let body: Record<string, unknown> = {};
+  if (request.method() !== "GET") {
+    try {
+      body = request.postDataJSON() as Record<string, unknown>;
+    } catch {}
+  }
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(responseFor(request.method(), path, body)) });
+}
+
+function responseFor(method: string, path: string, body: Record<string, unknown>) {
+  if (method === "DELETE" && path === "session") return { revoked: true };
+  if (method === "GET" && path === "session") return user;
+  if (method === "GET" && path === "organizations") return organizations;
+  if (method === "GET" && path.endsWith("/agent")) return { id: "agent-1", lifecycleStatus: "SETUP_REQUIRED", arcTestnetFactory: { environment: "arc-testnet", chainId: 5042002, factoryAddress: "0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", vaultDeployerAddress: "0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8", verification: "fully_verified", explorerUrl: "https://explorer.testnet.arc.io/address/0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", checkedAt: "2026-10-04T00:00:00.000Z" }, resourceBindings: path.startsWith(`organizations/${orgId}`) ? activeBindings() : [] };
+  if (method === "GET" && path.endsWith("/members")) return members;
+  if (method === "GET" && path.endsWith("/treasury/position")) return { assetSymbol: "USDC", committedPayablesAtomic: "2500000", approvedUnsettledPaymentAtomic: "1000000", plannedLiquidityAtomic: "500000", supportedNetworks: [{ environment: "arc-testnet" }, { environment: "base-sepolia" }] };
+  if (path === "onboarding") return { user, organization: organizations[0], membership: { id: "member-owner", role: "OWNER" }, agent: { id: "agent-1", lifecycleStatus: "PROVISIONING" }, sessionToken: "mock-session-token" };
+  if (path.startsWith("organization-invitations/")) return { user, organization: organizations[0], membership: members[0], sessionToken: "mock-session-token" };
+  if (path.endsWith("/members")) return { id: "member-invited", userId: "user-2", email: body.email, displayName: body.displayName, role: body.role, status: "INVITED", createdAt: "2026-10-04T00:00:00.000Z", invitationToken: "invite-token-123" };
+  if (path.endsWith("/agent/provisioning/arc-testnet")) return binding("factory-1", "arc", "factory_provisioning", null, "PENDING");
+  if (path.endsWith("/vendors")) return { id: "vendor-1", displayName: body.displayName, status: "PENDING_REVIEW", version: 1, metadata: {} };
+  if (path.includes("/vendors/") && path.endsWith("/addresses")) return { id: "address-1", vendorId: "vendor-1", environment: body.environment, chainId: body.chainId, assetSymbol: body.assetSymbol, assetAddress: body.assetAddress, payoutAddress: body.payoutAddress, status: "PENDING_REVIEW", version: 1, replacesAddressId: null };
+  if (path.includes("/vendor-addresses/")) return { id: "address-1", vendorId: "vendor-1", environment: "arc-testnet", chainId: 5042002, assetSymbol: "USDC", assetAddress: "0x3600000000000000000000000000000000000000", payoutAddress: "0x4000000000000000000000000000000000000004", status: "VERIFIED_ACTIVE", version: 1, replacesAddressId: null };
+  if (path.endsWith("/evidence-documents")) return { id: "doc-1", ...body, status: "RECORDED", metadata: {} };
+  if (path.includes("/evidence-documents/") && path.endsWith("/extractions")) return { id: "extract-1", documentId: "doc-1", ...body, status: "ACCEPTED" };
+  if (path.endsWith("/invoices/verify")) return { id: "obligation-1", versionId: "invoice-version-1", version: 1, ...body, extractionId: body.extractionId ?? null, amountAtomic: "100000000", amountDecimals: 6, obligationKey: "obligation-key", contentHash: "content-hash", status: "ACCEPTED" };
+  if (path.endsWith("/decisions/invoice-payment")) {
+    const route = body.route as {
+      liquidityRoute: string;
+      environment: string;
+      chainId: number;
+      assetSymbol: string;
+    };
+    return { id: "decision-1", sourceType: "PAYABLE_OBLIGATION", sourceId: "obligation-1", sourceVersionId: body.invoiceVersionId, decisionVersion: 1, paymentMode: "DIRECT", modelAction: body.modelAction, derivedAction: "PAY", liquidityRoute: route.liquidityRoute, routeEnvironment: route.environment, routeChainId: route.chainId, routeAssetSymbol: route.assetSymbol, amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], expiresAt: body.expiresAt };
+  }
+  if (path.endsWith("/decisions/decision-1/authorize")) return { id: "approval-1", decisionId: "decision-1", decisionVersion: 1, sourceVersionId: "invoice-version-1", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", contextHash: "context", policySnapshotHash: "policy", status: "ACTIVE", expiresAt: "2026-10-04T01:00:00.000Z" };
+  if (path.endsWith("/decisions/decision-1/execute")) return { id: "execution-1", decisionId: "decision-1", approvalId: "approval-1", sourceVersionId: "invoice-version-1", decisionHash: "decisionhash", idempotencyKey: "key", contextHash: "context", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", routeEnvironment: "arc-testnet", routeChainId: 5042002, routeAssetSymbol: "USDC", vaultAddress: "0x2000000000000000000000000000000000000002", status: "PENDING", failureReason: null, transactionHash: null };
+  if (path.endsWith("/subscriptions")) return { id: "subscription-1", versionId: "subscription-version-1", version: 1, status: "ACTIVE", cadence: body.cadence, anchorDate: body.anchorDate, timezone: body.timezone, amountAtomic: "100000000" };
+  if (path.endsWith("/subscriptions/subscription-1/cycles")) return { id: "cycle-1", subscriptionId: "subscription-1", subscriptionVersionId: "subscription-version-1", servicePeriodStart: body.servicePeriodStart, servicePeriodEnd: "2026-11-04", dueAt: "2026-11-04T00:00:00.000Z", amountAtomic: "100000000", status: "DUE" };
+  if (path.endsWith("/subscriptions/subscription-1/cancel")) return { id: "subscription-1", status: "CANCELLED" };
+  if (path.endsWith("/escrow-agreements")) return { id: "agreement-1", status: "DRAFT", totalAmountAtomic: "100000000", milestones: [{ id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "PENDING", evidenceDocumentId: null }] };
+  if (path.endsWith("/escrow-milestones/milestone-1/submissions")) return { id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "SUBMITTED", evidenceDocumentId: body.evidenceDocumentId };
+  if (path.endsWith("/escrow-milestones/milestone-1/accept")) return { id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "ACCEPTED", evidenceDocumentId: "doc-1" };
+  if (path.endsWith("/escrow-milestones/milestone-1/dispute")) return { id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "DISPUTED", evidenceDocumentId: "doc-1" };
+  if (path.endsWith("/liquidity-actions")) return { id: "liquidity-1", actionType: body.actionType, idempotencyKey: body.idempotencyKey, provider: "circle-gateway", simulated: true, status: "PLANNED", source: body.source, destination: body.destination, amountAtomic: body.amountAtomic, feeAtomic: "0", quoteExpiresAt: body.quoteExpiresAt, providerReference: null, providerPayload: { mode: "unified-balance-transfer" }, failureReason: null };
+  if (path.endsWith("/ledger/invoice-versions/invoice-version-1/accrue")) return ledger("INVOICE_ACCEPTED", "invoice-version-1");
+  if (path.endsWith("/ledger/payment-executions/execution-1/settle")) return ledger("PAYMENT_SETTLED", "execution-1");
+  return { message: `Unhandled ${method} ${path}` };
+}
+
+function activeBindings() {
+  return [
+    binding("wallet-1", "circle", "operator_wallet", "0x1000000000000000000000000000000000000001"),
+    binding("vault-1", "arc", "business_policy_vault_contract", "0x2000000000000000000000000000000000000002"),
+    binding("escrow-1", "arc", "milestone_escrow_contract", "0x3000000000000000000000000000000000000003"),
+  ];
+}
+
+function binding(id: string, provider: string, resourceType: string, address: string | null, status = "ACTIVE") {
+  return { id, environment: "arc-testnet", chainId: 5042002, provider, resourceType, resourceId: orgId, address, status, metadata: {} };
+}
+
+function ledger(type: string, id: string) {
+  return [
+    { id: `${id}-1`, ledgerEventType: type, ledgerEventId: id, lineNumber: 1, account: "EXPENSE:PAYABLES", direction: "DEBIT", assetSymbol: "USDC", amountAtomic: "100000000", sourceType: "TEST", sourceId: id, sourceVersionId: null, counterpartyId: "vendor-1", transactionHash: type === "PAYMENT_SETTLED" ? "0xtx" : null },
+    { id: `${id}-2`, ledgerEventType: type, ledgerEventId: id, lineNumber: 2, account: "LIABILITY:ACCOUNTS_PAYABLE", direction: "CREDIT", assetSymbol: "USDC", amountAtomic: "100000000", sourceType: "TEST", sourceId: id, sourceVersionId: null, counterpartyId: "vendor-1", transactionHash: type === "PAYMENT_SETTLED" ? "0xtx" : null },
+  ];
+}
