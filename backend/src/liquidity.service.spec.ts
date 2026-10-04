@@ -16,8 +16,8 @@ const request = {
   actionType: 'CCTP_TRANSFER' as const,
   idempotencyKey: 'a'.repeat(64),
   source: {
-    environment: 'base-mainnet',
-    chainId: 8453,
+    environment: 'arc-mainnet',
+    chainId: 5042001,
     assetSymbol: 'USDC',
   },
   destination: {
@@ -46,8 +46,8 @@ function row(overrides: Record<string, unknown> = {}) {
     provider: 'sandbox',
     simulated: true,
     status: 'PLANNED',
-    source_environment: 'base-mainnet',
-    source_chain_id: 8453,
+    source_environment: 'arc-mainnet',
+    source_chain_id: 5042001,
     source_asset_symbol: 'USDC',
     destination_environment: 'arbitrum-mainnet',
     destination_chain_id: 42161,
@@ -56,6 +56,7 @@ function row(overrides: Record<string, unknown> = {}) {
     fee_atomic: '0',
     quote_expires_at: new Date(request.quoteExpiresAt),
     provider_reference: 'sim_abc',
+    provider_payload: {},
     failure_reason: null,
     ...overrides,
   };
@@ -65,6 +66,7 @@ describe('LiquidityService', () => {
   const originalSandbox = process.env.OPES_LIQUIDITY_SANDBOX;
   const originalNodeEnv = process.env.NODE_ENV;
   const originalAllowedOrigins = process.env.OPES_ALLOWED_ORIGINS;
+  const originalSignerUrl = process.env.OPES_PAYMENT_SIGNER_URL;
 
   afterEach(() => {
     if (originalSandbox === undefined) {
@@ -82,6 +84,11 @@ describe('LiquidityService', () => {
     } else {
       process.env.OPES_ALLOWED_ORIGINS = originalAllowedOrigins;
     }
+    if (originalSignerUrl === undefined) {
+      delete process.env.OPES_PAYMENT_SIGNER_URL;
+    } else {
+      process.env.OPES_PAYMENT_SIGNER_URL = originalSignerUrl;
+    }
   });
 
   it('plans a deterministic sandbox CCTP liquidity action once', async () => {
@@ -90,16 +97,24 @@ describe('LiquidityService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+      })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
           rows: [
             row({
               request_hash: values[3],
-              provider_reference: values[12],
+              provider_reference: values[14],
+              provider_payload: JSON.parse(values[15] as string),
             }),
           ],
         }),
-      );
+      )
+      .mockResolvedValueOnce({ rows: [] });
     const service = serviceWithQuery(query);
 
     await expect(
@@ -109,19 +124,21 @@ describe('LiquidityService', () => {
       provider: 'sandbox',
       simulated: true,
       status: 'PLANNED',
-      source: { chainId: 8453 },
+      source: { chainId: 5042001 },
       destination: { chainId: 42161 },
       feeAtomic: '0',
     });
     expect(query).toHaveBeenNthCalledWith(
-      2,
+      4,
       expect.stringContaining('INSERT INTO opes.liquidity_actions'),
       expect.arrayContaining([
         context.organizationId,
         'CCTP_TRANSFER',
         request.idempotencyKey,
-        'base-mainnet',
-        8453,
+        'sandbox',
+        true,
+        'arc-mainnet',
+        5042001,
         'USDC',
         'arbitrum-mainnet',
         42161,
@@ -136,15 +153,23 @@ describe('LiquidityService', () => {
     process.env.OPES_LIQUIDITY_SANDBOX = 'true';
     let requestHash = '';
     const firstService = serviceWithQuery(
-      jest
-        .fn()
-        .mockResolvedValueOnce({ rows: [] })
-        .mockImplementationOnce((_text: string, values: readonly unknown[]) => {
-          requestHash = values[3] as string;
+      jest.fn((text: string, values?: readonly unknown[]) => {
+        if (text.includes('SELECT') && text.includes('liquidity_actions')) {
+          return Promise.resolve({ rows: [] });
+        }
+        if (text.includes('SELECT address')) {
+          return Promise.resolve({
+            rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+          });
+        }
+        if (text.includes('INSERT INTO opes.liquidity_actions')) {
+          requestHash = values?.[3] as string;
           return Promise.resolve({
             rows: [row({ request_hash: requestHash })],
           });
-        }),
+        }
+        return Promise.resolve({ rows: [] });
+      }),
     );
     await firstService.planLiquidityAction(context, request);
 
@@ -188,6 +213,45 @@ describe('LiquidityService', () => {
       'Liquidity provider adapter is not configured',
     );
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it('prepares a live CCTP action in production when signer is configured', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
+    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+      })
+      .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
+        Promise.resolve({
+          rows: [
+            row({
+              provider: values[4],
+              simulated: values[5],
+              request_hash: values[3],
+              provider_reference: values[14],
+              provider_payload: JSON.parse(values[15] as string),
+            }),
+          ],
+        }),
+      )
+      .mockResolvedValueOnce({ rows: [] });
+    const service = serviceWithQuery(query);
+
+    const action = await service.planLiquidityAction(context, request);
+
+    expect(action).toMatchObject({
+      provider: 'cctp-v2',
+      simulated: false,
+      providerReference: null,
+    });
+    expect(action.providerPayload.provider).toBe('cctp-v2');
   });
 
   it('requires an approving role to plan liquidity', async () => {

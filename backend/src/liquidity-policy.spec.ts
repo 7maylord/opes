@@ -32,8 +32,8 @@ describe('liquidity policy', () => {
       evaluateLiquidityAction({
         actionType: 'CCTP_TRANSFER',
         source: {
-          environment: 'base-mainnet',
-          chainId: 8453,
+          environment: 'arc-mainnet',
+          chainId: 5042001,
           assetSymbol: 'USDC',
         },
         destination: {
@@ -50,8 +50,8 @@ describe('liquidity policy', () => {
       evaluateLiquidityAction({
         actionType: 'CCTP_TRANSFER',
         source: {
-          environment: 'base-mainnet',
-          chainId: 8453,
+          environment: 'arc-mainnet',
+          chainId: 5042001,
           assetSymbol: 'USDC',
         },
         destination: {
@@ -68,8 +68,8 @@ describe('liquidity policy', () => {
       evaluateLiquidityAction({
         actionType: 'CCTP_TRANSFER',
         source: {
-          environment: 'base-mainnet',
-          chainId: 8453,
+          environment: 'arc-mainnet',
+          chainId: 5042001,
           assetSymbol: 'USDC',
         },
         destination: {
@@ -84,7 +84,21 @@ describe('liquidity policy', () => {
     });
   });
 
-  it('keeps all required chain environments visible', () => {
-    expect(supportedNetworks()).toHaveLength(12);
+  it('keeps all required chain environments visible with current Circle domains', () => {
+    const networks = supportedNetworks();
+    expect(networks).toHaveLength(12);
+    expect(networks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ environment: 'arc-testnet', cctpDomain: 26 }),
+        expect.objectContaining({
+          environment: 'monad-testnet',
+          cctpDomain: 15,
+        }),
+        expect.objectContaining({
+          environment: 'celo-sepolia',
+          cctpDomain: null,
+        }),
+      ]),
+    );
   });
 });

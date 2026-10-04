@@ -14,6 +14,7 @@ import { LedgerController } from './ledger.controller';
 import { InvoiceService } from './invoice.service';
 import { LifecycleController } from './lifecycle.controller';
 import { LiquidityController } from './liquidity.controller';
+import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.service';
 import { LifecycleService } from './lifecycle.service';
 import { LiquidityService } from './liquidity.service';
 import { LedgerService } from './ledger.service';
@@ -59,6 +60,7 @@ import { TenantContextService } from './tenant-context.service';
     LedgerService,
     LifecycleService,
     LiquidityService,
+    LiquidityExecutionWorkerService,
     OnboardingService,
     PaymentExecutionService,
     PaymentExecutionWorkerService,

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
 import { PaymentExecutionWorkerService } from './payment-execution-worker.service';
+import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.service';
 import { loadRuntimeConfig } from './runtime.config';
 
 async function bootstrapWorker() {
@@ -17,11 +18,19 @@ async function bootstrapWorker() {
 
   const provisioning = app.get(ProvisioningWorkerService);
   const payments = app.get(PaymentExecutionWorkerService);
+  const liquidity = app.get(LiquidityExecutionWorkerService);
   const runProvisioning = async () => {
     try {
       await provisioning.processDueArcProvisioning();
     } catch (error) {
       logger.error('arc provisioning worker failed', error);
+    }
+  };
+  const runLiquidity = async () => {
+    try {
+      await liquidity.processDueLiquidityActions();
+    } catch (error) {
+      logger.error('liquidity execution worker failed', error);
     }
   };
   const runPayments = async () => {
@@ -34,9 +43,11 @@ async function bootstrapWorker() {
 
   await runProvisioning();
   await runPayments();
+  await runLiquidity();
   const interval = setInterval(() => {
     void runProvisioning();
     void runPayments();
+    void runLiquidity();
   }, 10_000);
 
   await new Promise<void>((resolve) => {

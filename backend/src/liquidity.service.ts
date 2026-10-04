@@ -5,9 +5,12 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
+import { buildCctpDepositForBurnCalldata } from './cctp-calldata';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { isEvmAddress } from './evm-decision-hash';
 import {
   ChainRoutePoint,
+  cctpRouteDetails,
   evaluateLiquidityAction,
   supportedNetworks,
 } from './liquidity-policy';
@@ -36,6 +39,7 @@ export interface LiquidityActionResponse {
   feeAtomic: string;
   quoteExpiresAt: string;
   providerReference: string | null;
+  providerPayload: Record<string, unknown>;
   failureReason: string | null;
 }
 
@@ -65,7 +69,12 @@ interface LiquidityActionRow {
   fee_atomic: string;
   quote_expires_at: Date;
   provider_reference: string | null;
+  provider_payload: Record<string, unknown>;
   failure_reason: string | null;
+}
+
+interface WalletBindingRow {
+  address: string | null;
 }
 
 @Injectable()
@@ -82,11 +91,7 @@ export class LiquidityService {
     if (!capability.executable) {
       throw new ConflictException(capability.reason);
     }
-    if (!liquiditySandboxEnabled()) {
-      throw new ConflictException(
-        'Liquidity provider adapter is not configured',
-      );
-    }
+    const mode = liquidityExecutionMode();
 
     const requestHash = hashStable(action);
     return this.database.withTenant(context, async (database) => {
@@ -104,7 +109,16 @@ export class LiquidityService {
         return mapAction(existing);
       }
 
-      const providerReference = `sim_${requestHash.slice(0, 24)}`;
+      const providerPayload = await buildProviderPayload(
+        database,
+        context.organizationId,
+        action,
+      );
+      const provider = mode === 'sandbox' ? 'sandbox' : 'cctp-v2';
+      const simulated = mode === 'sandbox';
+      const providerReference = simulated
+        ? `sim_${requestHash.slice(0, 24)}`
+        : null;
       const inserted = await database.query<LiquidityActionRow>(
         `
           INSERT INTO opes.liquidity_actions (
@@ -129,8 +143,8 @@ export class LiquidityService {
             requested_by_membership_id
           )
           VALUES (
-            $1, $2, $3, $4, 'sandbox', true, 'PLANNED', $5, $6, $7,
-            $8, $9, $10, $11, 0, $12, $13, $14::jsonb, $15
+            $1, $2, $3, $4, $5, $6, 'PLANNED', $7, $8, $9,
+            $10, $11, $12, $13, 0, $14, $15, $16::jsonb, $17
           )
           RETURNING
             id,
@@ -150,6 +164,7 @@ export class LiquidityService {
             fee_atomic::text AS fee_atomic,
             quote_expires_at,
             provider_reference,
+            provider_payload,
             failure_reason
         `,
         [
@@ -157,6 +172,8 @@ export class LiquidityService {
           action.actionType,
           action.idempotencyKey,
           requestHash,
+          provider,
+          simulated,
           action.source.environment,
           action.source.chainId,
           action.source.assetSymbol,
@@ -166,12 +183,17 @@ export class LiquidityService {
           action.amountAtomic,
           action.quoteExpiresAt,
           providerReference,
-          JSON.stringify({ capabilityReason: capability.reason }),
+          JSON.stringify({
+            capabilityReason: capability.reason,
+            ...providerPayload,
+          }),
           context.membershipId,
         ],
       );
 
-      return mapAction(requireRow(inserted.rows[0], 'liquidity action'));
+      const row = requireRow(inserted.rows[0], 'liquidity action');
+      await enqueueLiquidityAction(database, context.organizationId, row.id);
+      return mapAction(row);
     });
   }
 
@@ -219,6 +241,123 @@ export class LiquidityService {
   }
 }
 
+async function buildProviderPayload(
+  database: TenantDatabase,
+  organizationId: string,
+  action: LiquidityActionRequest,
+): Promise<Record<string, unknown>> {
+  if (action.actionType !== 'CCTP_TRANSFER') {
+    return { provider: 'gateway', status: 'not_configured' };
+  }
+  const route = cctpRouteDetails(action);
+  if (route === null) {
+    throw new ConflictException('CCTP route details are unavailable');
+  }
+  const sourceWallet = await getActiveWalletBinding(
+    database,
+    organizationId,
+    action.source.environment,
+  );
+  const destinationWallet = await getActiveWalletBinding(
+    database,
+    organizationId,
+    action.destination.environment,
+  );
+  if (!isEvmAddress(sourceWallet.address)) {
+    throw new ConflictException('Active source wallet binding is missing');
+  }
+  if (!isEvmAddress(destinationWallet.address)) {
+    throw new ConflictException('Active destination wallet binding is missing');
+  }
+
+  const calldata = buildCctpDepositForBurnCalldata({
+    amount: action.amountAtomic,
+    destinationDomain: route.destination.cctpDomain ?? 0,
+    mintRecipient: destinationWallet.address,
+    burnToken: route.source.cctpContracts?.usdc ?? '',
+  });
+
+  return {
+    provider: 'cctp-v2',
+    mode: 'standard',
+    source: {
+      environment: route.source.environment,
+      chainId: route.source.chainId,
+      domain: route.source.cctpDomain,
+      walletAddress: sourceWallet.address,
+      usdc: route.source.cctpContracts?.usdc,
+      tokenMessengerV2: route.source.cctpContracts?.tokenMessengerV2,
+    },
+    destination: {
+      environment: route.destination.environment,
+      chainId: route.destination.chainId,
+      domain: route.destination.cctpDomain,
+      walletAddress: destinationWallet.address,
+      usdc: route.destination.cctpContracts?.usdc,
+      messageTransmitterV2:
+        route.destination.cctpContracts?.messageTransmitterV2,
+    },
+    signerRequest: {
+      provider: 'circle',
+      chainId: route.source.chainId,
+      from: sourceWallet.address,
+      to: route.source.cctpContracts?.tokenMessengerV2,
+      data: calldata,
+      value: '0',
+    },
+  };
+}
+
+async function getActiveWalletBinding(
+  database: TenantDatabase,
+  organizationId: string,
+  environment: string,
+): Promise<WalletBindingRow> {
+  const result = await database.query<WalletBindingRow>(
+    `
+      SELECT address
+        FROM opes.tenant_resource_bindings
+       WHERE organization_id = $1
+         AND provider = 'circle'
+         AND environment = $2
+         AND resource_type = 'operator_wallet'
+         AND status = 'ACTIVE'
+       LIMIT 1
+    `,
+    [organizationId, environment],
+  );
+  return result.rows[0] ?? { address: null };
+}
+
+async function enqueueLiquidityAction(
+  database: TenantDatabase,
+  organizationId: string,
+  actionId: string,
+): Promise<void> {
+  await database.query(
+    `
+      INSERT INTO opes.outbox_events (
+        organization_id,
+        event_type,
+        aggregate_type,
+        aggregate_id,
+        payload
+      )
+      SELECT $1, 'liquidity.execute.cctp', 'liquidity_action', $2, '{}'::jsonb
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM opes.outbox_events
+         WHERE organization_id = $1
+           AND event_type = 'liquidity.execute.cctp'
+           AND aggregate_type = 'liquidity_action'
+           AND aggregate_id = $2
+           AND status IN ('PENDING', 'PROCESSING')
+      )
+    `,
+    [organizationId, actionId],
+  );
+}
+
 async function getExistingAction(
   database: TenantDatabase,
   organizationId: string,
@@ -244,6 +383,7 @@ async function getExistingAction(
         fee_atomic::text AS fee_atomic,
         quote_expires_at,
         provider_reference,
+        provider_payload,
         failure_reason
       FROM opes.liquidity_actions
       WHERE organization_id = $1
@@ -336,11 +476,16 @@ function requireLiquidityRole(context: TenantContext): void {
   }
 }
 
-function liquiditySandboxEnabled(): boolean {
-  if (loadRuntimeConfig().environment === 'production') {
-    return false;
+function liquidityExecutionMode(): 'sandbox' | 'live' {
+  if (loadRuntimeConfig().environment !== 'production') {
+    if (process.env.OPES_LIQUIDITY_SANDBOX === 'true') {
+      return 'sandbox';
+    }
   }
-  return process.env.OPES_LIQUIDITY_SANDBOX === 'true';
+  if (process.env.OPES_PAYMENT_SIGNER_URL?.trim()) {
+    return 'live';
+  }
+  throw new ConflictException('Liquidity provider adapter is not configured');
 }
 
 function mapAction(row: LiquidityActionRow): LiquidityActionResponse {
@@ -365,6 +510,7 @@ function mapAction(row: LiquidityActionRow): LiquidityActionResponse {
     feeAtomic: row.fee_atomic,
     quoteExpiresAt: row.quote_expires_at.toISOString(),
     providerReference: row.provider_reference,
+    providerPayload: row.provider_payload,
     failureReason: row.failure_reason,
   };
 }
