@@ -27,6 +27,7 @@ import {
   type UserOrganization,
 } from "@/lib/api";
 import { LifecycleWorkflows } from "./lifecycle-workflows";
+import { TreasuryAuditViews } from "./treasury-audit-views";
 import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
@@ -516,6 +517,13 @@ export function AuthenticatedShell() {
 
               {selectedOrganizationId !== "" ? (
                 <LifecycleWorkflows
+                  token={token}
+                  organizationId={selectedOrganizationId}
+                />
+              ) : null}
+
+              {selectedOrganizationId !== "" ? (
+                <TreasuryAuditViews
                   token={token}
                   organizationId={selectedOrganizationId}
                 />

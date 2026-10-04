@@ -632,3 +632,94 @@ export async function disputeMilestone(
     { method: "POST", body: JSON.stringify({ reason }) },
   );
 }
+
+export interface LiquidityActionResponse {
+  id: string;
+  actionType: string;
+  idempotencyKey: string;
+  provider: string;
+  simulated: boolean;
+  status: string;
+  source: { environment: string; chainId: number; assetSymbol: string };
+  destination: { environment: string; chainId: number; assetSymbol: string };
+  amountAtomic: string;
+  feeAtomic: string;
+  quoteExpiresAt: string;
+  providerReference: string | null;
+  providerPayload: Record<string, unknown>;
+  failureReason: string | null;
+}
+
+export interface TreasuryPositionResponse {
+  assetSymbol: "USDC";
+  committedPayablesAtomic: string;
+  approvedUnsettledPaymentAtomic: string;
+  plannedLiquidityAtomic: string;
+  supportedNetworks: unknown[];
+}
+
+export interface LedgerEntryResponse {
+  id: string;
+  ledgerEventType: string;
+  ledgerEventId: string;
+  lineNumber: number;
+  account: string;
+  direction: string;
+  assetSymbol: string;
+  amountAtomic: string;
+  sourceType: string;
+  sourceId: string;
+  sourceVersionId: string | null;
+  counterpartyId: string | null;
+  transactionHash: string | null;
+}
+
+export async function getTreasuryPosition(token: string, organizationId: string) {
+  return request<TreasuryPositionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/treasury/position`,
+    token,
+  );
+}
+
+export async function planLiquidityAction(
+  token: string,
+  organizationId: string,
+  input: {
+    actionType: "GATEWAY_TRANSFER" | "CCTP_TRANSFER";
+    idempotencyKey: string;
+    source: { environment: string; chainId: number; assetSymbol: string };
+    destination: { environment: string; chainId: number; assetSymbol: string };
+    amountAtomic: string;
+    quoteExpiresAt: string;
+  },
+) {
+  return request<LiquidityActionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/liquidity-actions`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function projectInvoiceAccrual(
+  token: string,
+  organizationId: string,
+  invoiceVersionId: string,
+) {
+  return request<LedgerEntryResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/ledger/invoice-versions/${encodeURIComponent(invoiceVersionId)}/accrue`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function projectPaymentSettlement(
+  token: string,
+  organizationId: string,
+  executionId: string,
+) {
+  return request<LedgerEntryResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/ledger/payment-executions/${encodeURIComponent(executionId)}/settle`,
+    token,
+    { method: "POST" },
+  );
+}
