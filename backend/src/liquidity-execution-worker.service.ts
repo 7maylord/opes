@@ -16,8 +16,13 @@ interface LiquidityWorkRow {
   organization_id: string;
   action_type: string;
   status: string;
+  source_environment: string;
   source_chain_id: number;
+  source_asset_symbol: string;
+  destination_environment: string;
   destination_chain_id: number;
+  destination_asset_symbol: string;
+  amount_atomic: string;
   provider_payload: Record<string, unknown>;
 }
 
@@ -51,7 +56,44 @@ interface GatewaySignerRequest {
   liquidityActionId: string;
 }
 
-type SignerRequest = ContractSignerRequest | GatewaySignerRequest;
+interface GatewayStatusRequest {
+  provider: 'circle-gateway';
+  action: 'getTransferStatus';
+  transferId: string;
+  destinationChainId: number;
+  idempotencyKey: string;
+  liquidityActionId: string;
+}
+
+interface SwapSignerRequest {
+  provider: 'swap';
+  action: 'swapExactInput';
+  chainId: number;
+  from: string;
+  router: string;
+  inputToken: string;
+  outputToken: string;
+  amountInAtomic: string;
+  minimumOutputAtomic: string;
+  idempotencyKey: string;
+  liquidityActionId: string;
+}
+
+interface SwapStatusRequest {
+  provider: 'swap';
+  action: 'getSwapStatus';
+  chainId: number;
+  transactionHash: string;
+  idempotencyKey: string;
+  liquidityActionId: string;
+}
+
+type SignerRequest =
+  | ContractSignerRequest
+  | GatewaySignerRequest
+  | GatewayStatusRequest
+  | SwapSignerRequest
+  | SwapStatusRequest;
 
 interface AttestationResponse {
   status?: unknown;
@@ -76,6 +118,16 @@ interface CctpSourceMessage {
 interface GatewaySubmissionResponse {
   providerReference: string;
   transactionHash: string | null;
+}
+
+interface SwapSubmissionResponse {
+  transactionHash: string;
+  outputAmountAtomic: string | null;
+}
+
+interface SwapStatusResponse {
+  complete: boolean;
+  outputAmountAtomic: string | null;
 }
 
 class SignerUnavailableError extends Error {}
@@ -141,8 +193,19 @@ export class LiquidityExecutionWorkerService {
       return;
     }
 
-    if (action.action_type === 'GATEWAY_TRANSFER') {
+    if (
+      action.action_type === 'GATEWAY_TRANSFER' &&
+      action.status === 'PLANNED'
+    ) {
       await this.processGatewayTransfer(event, action);
+      return;
+    }
+
+    if (
+      action.action_type === 'GATEWAY_TRANSFER' &&
+      action.status === 'SUBMITTED'
+    ) {
+      await this.reconcileGatewayTransfer(event, action);
       return;
     }
 
@@ -158,6 +221,21 @@ export class LiquidityExecutionWorkerService {
 
     if (action.status === 'ATTESTED') {
       await this.submitDestinationMint(event, action);
+      return;
+    }
+
+    if (action.status === 'MINTED') {
+      await this.settleMintedLiquidity(event, action);
+      return;
+    }
+
+    if (action.status === 'SWAP_SUBMITTED') {
+      await this.reconcileDestinationSwap(event, action);
+      return;
+    }
+
+    if (action.status === 'SWAPPED') {
+      await this.confirmLiquiditySettlement(event, action);
       return;
     }
 
@@ -197,6 +275,113 @@ export class LiquidityExecutionWorkerService {
       await this.failLiquidityAction(
         event,
         error instanceof Error ? error.message : 'Gateway signer failed',
+      );
+    }
+  }
+
+  private async reconcileGatewayTransfer(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    try {
+      const response = await submitGatewayStatusRequest(
+        buildGatewayStatusRequest(action),
+      );
+      if (response.transactionHash === null) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      const refreshed = await this.recordGatewayMinted(
+        event,
+        response.transactionHash,
+      );
+      await this.settleMintedLiquidity(event, refreshed);
+    } catch (error) {
+      if (error instanceof SourceReceiptPendingError) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      if (error instanceof UnknownSubmissionError) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error
+          ? error.message
+          : 'Gateway reconciliation failed',
+      );
+    }
+  }
+
+  private async settleMintedLiquidity(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    try {
+      await assertDestinationTransactionSucceeded(action);
+      if (hasDestinationSwap(action)) {
+        const response = await submitSwapSignerRequest(
+          buildDestinationSwapRequest(action),
+        );
+        if (response.outputAmountAtomic === null) {
+          await this.recordSwapSubmitted(event, response.transactionHash);
+          return;
+        }
+        const refreshed = await this.recordSwapped(
+          event,
+          response.transactionHash,
+          response.outputAmountAtomic,
+        );
+        await this.confirmLiquiditySettlement(event, refreshed);
+        return;
+      }
+      await this.confirmLiquiditySettlement(event, action);
+    } catch (error) {
+      if (error instanceof SourceReceiptPendingError) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      if (error instanceof UnknownSubmissionError) {
+        await this.recordUnknown(event, 'Liquidity swap submission is unknown');
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'Liquidity settlement failed',
+      );
+    }
+  }
+
+  private async reconcileDestinationSwap(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    try {
+      const response = await submitSwapStatusRequest(
+        buildSwapStatusRequest(action),
+      );
+      if (!response.complete || response.outputAmountAtomic === null) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      const refreshed = await this.recordSwapped(
+        event,
+        requireHex32(
+          action.provider_payload.destinationSwapTransactionHash,
+          'destinationSwapTransactionHash',
+        ),
+        response.outputAmountAtomic,
+      );
+      await this.confirmLiquiditySettlement(event, refreshed);
+    } catch (error) {
+      if (error instanceof UnknownSubmissionError) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'Liquidity swap failed',
       );
     }
   }
@@ -322,8 +507,13 @@ export class LiquidityExecutionWorkerService {
              organization_id,
              action_type,
              status,
+             source_environment,
              source_chain_id,
+             source_asset_symbol,
+             destination_environment,
              destination_chain_id,
+             destination_asset_symbol,
+             amount_atomic::text AS amount_atomic,
              provider_payload
            FROM opes.liquidity_actions
            WHERE organization_id = $1
@@ -332,7 +522,14 @@ export class LiquidityExecutionWorkerService {
                    ($3 = 'liquidity.execute.cctp' AND action_type = 'CCTP_TRANSFER')
                 OR ($3 = 'liquidity.execute.gateway' AND action_type = 'GATEWAY_TRANSFER')
              )
-             AND status IN ('PLANNED', 'SUBMITTED', 'ATTESTED')
+             AND status IN (
+               'PLANNED',
+               'SUBMITTED',
+               'ATTESTED',
+               'MINTED',
+               'SWAP_SUBMITTED',
+               'SWAPPED'
+             )
            LIMIT 1
         `,
         [event.organization_id, event.aggregate_id, event.event_type],
@@ -379,6 +576,52 @@ export class LiquidityExecutionWorkerService {
         ],
       );
       await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        'liquidity.execute.gateway',
+        status === 'MINTED' ? 15 : 60,
+      );
+    });
+  }
+
+  private async recordGatewayMinted(
+    event: OutboxEventRow,
+    transactionHash: string,
+  ): Promise<LiquidityWorkRow> {
+    return this.database.withWorker(async (database) => {
+      const result = await database.query<LiquidityWorkRow>(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = 'MINTED',
+                 provider_payload = provider_payload || jsonb_build_object(
+                   'destinationMintTransactionHash', $3::text
+                 ),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+           RETURNING
+             id,
+             organization_id,
+             action_type,
+             status,
+             source_environment,
+             source_chain_id,
+             source_asset_symbol,
+             destination_environment,
+             destination_chain_id,
+             destination_asset_symbol,
+             amount_atomic::text AS amount_atomic,
+             provider_payload
+        `,
+        [event.organization_id, event.aggregate_id, transactionHash],
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        throw new Error('Expected minted liquidity action row');
+      }
+      return row;
     });
   }
 
@@ -433,8 +676,13 @@ export class LiquidityExecutionWorkerService {
              organization_id,
              action_type,
              status,
+             source_environment,
              source_chain_id,
+             source_asset_symbol,
+             destination_environment,
              destination_chain_id,
+             destination_asset_symbol,
+             amount_atomic::text AS amount_atomic,
              provider_payload
         `,
         [
@@ -472,8 +720,13 @@ export class LiquidityExecutionWorkerService {
              organization_id,
              action_type,
              status,
+             source_environment,
              source_chain_id,
+             source_asset_symbol,
+             destination_environment,
              destination_chain_id,
+             destination_asset_symbol,
+             amount_atomic::text AS amount_atomic,
              provider_payload
         `,
         [event.organization_id, event.aggregate_id, attestation],
@@ -498,12 +751,114 @@ export class LiquidityExecutionWorkerService {
                  provider_payload = provider_payload || jsonb_build_object(
                    'destinationMintTransactionHash', $3::text
                  ),
-                 confirmed_at = now(),
                  updated_at = now()
            WHERE organization_id = $1
              AND id = $2
         `,
         [event.organization_id, event.aggregate_id, transactionHash],
+      );
+      await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        'liquidity.execute.cctp',
+        15,
+      );
+    });
+  }
+
+  private async recordSwapSubmitted(
+    event: OutboxEventRow,
+    transactionHash: string,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = 'SWAP_SUBMITTED',
+                 provider_payload = provider_payload || jsonb_build_object(
+                   'destinationSwapTransactionHash', $3::text
+                 ),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+        `,
+        [event.organization_id, event.aggregate_id, transactionHash],
+      );
+      await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        event.event_type,
+        60,
+      );
+    });
+  }
+
+  private async recordSwapped(
+    event: OutboxEventRow,
+    transactionHash: string,
+    outputAmountAtomic: string,
+  ): Promise<LiquidityWorkRow> {
+    return this.database.withWorker(async (database) => {
+      const result = await database.query<LiquidityWorkRow>(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = 'SWAPPED',
+                 provider_payload = provider_payload || jsonb_build_object(
+                   'destinationSwapTransactionHash', $3::text,
+                   'destinationSwapOutputAmountAtomic', $4::text
+                 ),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+           RETURNING
+             id,
+             organization_id,
+             action_type,
+             status,
+             source_environment,
+             source_chain_id,
+             source_asset_symbol,
+             destination_environment,
+             destination_chain_id,
+             destination_asset_symbol,
+             amount_atomic::text AS amount_atomic,
+             provider_payload
+        `,
+        [
+          event.organization_id,
+          event.aggregate_id,
+          transactionHash,
+          outputAmountAtomic,
+        ],
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        throw new Error('Expected swapped liquidity action row');
+      }
+      return row;
+    });
+  }
+
+  private async confirmLiquiditySettlement(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await insertLiquidityLedger(database, action);
+      await database.query(
+        `
+          UPDATE opes.liquidity_actions
+             SET status = 'CONFIRMED',
+                 confirmed_at = now(),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+        `,
+        [event.organization_id, event.aggregate_id],
       );
       await markOutboxProcessed(database, event.id);
     });
@@ -686,6 +1041,74 @@ function buildGatewayTransferRequest(
   return gatewayRequest;
 }
 
+function buildGatewayStatusRequest(
+  action: LiquidityWorkRow,
+): GatewayStatusRequest {
+  return {
+    provider: 'circle-gateway',
+    action: 'getTransferStatus',
+    transferId: requireText(
+      action.provider_payload.gatewayTransferReference,
+      'gatewayTransferReference',
+    ),
+    destinationChainId: action.destination_chain_id,
+    idempotencyKey: `${action.id}:gateway-status`,
+    liquidityActionId: action.id,
+  };
+}
+
+function buildDestinationSwapRequest(
+  action: LiquidityWorkRow,
+): SwapSignerRequest {
+  const destination = objectAt(
+    action.provider_payload.destination,
+    'destination',
+  );
+  const swap = objectAt(
+    action.provider_payload.destinationSwap,
+    'destinationSwap',
+  );
+  return {
+    provider: 'swap',
+    action: 'swapExactInput',
+    chainId: action.destination_chain_id,
+    from: requireAddress(
+      destination.walletAddress,
+      'destination.walletAddress',
+    ),
+    router: requireAddress(swap.router, 'destinationSwap.router'),
+    inputToken: requireAddress(swap.inputToken, 'destinationSwap.inputToken'),
+    outputToken: requireAddress(
+      swap.outputToken,
+      'destinationSwap.outputToken',
+    ),
+    amountInAtomic: requireIntegerString(
+      swap.inputAmountAtomic,
+      'destinationSwap.inputAmountAtomic',
+    ),
+    minimumOutputAtomic: requireIntegerString(
+      swap.minimumOutputAtomic,
+      'destinationSwap.minimumOutputAtomic',
+    ),
+    idempotencyKey: `${action.id}:swap`,
+    liquidityActionId: action.id,
+  };
+}
+
+function buildSwapStatusRequest(action: LiquidityWorkRow): SwapStatusRequest {
+  return {
+    provider: 'swap',
+    action: 'getSwapStatus',
+    chainId: action.destination_chain_id,
+    transactionHash: requireHex32(
+      action.provider_payload.destinationSwapTransactionHash,
+      'destinationSwapTransactionHash',
+    ),
+    idempotencyKey: `${action.id}:swap-status`,
+    liquidityActionId: action.id,
+  };
+}
+
 async function fetchSourceMessage(
   action: LiquidityWorkRow,
 ): Promise<CctpSourceMessage> {
@@ -758,8 +1181,18 @@ function errorMessage(error: { message?: unknown }): string {
 }
 
 function sourceReceiptRpcUrl(payload: Record<string, unknown>): string {
-  const source = objectAt(payload.source, 'source');
-  const environment = requireText(source.environment, 'source.environment');
+  return routeRpcUrl(payload, 'source');
+}
+
+function routeRpcUrl(
+  payload: Record<string, unknown>,
+  routePoint: 'source' | 'destination',
+): string {
+  const point = objectAt(payload[routePoint], routePoint);
+  const environment = requireText(
+    point.environment,
+    `${routePoint}.environment`,
+  );
   const envName = `OPES_RPC_${environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
   const url = process.env[envName]?.trim();
   if (url === undefined || url === '') {
@@ -811,6 +1244,32 @@ function hasSourceMessage(action: LiquidityWorkRow): boolean {
     typeof action.provider_payload.sourceMessage === 'string' &&
     typeof action.provider_payload.sourceMessageHash === 'string'
   );
+}
+
+function hasDestinationSwap(action: LiquidityWorkRow): boolean {
+  return (
+    action.provider_payload.destinationSwap !== null &&
+    typeof action.provider_payload.destinationSwap === 'object'
+  );
+}
+
+async function assertDestinationTransactionSucceeded(
+  action: LiquidityWorkRow,
+): Promise<void> {
+  const transactionHash = requireHex32(
+    action.provider_payload.destinationMintTransactionHash,
+    'destinationMintTransactionHash',
+  );
+  const receipt = await fetchTransactionReceipt(
+    routeRpcUrl(action.provider_payload, 'destination'),
+    transactionHash,
+  );
+  if (receipt === null) {
+    throw new SourceReceiptPendingError('Destination mint receipt is pending');
+  }
+  if (receipt.status !== '0x1') {
+    throw new Error('Destination mint transaction failed');
+  }
 }
 
 async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
@@ -880,6 +1339,73 @@ async function submitGatewaySignerRequest(
   return {
     providerReference,
     transactionHash,
+  };
+}
+
+async function submitGatewayStatusRequest(
+  request: GatewayStatusRequest,
+): Promise<GatewaySubmissionResponse> {
+  const body = await submitSignerRequestBody(request);
+  const pending =
+    typeof body.status === 'string' &&
+    ['pending', 'submitted', 'processing'].includes(body.status.toLowerCase());
+  if (pending) {
+    return {
+      providerReference: request.transferId,
+      transactionHash: null,
+    };
+  }
+  const transactionHash =
+    typeof body.transactionHash === 'string' &&
+    /^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
+      ? body.transactionHash.toLowerCase()
+      : null;
+  if (transactionHash === null) {
+    throw new UnknownSubmissionError('Gateway transfer status is unknown');
+  }
+  return {
+    providerReference: request.transferId,
+    transactionHash,
+  };
+}
+
+async function submitSwapSignerRequest(
+  request: SwapSignerRequest,
+): Promise<SwapSubmissionResponse> {
+  const body = await submitSignerRequestBody(request);
+  const transactionHash =
+    typeof body.transactionHash === 'string' &&
+    /^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
+      ? body.transactionHash.toLowerCase()
+      : null;
+  if (transactionHash === null) {
+    throw new Error('Payment signer returned an invalid swap transaction hash');
+  }
+  return {
+    transactionHash,
+    outputAmountAtomic:
+      body.outputAmountAtomic === undefined
+        ? null
+        : requireIntegerString(body.outputAmountAtomic, 'outputAmountAtomic'),
+  };
+}
+
+async function submitSwapStatusRequest(
+  request: SwapStatusRequest,
+): Promise<SwapStatusResponse> {
+  const body = await submitSignerRequestBody(request);
+  const complete =
+    typeof body.status === 'string' &&
+    ['complete', 'confirmed', 'success'].includes(body.status.toLowerCase());
+  if (!complete) {
+    return { complete: false, outputAmountAtomic: null };
+  }
+  return {
+    complete: true,
+    outputAmountAtomic: requireIntegerString(
+      body.outputAmountAtomic,
+      'outputAmountAtomic',
+    ),
   };
 }
 
@@ -953,6 +1479,108 @@ async function markOutboxProcessed(
   await work(databaseOrService);
 }
 
+async function insertLiquidityLedger(
+  database: TenantDatabase,
+  action: LiquidityWorkRow,
+): Promise<void> {
+  const destinationMintHash = requireHex32(
+    action.provider_payload.destinationMintTransactionHash,
+    'destinationMintTransactionHash',
+  );
+  await database.query(
+    `
+      INSERT INTO opes.ledger_entries (
+        organization_id,
+        ledger_event_type,
+        ledger_event_id,
+        line_number,
+        account,
+        direction,
+        asset_symbol,
+        amount_atomic,
+        source_type,
+        source_id,
+        source_version_id,
+        counterparty_id,
+        transaction_hash
+      )
+      VALUES
+        ($1, 'LIQUIDITY_SETTLED', $2, 1, $3, 'DEBIT', 'USDC', $5, 'LIQUIDITY_ACTION', $2, NULL, NULL, $6),
+        ($1, 'LIQUIDITY_SETTLED', $2, 2, $4, 'CREDIT', 'USDC', $5, 'LIQUIDITY_ACTION', $2, NULL, NULL, $6)
+      ON CONFLICT (organization_id, ledger_event_type, ledger_event_id, line_number)
+      DO UPDATE SET metadata = opes.ledger_entries.metadata
+    `,
+    [
+      action.organization_id,
+      action.id,
+      liquidityAssetAccount(action.destination_environment, 'USDC'),
+      liquidityAssetAccount(action.source_environment, 'USDC'),
+      action.amount_atomic,
+      destinationMintHash,
+    ],
+  );
+
+  if (!hasDestinationSwap(action)) {
+    return;
+  }
+
+  const outputAmount = requireIntegerString(
+    action.provider_payload.destinationSwapOutputAmountAtomic,
+    'destinationSwapOutputAmountAtomic',
+  );
+  const minimumOutput = requireIntegerString(
+    objectAt(action.provider_payload.destinationSwap, 'destinationSwap')
+      .minimumOutputAtomic,
+    'destinationSwap.minimumOutputAtomic',
+  );
+  if (BigInt(outputAmount) < BigInt(minimumOutput)) {
+    throw new Error('Destination swap output is below the authorized minimum');
+  }
+  const swapHash = requireHex32(
+    action.provider_payload.destinationSwapTransactionHash,
+    'destinationSwapTransactionHash',
+  );
+  await database.query(
+    `
+      INSERT INTO opes.ledger_entries (
+        organization_id,
+        ledger_event_type,
+        ledger_event_id,
+        line_number,
+        account,
+        direction,
+        asset_symbol,
+        amount_atomic,
+        source_type,
+        source_id,
+        source_version_id,
+        counterparty_id,
+        transaction_hash
+      )
+      VALUES
+        ($1, 'LIQUIDITY_SWAP_SETTLED', $2, 1, $3, 'CREDIT', 'USDC', $5, 'LIQUIDITY_ACTION', $2, NULL, NULL, $7),
+        ($1, 'LIQUIDITY_SWAP_SETTLED', $2, 2, 'CLEARING:LIQUIDITY_SWAP_USDC', 'DEBIT', 'USDC', $5, 'LIQUIDITY_ACTION', $2, NULL, NULL, $7),
+        ($1, 'LIQUIDITY_SWAP_SETTLED', $2, 3, $4, 'DEBIT', 'USDT', $6, 'LIQUIDITY_ACTION', $2, NULL, NULL, $7),
+        ($1, 'LIQUIDITY_SWAP_SETTLED', $2, 4, 'CLEARING:LIQUIDITY_SWAP_USDT', 'CREDIT', 'USDT', $6, 'LIQUIDITY_ACTION', $2, NULL, NULL, $7)
+      ON CONFLICT (organization_id, ledger_event_type, ledger_event_id, line_number)
+      DO UPDATE SET metadata = opes.ledger_entries.metadata
+    `,
+    [
+      action.organization_id,
+      action.id,
+      liquidityAssetAccount(action.destination_environment, 'USDC'),
+      liquidityAssetAccount(action.destination_environment, 'USDT'),
+      action.amount_atomic,
+      outputAmount,
+      swapHash,
+    ],
+  );
+}
+
+function liquidityAssetAccount(environment: string, asset: string): string {
+  return `ASSET:${environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}:${asset}`;
+}
+
 async function markOutboxFailed(
   database: TenantDatabase,
   eventId: string,
@@ -975,6 +1603,8 @@ async function enqueueLiquidityAction(
   database: TenantDatabase,
   organizationId: string,
   actionId: string,
+  eventType = 'liquidity.execute.cctp',
+  delaySeconds = 15,
 ): Promise<void> {
   await database.query(
     `
@@ -986,19 +1616,19 @@ async function enqueueLiquidityAction(
         payload,
         available_at
       )
-      SELECT $1, 'liquidity.execute.cctp', 'liquidity_action', $2, '{}'::jsonb,
-             now() + interval '15 seconds'
+      SELECT $1, $3, 'liquidity_action', $2, '{}'::jsonb,
+             now() + ($4::text || ' seconds')::interval
       WHERE NOT EXISTS (
         SELECT 1
           FROM opes.outbox_events
          WHERE organization_id = $1
-           AND event_type = 'liquidity.execute.cctp'
+           AND event_type = $3
            AND aggregate_type = 'liquidity_action'
            AND aggregate_id = $2
            AND status IN ('PENDING', 'PROCESSING')
       )
     `,
-    [organizationId, actionId],
+    [organizationId, actionId, eventType, delaySeconds.toString()],
   );
 }
 

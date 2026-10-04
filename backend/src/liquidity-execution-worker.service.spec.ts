@@ -29,8 +29,13 @@ function workRow(overrides: Record<string, unknown> = {}) {
     organization_id: 'organization-1',
     action_type: 'CCTP_TRANSFER',
     status: 'PLANNED',
+    source_environment: 'arc-mainnet',
     source_chain_id: 5042001,
+    source_asset_symbol: 'USDC',
+    destination_environment: 'arbitrum-mainnet',
     destination_chain_id: 42161,
+    destination_asset_symbol: 'USDC',
+    amount_atomic: '25000000',
     provider_payload: {
       source: {
         environment: 'arc-mainnet',
@@ -93,6 +98,31 @@ function recordingQuery(
         },
       ]);
     }
+    if (text.includes("SET status = 'MINTED'")) {
+      return queryResult([
+        {
+          ...work,
+          status: 'MINTED',
+          provider_payload: {
+            ...(work?.provider_payload as Record<string, unknown>),
+            destinationMintTransactionHash: values?.[2],
+          },
+        },
+      ]);
+    }
+    if (text.includes("SET status = 'SWAPPED'")) {
+      return queryResult([
+        {
+          ...work,
+          status: 'SWAPPED',
+          provider_payload: {
+            ...(work?.provider_payload as Record<string, unknown>),
+            destinationSwapTransactionHash: values?.[2],
+            destinationSwapOutputAmountAtomic: values?.[3],
+          },
+        },
+      ]);
+    }
     if (
       text.includes("'sourceMessage', $3::text") &&
       text.includes("'sourceMessageHash', $4::text")
@@ -134,13 +164,21 @@ function pad64(value: string): string {
   return value.padStart(64, '0');
 }
 
-function gatewayWorkRow() {
+function gatewayWorkRow(overrides: Record<string, unknown> = {}) {
   return workRow({
     action_type: 'GATEWAY_TRANSFER',
     status: 'PLANNED',
+    source_environment: 'arc-mainnet',
     source_chain_id: 5042001,
+    source_asset_symbol: 'USDC',
+    destination_environment: 'base-mainnet',
     destination_chain_id: 8453,
+    destination_asset_symbol: 'USDT',
     provider_payload: {
+      destination: {
+        environment: 'base-mainnet',
+        walletAddress: '0x0000000000000000000000000000000000000002',
+      },
       gatewayRequest: {
         provider: 'circle-gateway',
         action: 'transferUnifiedUsdc',
@@ -160,11 +198,24 @@ function gatewayWorkRow() {
           router: '0x0000000000000000000000000000000000000004',
           inputToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
           outputToken: '0x0000000000000000000000000000000000000003',
+          inputAmountAtomic: '25000000',
+          minimumOutputAtomic: '24750000',
           inputAssetSymbol: 'USDC',
           outputAssetSymbol: 'USDT',
         },
       },
+      destinationSwap: {
+        provider: 'configured',
+        router: '0x0000000000000000000000000000000000000004',
+        inputToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        outputToken: '0x0000000000000000000000000000000000000003',
+        inputAmountAtomic: '25000000',
+        minimumOutputAtomic: '24750000',
+        inputAssetSymbol: 'USDC',
+        outputAssetSymbol: 'USDT',
+      },
     },
+    ...overrides,
   });
 }
 
@@ -172,6 +223,7 @@ describe('LiquidityExecutionWorkerService', () => {
   const originalUrl = process.env.OPES_PAYMENT_SIGNER_URL;
   const originalAttestationUrl = process.env.OPES_CCTP_ATTESTATION_URL;
   const originalArcRpc = process.env.OPES_RPC_ARC_MAINNET;
+  const originalBaseRpc = process.env.OPES_RPC_BASE_MAINNET;
   const originalFetch = global.fetch;
 
   afterEach(() => {
@@ -189,6 +241,11 @@ describe('LiquidityExecutionWorkerService', () => {
       delete process.env.OPES_RPC_ARC_MAINNET;
     } else {
       process.env.OPES_RPC_ARC_MAINNET = originalArcRpc;
+    }
+    if (originalBaseRpc === undefined) {
+      delete process.env.OPES_RPC_BASE_MAINNET;
+    } else {
+      process.env.OPES_RPC_BASE_MAINNET = originalBaseRpc;
     }
     global.fetch = originalFetch;
   });
@@ -226,8 +283,9 @@ describe('LiquidityExecutionWorkerService', () => {
     expect(
       queries.some(
         (item) =>
-          item.text.includes('liquidity.execute.cctp') &&
-          item.text.includes("interval '15 seconds'"),
+          item.text.includes('INSERT INTO opes.outbox_events') &&
+          item.values?.includes('liquidity.execute.cctp') &&
+          item.values?.includes('15'),
       ),
     ).toBe(true);
   });
@@ -273,6 +331,69 @@ describe('LiquidityExecutionWorkerService', () => {
           item.text.includes('SET status = $3') &&
           item.values?.includes('MINTED') &&
           item.values?.includes('gateway-transfer-1'),
+      ),
+    ).toBe(true);
+  });
+
+  it('submits the configured Base swap and posts liquidity ledger entries', async () => {
+    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.OPES_RPC_BASE_MAINNET = 'https://base-rpc.example.test';
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ result: { status: '0x1', logs: [] } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            transactionHash: `0x${'d'.repeat(64)}`,
+            outputAmountAtomic: '24900000',
+          }),
+      });
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        gatewayWorkRow({
+          status: 'MINTED',
+          provider_payload: {
+            ...(gatewayWorkRow().provider_payload as Record<string, unknown>),
+            destinationMintTransactionHash: `0x${'c'.repeat(64)}`,
+          },
+        }),
+      ),
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    const calls = (global.fetch as jest.MockedFunction<typeof fetch>).mock
+      .calls;
+    expect(calls[0]?.[0]).toBe('https://base-rpc.example.test');
+    const requestInit = calls[1]?.[1];
+    if (
+      requestInit === undefined ||
+      typeof requestInit !== 'object' ||
+      typeof requestInit.body !== 'string'
+    ) {
+      throw new Error('expected swap request body');
+    }
+    const body = JSON.parse(requestInit.body) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      provider: 'swap',
+      action: 'swapExactInput',
+      chainId: 8453,
+      amountInAtomic: '25000000',
+      minimumOutputAtomic: '24750000',
+    });
+    expect(
+      queries.some((item) => item.text.includes("'LIQUIDITY_SWAP_SETTLED'")),
+    ).toBe(true);
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes("SET status = 'CONFIRMED'") &&
+          item.values?.includes('action-1'),
       ),
     ).toBe(true);
   });

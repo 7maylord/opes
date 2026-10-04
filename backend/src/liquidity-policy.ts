@@ -23,6 +23,7 @@ export interface BaseSwapRoute {
   router: string;
   inputToken: string;
   outputToken: string;
+  minimumOutputBps: number;
   inputAssetSymbol: 'USDC';
   outputAssetSymbol: 'USDT';
 }
@@ -346,12 +347,16 @@ export function baseUsdcToUsdtSwapRouteDetails(
   const provider = process.env[`${prefix}_USDC_USDT_SWAP_PROVIDER`]?.trim();
   const router = process.env[`${prefix}_USDC_USDT_SWAP_ROUTER`]?.trim();
   const outputToken = process.env[`${prefix}_USDT_ADDRESS`]?.trim();
+  const minimumOutputBps = parseMinimumOutputBps(
+    process.env[`${prefix}_USDC_USDT_MIN_OUTPUT_BPS`],
+  );
   const inputToken = network.cctpContracts?.usdc;
   if (
     provider === undefined ||
     provider === '' ||
     !isAddress(router) ||
     !isAddress(outputToken) ||
+    minimumOutputBps === null ||
     inputToken === undefined
   ) {
     return null;
@@ -361,6 +366,7 @@ export function baseUsdcToUsdtSwapRouteDetails(
     router,
     inputToken,
     outputToken,
+    minimumOutputBps,
     inputAssetSymbol: 'USDC',
     outputAssetSymbol: 'USDT',
   };
@@ -435,4 +441,15 @@ function usdcOnlyNetwork(
 
 function isAddress(value: string | undefined): value is string {
   return value !== undefined && /^0x[0-9a-fA-F]{40}$/.test(value);
+}
+
+function parseMinimumOutputBps(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === '') {
+    return 9900;
+  }
+  const bps = Number(value);
+  if (!Number.isInteger(bps) || bps <= 0 || bps > 10000) {
+    return null;
+  }
+  return bps;
 }

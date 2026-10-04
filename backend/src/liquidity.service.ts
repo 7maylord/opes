@@ -429,6 +429,17 @@ async function buildGatewayProviderPayload(
     action.destination.assetSymbol === 'USDT'
       ? baseUsdcToUsdtSwapRouteDetails(action.destination)
       : null;
+  const destinationSwapPayload =
+    destinationSwap === null
+      ? null
+      : {
+          ...destinationSwap,
+          inputAmountAtomic: action.amountAtomic,
+          minimumOutputAtomic: minimumOutputAtomic(
+            action.amountAtomic,
+            destinationSwap.minimumOutputBps,
+          ),
+        };
 
   return {
     provider: 'circle-gateway',
@@ -453,7 +464,7 @@ async function buildGatewayProviderPayload(
       usdc: route.destination.gatewayContracts?.usdc,
       gatewayMinter: route.destination.gatewayContracts?.gatewayMinter,
     },
-    destinationSwap,
+    destinationSwap: destinationSwapPayload,
     gatewayRequest: {
       provider: 'circle-gateway',
       action: 'transferUnifiedUsdc',
@@ -468,9 +479,13 @@ async function buildGatewayProviderPayload(
       amountAtomic: action.amountAtomic,
       quoteExpiresAt: action.quoteExpiresAt,
       gatewayApiUrl: gatewayApiUrl(route.source.tier),
-      destinationSwap,
+      destinationSwap: destinationSwapPayload,
     },
   };
+}
+
+function minimumOutputAtomic(amountAtomic: string, bps: number): string {
+  return ((BigInt(amountAtomic) * BigInt(bps)) / 10_000n).toString();
 }
 
 async function getActiveWalletBinding(
