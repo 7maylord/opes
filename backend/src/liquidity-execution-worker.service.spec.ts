@@ -1,3 +1,4 @@
+import { keccak_256 } from '@noble/hashes/sha3.js';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.service';
 
@@ -30,7 +31,11 @@ function workRow(overrides: Record<string, unknown> = {}) {
     source_chain_id: 5042001,
     destination_chain_id: 42161,
     provider_payload: {
-      source: { tier: 'mainnet' },
+      source: {
+        environment: 'arc-mainnet',
+        tier: 'mainnet',
+        messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+      },
       destination: {
         walletAddress: '0x0000000000000000000000000000000000000002',
         messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
@@ -82,13 +87,50 @@ function recordingQuery(
         },
       ]);
     }
+    if (
+      text.includes("'sourceMessage', $3::text") &&
+      text.includes("'sourceMessageHash', $4::text")
+    ) {
+      return queryResult([
+        {
+          ...workRow({ status: 'SUBMITTED' }),
+          provider_payload: {
+            ...(work?.provider_payload as Record<string, unknown>),
+            sourceMessage: values?.[2],
+            sourceMessageHash: values?.[3],
+          },
+        },
+      ]);
+    }
     return queryResult([]);
   });
+}
+
+function hashHexBytes(value: string): string {
+  return `0x${Buffer.from(
+    keccak_256(Buffer.from(value.slice(2), 'hex')),
+  ).toString('hex')}`;
+}
+
+function hashText(value: string): string {
+  return `0x${Buffer.from(keccak_256(Buffer.from(value))).toString('hex')}`;
+}
+
+function abiBytes(value: string): string {
+  const data = value.slice(2);
+  const padded = data.padEnd(Math.ceil(data.length / 64) * 64, '0');
+  const length = (data.length / 2).toString(16);
+  return `0x${pad64('20')}${pad64(length)}${padded}`;
+}
+
+function pad64(value: string): string {
+  return value.padStart(64, '0');
 }
 
 describe('LiquidityExecutionWorkerService', () => {
   const originalUrl = process.env.OPES_PAYMENT_SIGNER_URL;
   const originalAttestationUrl = process.env.OPES_CCTP_ATTESTATION_URL;
+  const originalArcRpc = process.env.OPES_RPC_ARC_MAINNET;
   const originalFetch = global.fetch;
 
   afterEach(() => {
@@ -101,6 +143,11 @@ describe('LiquidityExecutionWorkerService', () => {
       delete process.env.OPES_CCTP_ATTESTATION_URL;
     } else {
       process.env.OPES_CCTP_ATTESTATION_URL = originalAttestationUrl;
+    }
+    if (originalArcRpc === undefined) {
+      delete process.env.OPES_RPC_ARC_MAINNET;
+    } else {
+      process.env.OPES_RPC_ARC_MAINNET = originalArcRpc;
     }
     global.fetch = originalFetch;
   });
@@ -134,6 +181,65 @@ describe('LiquidityExecutionWorkerService', () => {
     );
     expect(
       queries.some((item) => item.values?.includes(`0x${'a'.repeat(64)}`)),
+    ).toBe(true);
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes('liquidity.execute.cctp') &&
+          item.text.includes("interval '15 seconds'"),
+      ),
+    ).toBe(true);
+  });
+
+  it('extracts the CCTP source message from the burn receipt before attestation', async () => {
+    process.env.OPES_RPC_ARC_MAINNET = 'https://arc-rpc.example.test';
+    process.env.OPES_CCTP_ATTESTATION_URL = 'https://iris.example.test';
+    const sourceMessage = '0x123456';
+    const sourceMessageHash = hashHexBytes(sourceMessage);
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            result: {
+              status: '0x1',
+              logs: [
+                {
+                  topics: [hashText('MessageSent(bytes)')],
+                  data: abiBytes(sourceMessage),
+                },
+              ],
+            },
+          }),
+      })
+      .mockResolvedValueOnce({ status: 404, ok: false });
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        workRow({
+          status: 'SUBMITTED',
+          provider_payload: {
+            ...(workRow().provider_payload as Record<string, unknown>),
+            sourceBurnTransactionHash: `0x${'a'.repeat(64)}`,
+          },
+        }),
+      ),
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://arc-rpc.example.test',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(
+      queries.some(
+        (item) =>
+          item.values?.includes(sourceMessage) &&
+          item.values?.includes(sourceMessageHash),
+      ),
     ).toBe(true);
   });
 

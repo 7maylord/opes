@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 import { buildCctpReceiveMessageCalldata } from './cctp-calldata';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { isEvmAddress } from './evm-decision-hash';
@@ -34,8 +35,24 @@ interface AttestationResponse {
   attestation?: unknown;
 }
 
+interface JsonRpcResponse<T> {
+  result?: T | null;
+  error?: { message?: unknown };
+}
+
+interface TransactionReceipt {
+  status?: unknown;
+  logs?: unknown;
+}
+
+interface CctpSourceMessage {
+  sourceMessage: string;
+  sourceMessageHash: string;
+}
+
 class SignerUnavailableError extends Error {}
 class UnknownSubmissionError extends Error {}
+class SourceReceiptPendingError extends Error {}
 class AttestationPendingError extends Error {}
 
 @Injectable()
@@ -99,7 +116,7 @@ export class LiquidityExecutionWorkerService {
     }
 
     if (action.status === 'SUBMITTED') {
-      await this.attestAndMint(event, action);
+      await this.resolveSourceMessageAndMint(event, action);
       return;
     }
 
@@ -160,6 +177,30 @@ export class LiquidityExecutionWorkerService {
       await this.failLiquidityAction(
         event,
         error instanceof Error ? error.message : 'CCTP attestation failed',
+      );
+    }
+  }
+
+  private async resolveSourceMessageAndMint(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    try {
+      const sourceMessage = hasSourceMessage(action)
+        ? action
+        : await this.recordSourceMessage(
+            event,
+            await fetchSourceMessage(action),
+          );
+      await this.attestAndMint(event, sourceMessage);
+    } catch (error) {
+      if (error instanceof SourceReceiptPendingError) {
+        await markOutboxPendingLater(this.database, event.id, 60);
+        return;
+      }
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error ? error.message : 'CCTP source receipt failed',
       );
     }
   }
@@ -250,6 +291,51 @@ export class LiquidityExecutionWorkerService {
         [event.organization_id, event.aggregate_id, transactionHash],
       );
       await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+      );
+    });
+  }
+
+  private async recordSourceMessage(
+    event: OutboxEventRow,
+    message: CctpSourceMessage,
+  ): Promise<LiquidityWorkRow> {
+    return this.database.withWorker(async (database) => {
+      const result = await database.query<LiquidityWorkRow>(
+        `
+          UPDATE opes.liquidity_actions
+             SET provider_payload = provider_payload || jsonb_build_object(
+                   'sourceMessage', $3::text,
+                   'sourceMessageHash', $4::text
+                 ),
+                 updated_at = now()
+           WHERE organization_id = $1
+             AND id = $2
+             AND action_type = 'CCTP_TRANSFER'
+             AND status = 'SUBMITTED'
+           RETURNING
+             id,
+             organization_id,
+             status,
+             source_chain_id,
+             destination_chain_id,
+             provider_payload
+        `,
+        [
+          event.organization_id,
+          event.aggregate_id,
+          message.sourceMessage,
+          message.sourceMessageHash,
+        ],
+      );
+      const row = result.rows[0];
+      if (row === undefined) {
+        throw new Error('Expected submitted liquidity action row');
+      }
+      return row;
     });
   }
 
@@ -412,6 +498,133 @@ function buildDestinationMintRequest(action: LiquidityWorkRow): SignerRequest {
   };
 }
 
+async function fetchSourceMessage(
+  action: LiquidityWorkRow,
+): Promise<CctpSourceMessage> {
+  const transactionHash = requireHex32(
+    action.provider_payload.sourceBurnTransactionHash,
+    'sourceBurnTransactionHash',
+  );
+  const rpcUrl = sourceReceiptRpcUrl(action.provider_payload);
+  const receipt = await fetchTransactionReceipt(rpcUrl, transactionHash);
+  if (receipt === null) {
+    throw new SourceReceiptPendingError('Source burn receipt is pending');
+  }
+  if (receipt.status !== '0x1') {
+    throw new Error('Source burn transaction failed');
+  }
+
+  const sourceMessage = extractCctpMessage(receipt);
+  return {
+    sourceMessage,
+    sourceMessageHash: hashHexBytes(sourceMessage),
+  };
+}
+
+async function fetchTransactionReceipt(
+  rpcUrl: string,
+  transactionHash: string,
+): Promise<TransactionReceipt | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_getTransactionReceipt',
+        params: [transactionHash],
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new SourceReceiptPendingError(
+        `Source chain RPC returned HTTP ${response.status}`,
+      );
+    }
+    const body = (await response.json()) as JsonRpcResponse<TransactionReceipt>;
+    if (body.error !== undefined) {
+      throw new Error(`Source chain RPC failed: ${errorMessage(body.error)}`);
+    }
+    return body.result ?? null;
+  } catch (error) {
+    if (error instanceof SourceReceiptPendingError) {
+      throw error;
+    }
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new SourceReceiptPendingError('Source chain RPC timed out');
+    }
+    if (error instanceof TypeError) {
+      throw new SourceReceiptPendingError('Source chain RPC is unavailable');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function errorMessage(error: { message?: unknown }): string {
+  return typeof error.message === 'string' ? error.message : 'unknown';
+}
+
+function sourceReceiptRpcUrl(payload: Record<string, unknown>): string {
+  const source = objectAt(payload.source, 'source');
+  const environment = requireText(source.environment, 'source.environment');
+  const envName = `OPES_RPC_${environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  const url = process.env[envName]?.trim();
+  if (url === undefined || url === '') {
+    throw new SourceReceiptPendingError(`${envName} is not configured`);
+  }
+  return url;
+}
+
+function extractCctpMessage(receipt: TransactionReceipt): string {
+  if (!Array.isArray(receipt.logs)) {
+    throw new Error('Source burn receipt logs are invalid');
+  }
+  const topic = hashText('MessageSent(bytes)');
+  for (const item of receipt.logs) {
+    if (item === null || typeof item !== 'object') {
+      continue;
+    }
+    const log = item as { topics?: unknown; data?: unknown };
+    if (!Array.isArray(log.topics)) {
+      continue;
+    }
+    const topics = log.topics as unknown[];
+    const firstTopic = topics[0];
+    if (typeof firstTopic !== 'string' || firstTopic.toLowerCase() !== topic) {
+      continue;
+    }
+    return decodeAbiBytes(requireHex(log.data, 'MessageSent.data'));
+  }
+  throw new SourceReceiptPendingError('CCTP MessageSent log is not available');
+}
+
+function decodeAbiBytes(value: string): string {
+  const data = value.slice(2);
+  if (data.length < 128) {
+    throw new Error('MessageSent data is invalid');
+  }
+  const offset = Number.parseInt(data.slice(0, 64), 16);
+  const length = Number.parseInt(data.slice(64, 128), 16);
+  const start = offset * 2 + 64;
+  const end = start + length * 2;
+  if (offset !== 32 || !Number.isSafeInteger(length) || data.length < end) {
+    throw new Error('MessageSent data is invalid');
+  }
+  return `0x${data.slice(start, end)}`.toLowerCase();
+}
+
+function hasSourceMessage(action: LiquidityWorkRow): boolean {
+  return (
+    typeof action.provider_payload.sourceMessage === 'string' &&
+    typeof action.provider_payload.sourceMessageHash === 'string'
+  );
+}
+
 async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
   const sourceMessageHash = requireHex(
     action.provider_payload.sourceMessageHash,
@@ -538,6 +751,37 @@ async function markOutboxFailed(
   );
 }
 
+async function enqueueLiquidityAction(
+  database: TenantDatabase,
+  organizationId: string,
+  actionId: string,
+): Promise<void> {
+  await database.query(
+    `
+      INSERT INTO opes.outbox_events (
+        organization_id,
+        event_type,
+        aggregate_type,
+        aggregate_id,
+        payload,
+        available_at
+      )
+      SELECT $1, 'liquidity.execute.cctp', 'liquidity_action', $2, '{}'::jsonb,
+             now() + interval '15 seconds'
+      WHERE NOT EXISTS (
+        SELECT 1
+          FROM opes.outbox_events
+         WHERE organization_id = $1
+           AND event_type = 'liquidity.execute.cctp'
+           AND aggregate_type = 'liquidity_action'
+           AND aggregate_id = $2
+           AND status IN ('PENDING', 'PROCESSING')
+      )
+    `,
+    [organizationId, actionId],
+  );
+}
+
 async function markOutboxPendingLater(
   database: DatabaseService,
   eventId: string,
@@ -583,4 +827,29 @@ function requireHex(value: unknown, name: string): string {
     throw new Error(`${name} is invalid`);
   }
   return value.toLowerCase();
+}
+
+function requireHex32(value: unknown, name: string): string {
+  const hex = requireHex(value, name);
+  if (!/^0x[0-9a-f]{64}$/.test(hex)) {
+    throw new Error(`${name} is invalid`);
+  }
+  return hex;
+}
+
+function requireText(value: unknown, name: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${name} is invalid`);
+  }
+  return value.trim();
+}
+
+function hashHexBytes(value: string): string {
+  return `0x${Buffer.from(
+    keccak_256(Buffer.from(value.slice(2), 'hex')),
+  ).toString('hex')}`;
+}
+
+function hashText(value: string): string {
+  return `0x${Buffer.from(keccak_256(Buffer.from(value))).toString('hex')}`;
 }

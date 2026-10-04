@@ -252,6 +252,9 @@ describe('LiquidityService', () => {
       providerReference: null,
     });
     expect(action.providerPayload.provider).toBe('cctp-v2');
+    expect(action.providerPayload.source).toMatchObject({
+      messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+    });
   });
 
   it('requires an approving role to plan liquidity', async () => {

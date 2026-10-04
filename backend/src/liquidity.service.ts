@@ -359,6 +359,7 @@ async function buildProviderPayload(
       walletAddress: sourceWallet.address,
       usdc: route.source.cctpContracts?.usdc,
       tokenMessengerV2: route.source.cctpContracts?.tokenMessengerV2,
+      messageTransmitterV2: route.source.cctpContracts?.messageTransmitterV2,
     },
     destination: {
       environment: route.destination.environment,
