@@ -221,3 +221,274 @@ async function readError(response: Response) {
 
   return `Request failed with status ${response.status}`;
 }
+
+export interface VendorResponse {
+  id: string;
+  displayName: string;
+  status: string;
+  version: number;
+  metadata: unknown;
+}
+
+export interface VendorAddressResponse {
+  id: string;
+  vendorId: string;
+  environment: string;
+  chainId: number;
+  assetSymbol: string;
+  assetAddress: string;
+  payoutAddress: string;
+  status: string;
+  version: number;
+  replacesAddressId: string | null;
+}
+
+export interface EvidenceDocumentResponse {
+  id: string;
+  documentType: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  sha256Hex: string;
+  storageKey: string;
+  status: string;
+  metadata: unknown;
+}
+
+export interface DocumentExtractionResponse {
+  id: string;
+  documentId: string;
+  schemaName: string;
+  schemaVersion: string;
+  modelProvider: string;
+  modelName: string;
+  sourceSha256Hex: string;
+  output: unknown;
+  status: string;
+}
+
+export interface PayableObligationResponse {
+  id: string;
+  versionId: string;
+  version: number;
+  vendorId: string;
+  vendorAddressId: string;
+  evidenceDocumentId: string;
+  extractionId: string | null;
+  invoiceNumber: string;
+  currency: string;
+  amountAtomic: string;
+  amountDecimals: number;
+  obligationKey: string;
+  contentHash: string;
+  status: string;
+}
+
+export interface PaymentDecisionResponse {
+  id: string;
+  sourceType: string;
+  sourceId: string;
+  sourceVersionId: string;
+  decisionVersion: number;
+  paymentMode: string;
+  modelAction: string;
+  derivedAction: string;
+  liquidityRoute: string;
+  routeEnvironment: string;
+  routeChainId: number;
+  routeAssetSymbol: string;
+  amountAtomic: string;
+  destinationAddress: string;
+  evidenceBundleHash: string;
+  policySnapshotHash: string;
+  contextHash: string;
+  decisionHash: string | null;
+  checks: Array<{ code: string; status: string; message: string }>;
+  expiresAt: string;
+}
+
+export interface DecisionApprovalResponse {
+  id: string;
+  decisionId: string;
+  decisionVersion: number;
+  sourceVersionId: string;
+  amountAtomic: string;
+  destinationAddress: string;
+  contextHash: string;
+  policySnapshotHash: string;
+  status: string;
+  expiresAt: string;
+}
+
+export interface PaymentExecutionResponse {
+  id: string;
+  decisionId: string;
+  approvalId: string;
+  sourceVersionId: string;
+  decisionHash: string;
+  idempotencyKey: string;
+  contextHash: string;
+  amountAtomic: string;
+  destinationAddress: string;
+  routeEnvironment: string;
+  routeChainId: number;
+  routeAssetSymbol: string;
+  vaultAddress: string;
+  status: string;
+  failureReason: string | null;
+  transactionHash?: string | null;
+}
+
+export async function createVendor(
+  token: string,
+  organizationId: string,
+  input: { displayName: string; metadata?: unknown },
+) {
+  return request<VendorResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/vendors`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function addVendorAddress(
+  token: string,
+  organizationId: string,
+  vendorId: string,
+  input: {
+    environment: string;
+    chainId: number;
+    assetSymbol: string;
+    assetAddress: string;
+    payoutAddress: string;
+    metadata?: unknown;
+  },
+) {
+  return request<VendorAddressResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/vendors/${encodeURIComponent(vendorId)}/addresses`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function verifyVendorAddress(
+  token: string,
+  organizationId: string,
+  addressId: string,
+) {
+  return request<VendorAddressResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/vendor-addresses/${encodeURIComponent(addressId)}/verify`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function recordEvidenceDocument(
+  token: string,
+  organizationId: string,
+  input: {
+    documentType: "INVOICE" | "CONTRACT" | "RECEIPT" | "MILESTONE" | "OTHER";
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+    sha256Hex: string;
+    storageKey: string;
+    metadata?: unknown;
+  },
+) {
+  return request<EvidenceDocumentResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function recordDocumentExtraction(
+  token: string,
+  organizationId: string,
+  documentId: string,
+  input: {
+    schemaName: string;
+    schemaVersion: string;
+    modelProvider: string;
+    modelName: string;
+    sourceSha256Hex: string;
+    output: unknown;
+  },
+) {
+  return request<DocumentExtractionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents/${encodeURIComponent(documentId)}/extractions`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function verifyInvoice(
+  token: string,
+  organizationId: string,
+  input: {
+    vendorId: string;
+    vendorAddressId: string;
+    evidenceDocumentId: string;
+    extractionId?: string;
+    invoiceNumber: string;
+    currency: "USDC";
+    amount: string;
+    lineItems: Array<{ description: string; amount: string }>;
+  },
+) {
+  return request<PayableObligationResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/invoices/verify`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function evaluateInvoicePayment(
+  token: string,
+  organizationId: string,
+  input: {
+    invoiceVersionId: string;
+    modelAction: "PAY" | "DELAY" | "ESCALATE" | "REJECT";
+    modelName: string;
+    modelRationale: string;
+    promptVersion: string;
+    route: {
+      liquidityRoute: "OPERATING" | "GATEWAY" | "CCTP" | "NONE";
+      environment: string;
+      chainId: number;
+      assetSymbol: string;
+    };
+    expiresAt: string;
+  },
+) {
+  return request<PaymentDecisionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/decisions/invoice-payment`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function approveDecision(
+  token: string,
+  organizationId: string,
+  decisionId: string,
+) {
+  return request<DecisionApprovalResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/decisions/${encodeURIComponent(decisionId)}/authorize`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export async function executeDecision(
+  token: string,
+  organizationId: string,
+  decisionId: string,
+) {
+  return request<PaymentExecutionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/decisions/${encodeURIComponent(decisionId)}/execute`,
+    token,
+    { method: "POST" },
+  );
+}

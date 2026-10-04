@@ -26,6 +26,7 @@ import {
   type SessionUser,
   type UserOrganization,
 } from "@/lib/api";
+import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
@@ -504,6 +505,13 @@ export function AuthenticatedShell() {
                   </div>
                 </Panel>
               </div>
+
+              {selectedOrganizationId !== "" ? (
+                <VendorInvoiceWorkflows
+                  token={token}
+                  organizationId={selectedOrganizationId}
+                />
+              ) : null}
 
               <Panel title="Members and invitations">
                 {canManageMembers ? (
