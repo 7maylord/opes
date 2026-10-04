@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsc --target es2022 --module nodenext --moduleResolution nodenext --outDir .next-test lib/session-cache.ts && node --test tests/*.mjs"
+    "test": "tsc --target es2022 --module nodenext --moduleResolution nodenext --outDir .next-test lib/session-cache.ts lib/setup-checklist.ts && node --test tests/*.mjs"
   },
   "dependencies": {
     "next": "16.3.7",
