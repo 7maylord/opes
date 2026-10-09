@@ -12,7 +12,6 @@ import {
   ApiError,
   acceptInvitation,
   getAgent,
-  getApiBaseUrl,
   getSession,
   inviteOrganizationMember,
   listOrganizationMembers,
@@ -26,6 +25,7 @@ import {
   type SessionUser,
   type UserOrganization,
 } from "@/lib/api";
+import { LandingExperience } from "./landing-experience";
 import { LifecycleWorkflows } from "./lifecycle-workflows";
 import { TreasuryAuditViews } from "./treasury-audit-views";
 import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
@@ -49,35 +49,6 @@ const inviteRoles: MembershipRole[] = [
   "AUDITOR",
 ];
 const storageEventName = "opes-storage";
-
-const landingMetrics = [
-  ["3k", "atomic USDC moved in the latest Arc smoke"],
-  ["0", "custody shortcuts in the browser"],
-  ["6", "chain families mapped for treasury routes"],
-] as const;
-
-const landingPillars = [
-  [
-    "Source truth",
-    "Invoices, vendors, milestones and approvals become stable obligations before a signer sees them.",
-  ],
-  [
-    "Policy vault",
-    "Tenant contracts enforce owners, operators, pausers, vendors, limits and replay-safe execution.",
-  ],
-  [
-    "Settlement ledger",
-    "Gateway, CCTP, swaps and same-chain payments reconcile into auditable postings instead of screenshots.",
-  ],
-] as const;
-
-const routeSteps = [
-  "Vendor evidence",
-  "Human approval",
-  "Vault execution",
-  "Crosschain liquidity",
-  "Ledger close",
-] as const;
 
 export function AuthenticatedShell() {
   const [token, setStoredToken] = useStoredValue(sessionStorageKeys.token, "");
@@ -310,19 +281,12 @@ export function AuthenticatedShell() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-slate-950 text-slate-100">
+    <main className={token === "" ? "min-h-screen bg-[#f4f3ed] text-[#20251f]" : "min-h-screen overflow-hidden bg-slate-950 text-slate-100"}>
       <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_15%_20%,rgba(34,211,238,0.24),transparent_32%),radial-gradient(circle_at_86%_6%,rgba(20,184,166,0.20),transparent_30%),linear-gradient(135deg,#020617_0%,#0f172a_48%,#111827_100%)]" />
-      <section className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8">
+      <section className={token === "" ? "" : "mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8"}>
         {token === "" ? (
-          <>
-            <LandingHeader
-              networkLabel={networkLabel}
-              executionLabel={executionLabel}
-              setNetworkLabel={setNetworkLabel}
-              setExecutionLabel={setExecutionLabel}
-            />
-            <LandingHero />
-            <div id="access" className="grid gap-6 lg:grid-cols-3">
+          <LandingExperience>
+            <div className="grid gap-6 lg:grid-cols-3">
             <AuthCard title="Create organization" className="lg:col-span-2">
               <form onSubmit={submitOnboarding} className="grid gap-4 md:grid-cols-2">
                 <TextInput
@@ -395,11 +359,10 @@ export function AuthenticatedShell() {
                   Load workspace
                 </button>
               </form>
-              <p className="mt-4 text-xs text-slate-500">API: {getApiBaseUrl()}</p>
             </AuthCard>
             <Messages error={error} actionMessage={actionMessage} />
           </div>
-          </>
+          </LandingExperience>
         ) : (
           <>
             <CommandHeader
@@ -620,129 +583,6 @@ export function AuthenticatedShell() {
   );
 }
 
-
-function LandingHeader({
-  networkLabel,
-  executionLabel,
-  setNetworkLabel,
-  setExecutionLabel,
-}: {
-  networkLabel: string;
-  executionLabel: string;
-  setNetworkLabel: (value: string) => void;
-  setExecutionLabel: (value: string) => void;
-}) {
-  return (
-    <header className="flex flex-col gap-5 rounded-[2rem] border border-white/10 bg-white/[0.06] p-4 shadow-2xl shadow-black/30 backdrop-blur md:flex-row md:items-center md:justify-between">
-      <a href="#access" className="flex items-center gap-3" aria-label="OPES access forms">
-        <span className="grid size-11 place-items-center rounded-2xl bg-cyan-300 text-lg font-black text-slate-950 shadow-lg shadow-cyan-950/40">
-          O
-        </span>
-        <span>
-          <span className="block text-sm font-semibold uppercase tracking-[0.32em] text-cyan-200">
-            OPES
-          </span>
-          <span className="block text-sm text-slate-400">Agentic finance, reconciled</span>
-        </span>
-      </a>
-      <div className="grid gap-3 text-sm sm:grid-cols-2">
-        <LabelSelect
-          label="Network"
-          value={networkLabel}
-          options={networkOptions}
-          onChange={setNetworkLabel}
-        />
-        <LabelSelect
-          label="Mode"
-          value={executionLabel}
-          options={executionOptions}
-          onChange={setExecutionLabel}
-        />
-      </div>
-    </header>
-  );
-}
-
-function LandingHero() {
-  return (
-    <section className="grid gap-8 rounded-[2.5rem] border border-white/10 bg-white/[0.05] p-5 shadow-2xl shadow-black/30 backdrop-blur md:p-8 lg:grid-cols-[1.05fr_0.95fr] lg:p-10">
-      <div className="flex flex-col justify-between gap-10">
-        <div>
-          <p className="w-fit rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cyan-200">
-            Autonomous treasury for real businesses
-          </p>
-          <h1 className="mt-7 max-w-4xl text-5xl font-semibold leading-[0.95] tracking-[-0.06em] text-white md:text-7xl">
-            Let agents pay, but make every dollar answer.
-          </h1>
-          <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
-            OPES turns invoices, subscriptions, escrow milestones and crosschain liquidity into controlled execution: tenant vaults, human approvals, restricted signers and ledger-grade reconciliation.
-          </p>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <a
-            href="#access"
-            className="inline-flex min-h-12 items-center justify-center rounded-2xl bg-cyan-300 px-6 font-semibold text-slate-950 shadow-lg shadow-cyan-950/30 transition hover:bg-cyan-200"
-          >
-            Launch OPES
-          </a>
-          <a
-            href="#how-it-works"
-            className="inline-flex min-h-12 items-center justify-center rounded-2xl border border-white/15 px-6 font-semibold text-white transition hover:bg-white/10"
-          >
-            See the flow
-          </a>
-        </div>
-
-        <dl className="grid gap-3 sm:grid-cols-3">
-          {landingMetrics.map(([value, label]) => (
-            <div key={value} className="rounded-3xl border border-white/10 bg-slate-950/40 p-4">
-              <dt className="text-3xl font-semibold text-white">{value}</dt>
-              <dd className="mt-2 text-sm leading-5 text-slate-400">{label}</dd>
-            </div>
-          ))}
-        </dl>
-      </div>
-
-      <div className="relative min-h-[520px] overflow-hidden rounded-[2rem] border border-cyan-200/20 bg-slate-950 p-5 shadow-inner shadow-cyan-950/40">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,rgba(34,211,238,0.30),transparent_34%),radial-gradient(circle_at_50%_90%,rgba(16,185,129,0.22),transparent_32%)]" />
-        <div className="relative flex h-full flex-col justify-between gap-6">
-          <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 backdrop-blur">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.26em] text-cyan-200">OPES route</p>
-                <h2 className="mt-2 text-2xl font-semibold text-white">Arc USDC → Base USDT</h2>
-              </div>
-              <span className="rounded-full bg-emerald-300/15 px-3 py-1 text-xs font-semibold text-emerald-200">
-                policy checked
-              </span>
-            </div>
-            <div id="how-it-works" className="mt-6 space-y-3">
-              {routeSteps.map((step, index) => (
-                <div key={step} className="flex items-center gap-3 rounded-2xl bg-slate-900/80 p-3">
-                  <span className="grid size-8 shrink-0 place-items-center rounded-xl bg-cyan-300 text-sm font-bold text-slate-950">
-                    {index + 1}
-                  </span>
-                  <span className="font-medium text-slate-100">{step}</span>
-                  <span className="ml-auto h-2 w-14 rounded-full bg-gradient-to-r from-cyan-300 to-emerald-300" />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="grid gap-3">
-            {landingPillars.map(([title, body]) => (
-              <article key={title} className="rounded-3xl border border-white/10 bg-white/[0.06] p-4 backdrop-blur">
-                <h3 className="font-semibold text-white">{title}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-400">{body}</p>
-              </article>
-            ))}
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
 
 function CommandHeader({
   networkLabel,
