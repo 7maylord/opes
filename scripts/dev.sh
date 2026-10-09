@@ -4,8 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND_ENV="$ROOT_DIR/backend/.env"
 BACKEND_COMPOSE="$ROOT_DIR/backend/docker-compose.yml"
-BACKEND_URL="${BACKEND_URL:-http://localhost:3000}"
-FRONTEND_PORT="${FRONTEND_PORT:-3001}"
+BACKEND_PORT="${BACKEND_PORT:-3004}"
+BACKEND_URL="${BACKEND_URL:-http://localhost:${BACKEND_PORT}}"
+FRONTEND_PORT="${FRONTEND_PORT:-3005}"
+BACKEND_ALLOWED_ORIGINS="${BACKEND_ALLOWED_ORIGINS:-http://localhost:${FRONTEND_PORT}}"
 RUN_DOCKER=1
 RUN_WORKER="${RUN_WORKER:-0}"
 
@@ -15,15 +17,16 @@ Usage: scripts/dev.sh [--skip-docker] [--worker]
 
 Starts OPES locally for frontend testing:
   - PostgreSQL, Redis and MinIO through backend/docker-compose.yml
-  - backend API from backend/.env
-  - frontend at http://localhost:3001 pointed at http://localhost:3000
+  - backend API directly in your terminal on http://localhost:3004
+  - frontend directly in your terminal at http://localhost:3005
 
 Options:
   --skip-docker  Do not start Docker services or run migrations.
   --worker       Also start the backend worker.
 
 Environment overrides:
-  FRONTEND_PORT=3002 BACKEND_URL=http://localhost:3000 scripts/dev.sh
+  BACKEND_PORT=4004 FRONTEND_PORT=4005 scripts/dev.sh
+  BACKEND_ALLOWED_ORIGINS=http://localhost:4005 scripts/dev.sh
   RUN_WORKER=1 scripts/dev.sh
 EOF
 }
@@ -95,13 +98,15 @@ set -a
 . "$BACKEND_ENV"
 set +a
 
-echo "Starting backend API on ${PORT:-3000}..."
-pnpm --dir "$ROOT_DIR/backend" start:dev &
+echo "Starting backend API on ${BACKEND_PORT}..."
+PORT="$BACKEND_PORT" OPES_ALLOWED_ORIGINS="$BACKEND_ALLOWED_ORIGINS" \
+  pnpm --dir "$ROOT_DIR/backend" start:dev &
 pids+=("$!")
 
 if [ "$RUN_WORKER" = "1" ]; then
   echo "Starting backend worker..."
-  pnpm --dir "$ROOT_DIR/backend" start:worker &
+  PORT="$BACKEND_PORT" OPES_ALLOWED_ORIGINS="$BACKEND_ALLOWED_ORIGINS" \
+    pnpm --dir "$ROOT_DIR/backend" start:worker &
   pids+=("$!")
 fi
 
@@ -114,6 +119,7 @@ echo
 echo "OPES local app is starting:"
 echo "  Frontend: http://localhost:${FRONTEND_PORT}"
 echo "  Backend:  ${BACKEND_URL}"
+echo "  CORS:     ${BACKEND_ALLOWED_ORIGINS}"
 echo
 echo "Press Ctrl-C to stop everything."
 
