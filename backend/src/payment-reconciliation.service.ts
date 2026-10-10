@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { DatabaseService, TenantDatabase } from './database.service';
+import { DatabaseService } from './database.service';
 
 export interface PaymentWebhookRequest {
   organizationId: string;
@@ -71,10 +71,6 @@ export class PaymentReconciliationService {
           'payload.transactionHash',
         );
 
-        if (input.payload.status === 'CONFIRMED') {
-          await confirmExecution(database, organizationId, input.payload);
-        }
-
         const inserted = await database.query<ReconciliationRow>(
           `
           INSERT INTO opes.payment_reconciliation_events (
@@ -102,58 +98,6 @@ export class PaymentReconciliationService {
         return mapRow(requireRow(inserted.rows[0]));
       },
     );
-  }
-}
-
-async function confirmExecution(
-  database: TenantDatabase,
-  organizationId: string,
-  payload: PaymentWebhookRequest['payload'],
-): Promise<void> {
-  if (payload.executionId === undefined) {
-    throw new BadRequestException('payload.executionId is required');
-  }
-  if (payload.transactionHash === undefined) {
-    throw new BadRequestException('payload.transactionHash is required');
-  }
-  if (payload.chainId !== 5042002) {
-    throw new BadRequestException('payload.chainId is not executable');
-  }
-  if (payload.to === undefined || payload.callData === undefined) {
-    throw new BadRequestException(
-      'payload.to and payload.callData are required',
-    );
-  }
-
-  const updated = await database.query(
-    `
-      UPDATE opes.payment_executions
-         SET status = 'CONFIRMED',
-             transaction_hash = lower($3),
-             confirmed_at = now(),
-             last_reconciled_at = now(),
-             updated_at = now()
-       WHERE organization_id = $1
-         AND id = $2
-         AND status IN ('SUBMITTED', 'UNKNOWN')
-         AND lower(transaction_hash) = lower($3)
-         AND route_chain_id = $4
-         AND lower(vault_address) = lower($5)
-         AND call_data = $6
-       RETURNING id
-    `,
-    [
-      organizationId,
-      payload.executionId,
-      payload.transactionHash,
-      payload.chainId,
-      payload.to,
-      payload.callData,
-    ],
-  );
-
-  if (updated.rows[0] === undefined) {
-    throw new BadRequestException('Webhook evidence does not match execution');
   }
 }
 

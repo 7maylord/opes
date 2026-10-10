@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { projectInvoiceAccrualInDatabase } from './ledger.service';
 import { TenantContext } from './tenant-context';
 
 const USDC_DECIMALS = 6;
@@ -226,6 +227,11 @@ export class InvoiceService {
             amountAtomic: amountAtomic.toString(),
             currency,
           },
+        );
+        await projectInvoiceAccrualInDatabase(
+          database,
+          context.organizationId,
+          version.id,
         );
 
         return {

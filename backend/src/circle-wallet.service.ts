@@ -104,10 +104,35 @@ export class CircleWalletService {
       ],
       fee: {
         type: 'absolute',
-        config: { maxFee: '50', priorityFee: '0', gasLimit: '6500000' },
+        config: { maxFee: '75', priorityFee: '25', gasLimit: '6500000' },
       },
       refId: `opes:factory:${input.organizationDomain}`,
       idempotencyKey: input.idempotencyKey,
+    });
+    const transaction = response.data;
+    if (!transaction) throw new Error('Circle did not return a transaction');
+    return transaction;
+  }
+
+  async createDirectPaymentTransaction(input: {
+    walletId: string;
+    vaultAddress: string;
+    callData: string;
+    executionId: string;
+  }): Promise<{ id: string; state: string }> {
+    if (!/^0x(?:[0-9a-fA-F]{2})+$/.test(input.callData)) {
+      throw new Error('Payment call data is invalid');
+    }
+    const response = await this.getClient().createContractExecutionTransaction({
+      walletId: input.walletId,
+      contractAddress: input.vaultAddress,
+      callData: input.callData as `0x${string}`,
+      fee: {
+        type: 'absolute',
+        config: { maxFee: '75', priorityFee: '25', gasLimit: '500000' },
+      },
+      refId: `opes:payment:${input.executionId}`,
+      idempotencyKey: input.executionId,
     });
     const transaction = response.data;
     if (!transaction) throw new Error('Circle did not return a transaction');

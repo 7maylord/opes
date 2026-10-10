@@ -67,38 +67,18 @@ export class LedgerService {
     invoiceVersionId: string,
   ): Promise<LedgerEntryResponse[]> {
     return this.database.withTenant(context, async (database) => {
-      const source = await getInvoiceSource(
+      await projectInvoiceAccrualInDatabase(
         database,
         context.organizationId,
         invoiceVersionId,
       );
-      if (source.status !== 'ACCEPTED') {
-        throw new ConflictException('Only accepted invoices can be accrued');
-      }
-      if (source.currency !== 'USDC') {
-        throw new ConflictException('Only USDC invoices can be accrued');
-      }
-
-      await insertLedgerPair(database, {
-        organizationId: context.organizationId,
-        eventType: 'INVOICE_ACCEPTED',
-        eventId: source.version_id,
-        amountAtomic: source.amount_atomic,
-        sourceType: 'PAYABLE_OBLIGATION_VERSION',
-        sourceId: source.obligation_id,
-        sourceVersionId: source.version_id,
-        counterpartyId: source.vendor_id,
-        transactionHash: null,
-        debitAccount: 'EXPENSE:PAYABLES',
-        creditAccount: 'LIABILITY:ACCOUNTS_PAYABLE',
-      });
 
       return mapRows(
         await getLedgerEvent(
           database,
           context.organizationId,
           'INVOICE_ACCEPTED',
-          source.version_id,
+          invoiceVersionId,
         ),
       );
     });
@@ -109,47 +89,87 @@ export class LedgerService {
     executionId: string,
   ): Promise<LedgerEntryResponse[]> {
     return this.database.withTenant(context, async (database) => {
-      const source = await getPaymentSource(
+      await projectPaymentSettlementInDatabase(
         database,
         context.organizationId,
         executionId,
       );
-      if (source.status !== 'CONFIRMED') {
-        throw new ConflictException('Only confirmed payments can be settled');
-      }
-      if (source.transaction_hash === null) {
-        throw new ConflictException(
-          'Confirmed payment is missing transaction hash',
-        );
-      }
-      if (source.route_asset_symbol !== 'USDC') {
-        throw new ConflictException('Only USDC payments can be settled');
-      }
-
-      await insertLedgerPair(database, {
-        organizationId: context.organizationId,
-        eventType: 'PAYMENT_SETTLED',
-        eventId: source.execution_id,
-        amountAtomic: source.amount_atomic,
-        sourceType: 'PAYMENT_EXECUTION',
-        sourceId: source.execution_id,
-        sourceVersionId: source.source_version_id,
-        counterpartyId: source.vendor_id,
-        transactionHash: source.transaction_hash,
-        debitAccount: 'LIABILITY:ACCOUNTS_PAYABLE',
-        creditAccount: 'ASSET:OPERATING_USDC',
-      });
 
       return mapRows(
         await getLedgerEvent(
           database,
           context.organizationId,
           'PAYMENT_SETTLED',
-          source.execution_id,
+          executionId,
         ),
       );
     });
   }
+}
+
+export async function projectInvoiceAccrualInDatabase(
+  database: TenantDatabase,
+  organizationId: string,
+  invoiceVersionId: string,
+): Promise<void> {
+  const source = await getInvoiceSource(
+    database,
+    organizationId,
+    invoiceVersionId,
+  );
+  if (source.status !== 'ACCEPTED') {
+    throw new ConflictException('Only accepted invoices can be accrued');
+  }
+  if (source.currency !== 'USDC') {
+    throw new ConflictException('Only USDC invoices can be accrued');
+  }
+
+  await insertLedgerPair(database, {
+    organizationId,
+    eventType: 'INVOICE_ACCEPTED',
+    eventId: source.version_id,
+    amountAtomic: source.amount_atomic,
+    sourceType: 'PAYABLE_OBLIGATION_VERSION',
+    sourceId: source.obligation_id,
+    sourceVersionId: source.version_id,
+    counterpartyId: source.vendor_id,
+    transactionHash: null,
+    debitAccount: 'EXPENSE:PAYABLES',
+    creditAccount: 'LIABILITY:ACCOUNTS_PAYABLE',
+  });
+}
+
+export async function projectPaymentSettlementInDatabase(
+  database: TenantDatabase,
+  organizationId: string,
+  executionId: string,
+): Promise<void> {
+  const source = await getPaymentSource(database, organizationId, executionId);
+  if (source.status !== 'CONFIRMED') {
+    throw new ConflictException('Only confirmed payments can be settled');
+  }
+  if (source.transaction_hash === null) {
+    throw new ConflictException(
+      'Confirmed payment is missing transaction hash',
+    );
+  }
+  if (source.route_asset_symbol !== 'USDC') {
+    throw new ConflictException('Only USDC payments can be settled');
+  }
+
+  await insertLedgerPair(database, {
+    organizationId,
+    eventType: 'PAYMENT_SETTLED',
+    eventId: source.execution_id,
+    amountAtomic: source.amount_atomic,
+    sourceType: 'PAYMENT_EXECUTION',
+    sourceId: source.execution_id,
+    sourceVersionId: source.source_version_id,
+    counterpartyId: source.vendor_id,
+    transactionHash: source.transaction_hash,
+    debitAccount: 'LIABILITY:ACCOUNTS_PAYABLE',
+    creditAccount: 'ASSET:OPERATING_USDC',
+  });
 }
 
 async function getInvoiceSource(

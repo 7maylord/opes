@@ -97,6 +97,19 @@ function queryReturningHappyPath() {
         },
       ],
     })
+    .mockResolvedValueOnce({ rows: [] })
+    .mockResolvedValueOnce({
+      rows: [
+        {
+          version_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          obligation_id: '99999999-9999-9999-9999-999999999999',
+          vendor_id: validRequest.vendorId,
+          currency: 'USDC',
+          amount_atomic: '12340001',
+          status: 'ACCEPTED',
+        },
+      ],
+    })
     .mockResolvedValueOnce({ rows: [] });
 }
 
@@ -119,6 +132,10 @@ describe('InvoiceService', () => {
       7,
       expect.stringContaining('INSERT INTO opes.payable_obligation_versions'),
       expect.arrayContaining(['12340001']),
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO opes.ledger_entries'),
+      expect.arrayContaining(['INVOICE_ACCEPTED', '12340001']),
     );
   });
 

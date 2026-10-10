@@ -53,7 +53,7 @@ describe('PaymentReconciliationService', () => {
     }
   });
 
-  it('records a signed confirmation only when evidence matches the execution', async () => {
+  it('records a signed notification without using it as settlement proof', async () => {
     process.env.OPES_PAYMENT_WEBHOOK_SECRET = 'secret-1';
     const payload = {
       executionId: '55555555-5555-5555-5555-555555555555',
@@ -66,7 +66,6 @@ describe('PaymentReconciliationService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ id: 'execution-1' }] })
       .mockResolvedValueOnce({
         rows: [{ id: 'event-1', status: 'RECORDED', duplicate: false }],
       });
@@ -75,23 +74,15 @@ describe('PaymentReconciliationService', () => {
     await expect(
       service.recordWebhook({
         organizationId: '11111111-1111-1111-1111-111111111111',
-        provider: 'circle',
+        provider: 'opes-internal',
         externalEventId: 'evt-1',
         signature: signature(payload, 'secret-1'),
         payload,
       }),
     ).resolves.toEqual({ id: 'event-1', status: 'RECORDED', duplicate: false });
-    expect(query).toHaveBeenNthCalledWith(
-      2,
+    expect(query).not.toHaveBeenCalledWith(
       expect.stringContaining("SET status = 'CONFIRMED'"),
-      expect.arrayContaining([
-        '11111111-1111-1111-1111-111111111111',
-        '55555555-5555-5555-5555-555555555555',
-        `0x${'a'.repeat(64)}`,
-        5042002,
-        '0x0000000000000000000000000000000000000003',
-        '0x7a154aae',
-      ]),
+      expect.anything(),
     );
   });
 
