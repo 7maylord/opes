@@ -24,7 +24,7 @@ test("visitors can trace an illustrative payment and still reach workspace acces
     page.getByText("EXAMPLE ONLY / NOT A TRANSACTION"),
   ).toBeVisible();
   await page.getByRole("link", { name: "Make your first move" }).click();
-  await expect(page.getByLabel("Work email")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Sign in with email" })).toBeInViewport();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

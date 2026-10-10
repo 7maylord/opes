@@ -1,42 +1,41 @@
+import { UnauthorizedException } from '@nestjs/common';
 import { OnboardingController } from './onboarding.controller';
 import { OnboardingService } from './onboarding.service';
+import { SessionService } from './session.service';
 
 describe('OnboardingController', () => {
-  it('delegates onboarding requests to the service', async () => {
-    const result = {
-      user: { id: 'user-1', email: 'owner@example.com', displayName: 'Owner' },
-      organization: {
-        id: 'organization-1',
-        slug: 'acme',
-        displayName: 'Acme',
-        lifecycleStatus: 'PROVISIONING',
-      },
-      membership: { id: 'membership-1', role: 'OWNER' as const },
-      agent: { id: 'agent-1', lifecycleStatus: 'PROVISIONING' },
-      sessionToken: 'token',
+  it('uses the bearer session identity instead of caller-supplied identity', async () => {
+    const user = {
+      id: 'user-1',
+      email: 'owner@example.com',
+      displayName: 'Owner',
     };
-    const onboard = jest.fn(() => Promise.resolve(result));
-    const controller = new OnboardingController({
-      onboard,
-    } as unknown as OnboardingService);
-
-    await expect(
-      controller.onboard(
-        {
-          email: 'owner@example.com',
-          displayName: 'Owner',
-          organizationName: 'Acme',
-        },
-        'onboarding-key-1',
-      ),
-    ).resolves.toEqual(result);
-    expect(onboard).toHaveBeenCalledWith(
+    const onboard = jest.fn().mockResolvedValue({ user });
+    const controller = new OnboardingController(
+      { onboard } as unknown as OnboardingService,
       {
-        email: 'owner@example.com',
-        displayName: 'Owner',
-        organizationName: 'Acme',
-      },
-      'onboarding-key-1',
+        resolveUser: jest.fn().mockResolvedValue(user),
+      } as unknown as SessionService,
     );
+    await controller.onboard(
+      { organizationName: 'Acme' },
+      'key-1',
+      'Bearer session-1',
+    );
+    expect(onboard).toHaveBeenCalledWith(
+      user,
+      { organizationName: 'Acme' },
+      'key-1',
+    );
+  });
+
+  it('rejects unauthenticated onboarding', async () => {
+    const controller = new OnboardingController(
+      {} as OnboardingService,
+      { resolveUser: jest.fn() } as unknown as SessionService,
+    );
+    await expect(
+      controller.onboard({ organizationName: 'Acme' }, undefined, undefined),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 });

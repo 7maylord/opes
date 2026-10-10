@@ -5,12 +5,15 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
+import { usePrivy } from "@privy-io/react-auth";
 import {
   ApiError,
   acceptInvitation,
+  exchangePrivySession,
   getAgent,
   getSession,
   inviteOrganizationMember,
@@ -51,6 +54,13 @@ const inviteRoles: MembershipRole[] = [
 const storageEventName = "opes-storage";
 
 export function AuthenticatedShell() {
+  const {
+    ready: privyReady,
+    authenticated: privyAuthenticated,
+    getAccessToken,
+    login,
+    logout: privyLogout,
+  } = usePrivy();
   const [token, setStoredToken] = useStoredValue(sessionStorageKeys.token, "");
   const [selectedOrganizationId, setSelectedOrganizationId] = useStoredValue(
     sessionStorageKeys.selectedOrganizationId,
@@ -64,10 +74,7 @@ export function AuthenticatedShell() {
     sessionStorageKeys.executionLabel,
     executionOptions[0],
   );
-  const [tokenDraft, setTokenDraft] = useState("");
   const [onboarding, setOnboarding] = useState({
-    email: "",
-    displayName: "",
     organizationName: "",
     organizationSlug: "",
   });
@@ -85,6 +92,7 @@ export function AuthenticatedShell() {
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [actionPending, setActionPending] = useState(false);
+  const privyExchangePending = useRef(false);
   const isLoading = token !== "" && user === null && error === "";
 
   const clearBrowserSession = useCallback(() => {
@@ -98,6 +106,25 @@ export function AuthenticatedShell() {
     setError("");
     setActionMessage("");
   }, [setSelectedOrganizationId, setStoredToken]);
+
+  useEffect(() => {
+    if (!privyReady || !privyAuthenticated || token !== "" || privyExchangePending.current) return;
+    privyExchangePending.current = true;
+    let cancelled = false;
+    getAccessToken()
+      .then((accessToken) => {
+        if (!accessToken) throw new Error("Privy session is unavailable");
+        return exchangePrivySession(accessToken);
+      })
+      .then((session) => {
+        if (!cancelled) setStoredToken(session.sessionToken);
+      })
+      .catch((reason: unknown) => {
+        privyExchangePending.current = false;
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to sign in");
+      });
+    return () => { cancelled = true; };
+  }, [getAccessToken, privyAuthenticated, privyReady, setStoredToken, token]);
 
   useEffect(() => {
     if (token === "") return;
@@ -171,28 +198,14 @@ export function AuthenticatedShell() {
   const canManageMembers =
     selectedOrganization?.role === "OWNER" || selectedOrganization?.role === "ADMIN";
 
-  function saveToken(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextToken = tokenDraft.trim();
-    if (nextToken === "") {
-      setError("Paste a backend session token first.");
-      return;
-    }
-    setError("");
-    setStoredToken(nextToken);
-    setTokenDraft("");
-  }
-
   async function submitOnboarding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      const result = await onboardOrganization({
-        email: onboarding.email,
-        displayName: onboarding.displayName,
+      const result = await onboardOrganization(token, {
         organizationName: onboarding.organizationName,
         organizationSlug: onboarding.organizationSlug || undefined,
       });
-      setStoredToken(result.sessionToken);
+      setOrganizations(await listOrganizations(token));
       setSelectedOrganizationId(result.organization.id);
       setActionMessage("Organization created. Arc setup is queued.");
     });
@@ -201,8 +214,8 @@ export function AuthenticatedShell() {
   async function submitInvitation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await runAction(async () => {
-      const result = await acceptInvitation(invitationToken.trim());
-      setStoredToken(result.sessionToken);
+      const result = await acceptInvitation(token, invitationToken.trim());
+      setOrganizations(await listOrganizations(token));
       setSelectedOrganizationId(result.organization.id);
       setInvitationToken("");
       setActionMessage("Invitation accepted. Workspace loaded.");
@@ -264,7 +277,11 @@ export function AuthenticatedShell() {
     if (token !== "") {
       await revokeSession(token).catch(() => undefined);
     }
-    clearBrowserSession();
+    try {
+      await privyLogout();
+    } finally {
+      clearBrowserSession();
+    }
   }
 
   async function runAction(work: () => Promise<void>) {
@@ -286,79 +303,17 @@ export function AuthenticatedShell() {
       <section className={token === "" ? "" : "mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8"}>
         {token === "" ? (
           <LandingExperience>
-            <div className="grid gap-6 lg:grid-cols-3">
-            <AuthCard title="Create organization" className="lg:col-span-2">
-              <form onSubmit={submitOnboarding} className="grid gap-4 md:grid-cols-2">
-                <TextInput
-                  label="Work email"
-                  type="email"
-                  value={onboarding.email}
-                  onChange={(email) => setOnboarding((current) => ({ ...current, email }))}
-                  required
-                />
-                <TextInput
-                  label="Your name"
-                  value={onboarding.displayName}
-                  onChange={(displayName) =>
-                    setOnboarding((current) => ({ ...current, displayName }))
-                  }
-                  required
-                />
-                <TextInput
-                  label="Organization name"
-                  value={onboarding.organizationName}
-                  onChange={(organizationName) =>
-                    setOnboarding((current) => ({ ...current, organizationName }))
-                  }
-                  required
-                />
-                <TextInput
-                  label="Slug optional"
-                  value={onboarding.organizationSlug}
-                  onChange={(organizationSlug) =>
-                    setOnboarding((current) => ({ ...current, organizationSlug }))
-                  }
-                />
-                <button
-                  disabled={actionPending}
-                  className="min-h-12 rounded-2xl bg-slate-950 px-6 font-semibold text-white hover:bg-slate-800 disabled:opacity-50 md:col-span-2"
-                >
-                  Create and queue setup
-                </button>
-              </form>
-            </AuthCard>
-
-            <AuthCard title="Accept invite">
-              <form onSubmit={submitInvitation} className="space-y-4">
-                <TextInput
-                  label="Invitation token"
-                  value={invitationToken}
-                  onChange={setInvitationToken}
-                  required
-                />
-                <button
-                  disabled={actionPending}
-                  className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-                >
-                  Accept invitation
-                </button>
-              </form>
-            </AuthCard>
-
-            <AuthCard title="Use existing session" className="lg:col-span-3">
-              <form onSubmit={saveToken} className="flex flex-col gap-3 md:flex-row">
-                <input
-                  aria-label="Backend session token"
-                  value={tokenDraft}
-                  onChange={(event) => setTokenDraft(event.target.value)}
-                  className="min-h-12 flex-1 rounded-2xl border border-slate-300 px-4 outline-none ring-cyan-500 focus:ring-2"
-                  placeholder="Backend session token"
-                  type="password"
-                />
-                <button className="min-h-12 rounded-2xl bg-slate-950 px-6 font-semibold text-white hover:bg-slate-800">
-                  Load workspace
-                </button>
-              </form>
+            <div className="grid gap-6">
+            <AuthCard title="Access OPES">
+              <p className="mb-4 text-sm text-slate-600">Use a one-time email code to open your workspace.</p>
+              <button
+                type="button"
+                disabled={!privyReady || actionPending}
+                onClick={login}
+                className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+              >
+                {privyAuthenticated ? "Opening workspace…" : "Sign in with email"}
+              </button>
             </AuthCard>
             <Messages error={error} actionMessage={actionMessage} />
           </div>
@@ -428,6 +383,24 @@ export function AuthenticatedShell() {
 
               <Messages error={error} actionMessage={actionMessage} />
               {isLoading ? <p className="text-slate-600">Loading...</p> : null}
+
+              {organizations.length === 0 && !isLoading ? (
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <Panel title="Create organization">
+                    <form onSubmit={submitOnboarding} className="space-y-4">
+                      <TextInput label="Organization name" value={onboarding.organizationName} onChange={(organizationName) => setOnboarding((current) => ({ ...current, organizationName }))} required />
+                      <TextInput label="Slug optional" value={onboarding.organizationSlug} onChange={(organizationSlug) => setOnboarding((current) => ({ ...current, organizationSlug }))} />
+                      <button disabled={actionPending} className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-50">Create and queue setup</button>
+                    </form>
+                  </Panel>
+                  <Panel title="Accept invite">
+                    <form onSubmit={submitInvitation} className="space-y-4">
+                      <TextInput label="Invitation token" value={invitationToken} onChange={setInvitationToken} required />
+                      <button disabled={actionPending} className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-50">Accept invitation</button>
+                    </form>
+                  </Panel>
+                </div>
+              ) : null}
 
               <div className="grid gap-4 md:grid-cols-4">
                 <InfoCard label="Role" value={selectedOrganization?.role} />
@@ -510,6 +483,12 @@ export function AuthenticatedShell() {
               ) : null}
 
               <Panel title="Members and invitations">
+                {organizations.length > 0 ? (
+                  <form onSubmit={submitInvitation} className="mb-6 flex flex-col gap-3 border-b border-slate-200 pb-6 sm:flex-row">
+                    <div className="flex-1"><TextInput label="Invitation token" value={invitationToken} onChange={setInvitationToken} required /></div>
+                    <button disabled={actionPending} className="min-h-11 self-end rounded-2xl bg-slate-950 px-5 font-semibold text-white disabled:opacity-50">Accept invitation</button>
+                  </form>
+                ) : null}
                 {canManageMembers ? (
                   <form onSubmit={submitInvite} className="grid gap-3 md:grid-cols-[1fr_1fr_180px_auto]">
                     <TextInput

@@ -1,6 +1,6 @@
+import { ForbiddenException } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { OrganizationService } from './organization.service';
-import { SessionService } from './session.service';
 import { TenantContext } from './tenant-context';
 
 describe('OrganizationService', () => {
@@ -424,7 +424,7 @@ describe('OrganizationService', () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
-  it('accepts an invitation and creates a session in one transaction', async () => {
+  it('accepts an invitation only for its authenticated user', async () => {
     const createdAt = new Date('2026-10-03T10:00:00.000Z');
     const query = jest
       .fn()
@@ -463,12 +463,11 @@ describe('OrganizationService', () => {
     const database = {
       withTransaction,
     } as unknown as DatabaseService;
-    const createSessionRecord = jest.fn(() => Promise.resolve('session-token'));
-    const service = new OrganizationService(database, {
-      createSessionRecord,
-    } as unknown as SessionService);
+    const service = new OrganizationService(database);
 
-    await expect(service.acceptInvitation('invite-token')).resolves.toEqual({
+    await expect(
+      service.acceptInvitation('invite-token', 'user-2'),
+    ).resolves.toEqual({
       user: {
         id: 'user-2',
         email: 'ops@example.com',
@@ -489,9 +488,40 @@ describe('OrganizationService', () => {
         status: 'ACTIVE',
         createdAt,
       },
-      sessionToken: 'session-token',
     });
     expect(withTransaction).toHaveBeenCalledWith(expect.any(Function));
-    expect(createSessionRecord).toHaveBeenCalledWith({ query }, 'user-2');
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining('membership.user_id = $3'),
+      ['organization-1', 'membership-2', 'user-2'],
+    );
+  });
+
+  it('rejects accepting another user invitation', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'invitation-1',
+            organization_id: 'organization-1',
+            membership_id: 'membership-2',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const database = {
+      withTransaction: jest.fn((work: (db: TenantDatabase) => unknown) =>
+        work({ query }),
+      ),
+    } as unknown as DatabaseService;
+
+    await expect(
+      new OrganizationService(database).acceptInvitation(
+        'invite-token',
+        'wrong-user',
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(query).toHaveBeenCalledTimes(3);
   });
 });

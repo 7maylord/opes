@@ -9,7 +9,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   webServer: {
-    command: "NEXT_PUBLIC_OPES_API_URL=http://mock.api pnpm dev --hostname 127.0.0.1 --port 3100",
+    command: "NEXT_PUBLIC_OPES_API_URL=http://mock.api NEXT_PUBLIC_PRIVY_APP_ID=cltestopes000000000000000 pnpm dev --hostname 127.0.0.1 --port 3100",
     url: "http://127.0.0.1:3100",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

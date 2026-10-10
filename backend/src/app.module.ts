@@ -3,6 +3,8 @@ import { AgentController } from './agent.controller';
 import { AgentService } from './agent.service';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { AuthController } from './auth.controller';
+import { AuthService } from './auth.service';
 import { DatabaseService } from './database.service';
 import { DecisionController } from './decision.controller';
 import { DecisionService } from './decision.service';
@@ -39,6 +41,7 @@ import { TenantContextService } from './tenant-context.service';
   controllers: [
     AgentController,
     AppController,
+    AuthController,
     DecisionController,
     EvidenceController,
     InvoiceController,
@@ -55,6 +58,7 @@ import { TenantContextService } from './tenant-context.service';
   providers: [
     AgentService,
     AppService,
+    AuthService,
     DatabaseService,
     DecisionService,
     EvidenceService,

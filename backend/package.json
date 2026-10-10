@@ -27,6 +27,7 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@noble/hashes": "1.8.0",
+    "@privy-io/node": "0.35.0",
     "pg": "8.16.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

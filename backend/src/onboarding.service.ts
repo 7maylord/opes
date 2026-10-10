@@ -5,11 +5,9 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { SessionService } from './session.service';
+import { SessionUser } from './session.service';
 
 export interface OnboardingRequest {
-  email: string;
-  displayName: string;
   organizationName: string;
   organizationSlug?: string;
 }
@@ -34,13 +32,6 @@ export interface OnboardingResult {
     id: string;
     lifecycleStatus: string;
   };
-  sessionToken: string;
-}
-
-interface UserRow {
-  id: string;
-  email: string;
-  display_name: string;
 }
 
 interface OrganizationRow {
@@ -68,17 +59,13 @@ interface GlobalIdempotencyRecordRow {
 
 @Injectable()
 export class OnboardingService {
-  constructor(
-    private readonly database: DatabaseService,
-    private readonly sessions: SessionService,
-  ) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async onboard(
+    user: SessionUser,
     input: OnboardingRequest,
     idempotencyKey?: string,
   ): Promise<OnboardingResult> {
-    const email = normalizeEmail(input.email);
-    const displayName = requireText(input.displayName, 'displayName');
     const organizationName = requireText(
       input.organizationName,
       'organizationName',
@@ -87,8 +74,7 @@ export class OnboardingService {
       input.organizationSlug ?? organizationName,
     );
     const request = {
-      email,
-      displayName,
+      userId: user.id,
       organizationName,
       organizationSlug,
     };
@@ -100,7 +86,6 @@ export class OnboardingService {
         idempotencyKey,
         request,
       );
-      const user = await upsertUser(database, email, displayName);
       const organization = await getOrCreateOrganization(
         database,
         organizationSlug,
@@ -113,10 +98,6 @@ export class OnboardingService {
       );
       const agent = await getOrCreatePrimaryAgent(database, organization.id);
       await ensureArcOperatorWalletProvisioning(database, organization.id);
-      const sessionToken = await this.sessions.createSessionRecord(
-        database,
-        user.id,
-      );
       await completeGlobalIdempotency(
         database,
         'POST /onboarding',
@@ -127,7 +108,7 @@ export class OnboardingService {
         user: {
           id: user.id,
           email: user.email,
-          displayName: user.display_name,
+          displayName: user.displayName,
         },
         organization: {
           id: organization.id,
@@ -143,7 +124,6 @@ export class OnboardingService {
           id: agent.id,
           lifecycleStatus: agent.lifecycle_status,
         },
-        sessionToken,
       };
     });
   }
@@ -221,25 +201,6 @@ async function completeGlobalIdempotency(
     `,
     [route, idempotencyKey],
   );
-}
-
-async function upsertUser(
-  database: TenantDatabase,
-  email: string,
-  displayName: string,
-): Promise<UserRow> {
-  const result = await database.query<UserRow>(
-    `
-      INSERT INTO opes.app_users (email, display_name)
-      VALUES ($1, $2)
-      ON CONFLICT (email_normalized)
-      DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = now()
-      RETURNING id, email, display_name
-    `,
-    [email, displayName],
-  );
-
-  return requireRow(result.rows[0], 'user');
 }
 
 async function getOrCreateOrganization(
@@ -425,15 +386,6 @@ async function ensureArcOperatorWalletProvisioning(
     `,
     [organizationId, row.id],
   );
-}
-
-function normalizeEmail(value: string): string {
-  const email = requireText(value, 'email').toLowerCase();
-  if (!email.includes('@')) {
-    throw new BadRequestException('email must be valid');
-  }
-
-  return email;
 }
 
 function requireText(value: string | undefined, name: string): string {

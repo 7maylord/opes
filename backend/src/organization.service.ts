@@ -7,7 +7,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { SessionService } from './session.service';
 import { MembershipRole, TenantContext } from './tenant-context';
 
 export interface UserOrganization {
@@ -59,7 +58,6 @@ export interface AcceptOrganizationInvitationResult {
     lifecycleStatus: string;
   };
   membership: OrganizationMember;
-  sessionToken: string;
 }
 
 interface UserOrganizationRow {
@@ -110,10 +108,7 @@ interface IdempotencyRecordRow {
 
 @Injectable()
 export class OrganizationService {
-  constructor(
-    private readonly database: DatabaseService,
-    private readonly sessions?: SessionService,
-  ) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async listForUser(userId: string): Promise<UserOrganization[]> {
     if (userId.trim() === '') {
@@ -513,9 +508,9 @@ export class OrganizationService {
 
   async acceptInvitation(
     token: string,
+    authenticatedUserId: string,
   ): Promise<AcceptOrganizationInvitationResult> {
     const invitationToken = requireText(token, 'token');
-    const sessions = this.requireSessions();
 
     return this.database.withTransaction(async (database) => {
       const invitationResult = await database.query<InvitationLookupRow>(
@@ -526,6 +521,7 @@ export class OrganizationService {
              AND status = 'PENDING'
              AND expires_at > now()
            LIMIT 1
+           FOR UPDATE
         `,
         [hashToken(invitationToken)],
       );
@@ -550,6 +546,7 @@ export class OrganizationService {
            WHERE membership.organization_id = $1
              AND membership.id = $2
              AND membership.status = 'INVITED'
+             AND membership.user_id = $3
              AND app_user.id = membership.user_id
              AND organization.id = membership.organization_id
           RETURNING
@@ -565,10 +562,17 @@ export class OrganizationService {
             organization.display_name AS organization_display_name,
             organization.lifecycle_status AS organization_lifecycle_status
         `,
-        [invitation.organization_id, invitation.membership_id],
+        [
+          invitation.organization_id,
+          invitation.membership_id,
+          authenticatedUserId,
+        ],
       );
 
-      const member = requireMember(memberResult.rows[0]);
+      if (memberResult.rows[0] === undefined) {
+        throw new ForbiddenException('Invitation does not belong to this user');
+      }
+      const member = memberResult.rows[0];
       await database.query(
         `
           UPDATE opes.organization_invitations
@@ -595,11 +599,6 @@ export class OrganizationService {
         [invitation.organization_id, member.user_id, member.id],
       );
 
-      const sessionToken = await sessions.createSessionRecord(
-        database,
-        member.user_id,
-      );
-
       return {
         user: {
           id: member.user_id,
@@ -613,17 +612,8 @@ export class OrganizationService {
           lifecycleStatus: member.organization_lifecycle_status,
         },
         membership: mapMember(member),
-        sessionToken,
       };
     });
-  }
-
-  private requireSessions(): SessionService {
-    if (this.sessions === undefined) {
-      throw new Error('SessionService is required');
-    }
-
-    return this.sessions;
   }
 
   private async withTenantIdempotency<T>(

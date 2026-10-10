@@ -10,22 +10,23 @@ const organizations = [
 const members = [{ id: "member-owner", userId: "user-1", email: "owner@example.com", displayName: "Owner User", role: "OWNER", status: "ACTIVE", createdAt: "2026-10-04T00:00:00.000Z" }];
 
 async function installApiMock(page: Page) {
-  await page.route("http://mock.api/**", async (route) => respond(route));
+  const state = { onboarded: false };
+  await page.route("http://mock.api/**", async (route) => respond(route, state));
 }
 
 async function openSignedIn(page: Page) {
   await installApiMock(page);
   await page.goto("/");
-  await page.getByLabel("Backend session token").fill("mock-session-token");
-  await page.getByRole("button", { name: "Load workspace" }).click();
+  await page.evaluate(() => localStorage.setItem("opes:session-token", "mock-session-token"));
+  await page.reload();
   await expect(page.getByRole("heading", { name: "Alpha Co" })).toBeVisible();
 }
 
 test("journey 1: owner creates organization and sees setup checklist", async ({ page }) => {
   await installApiMock(page);
   await page.goto("/");
-  await page.getByLabel("Work email").fill("owner@example.com");
-  await page.getByLabel("Your name").fill("Owner User");
+  await page.evaluate(() => localStorage.setItem("opes:session-token", "new-user-token"));
+  await page.reload();
   await page.getByLabel("Organization name").fill("Alpha Co");
   await page.getByRole("button", { name: "Create and queue setup" }).click();
   await expect(page.getByText("Organization created. Arc setup is queued.")).toBeVisible();
@@ -40,6 +41,8 @@ test("journey 2: invite and accept member", async ({ page }) => {
   await page.getByRole("button", { name: "Invite" }).click();
   await expect(page.getByText("Invitation token:")).toBeVisible();
   await page.getByRole("button", { name: "Logout" }).click();
+  await page.evaluate(() => localStorage.setItem("opes:session-token", "invitee-token"));
+  await page.reload();
   await page.getByLabel("Invitation token").fill("invite-token-123");
   await page.getByRole("button", { name: "Accept invitation" }).click();
   await expect(page.getByText("Invitation accepted. Workspace loaded.")).toBeVisible();
@@ -123,7 +126,7 @@ test("basic accessibility landmarks and labels are present", async ({ page }) =>
   await expect(page.getByLabel("Mode")).toBeVisible();
 });
 
-async function respond(route: Route) {
+async function respond(route: Route, state: { onboarded: boolean }) {
   const request = route.request();
   const path = new URL(request.url()).pathname.slice(1);
   let body: Record<string, unknown> = {};
@@ -132,18 +135,19 @@ async function respond(route: Route) {
       body = request.postDataJSON() as Record<string, unknown>;
     } catch {}
   }
-  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(responseFor(request.method(), path, body)) });
+  if (path === "onboarding") state.onboarded = true;
+  await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(responseFor(request.method(), path, body, request.headers().authorization, state)) });
 }
 
-function responseFor(method: string, path: string, body: Record<string, unknown>) {
+function responseFor(method: string, path: string, body: Record<string, unknown>, authorization: string | undefined, state: { onboarded: boolean }) {
   if (method === "DELETE" && path === "session") return { revoked: true };
   if (method === "GET" && path === "session") return user;
-  if (method === "GET" && path === "organizations") return organizations;
+  if (method === "GET" && path === "organizations") return authorization === "Bearer mock-session-token" || state.onboarded ? organizations : [];
   if (method === "GET" && path.endsWith("/agent")) return { id: "agent-1", lifecycleStatus: "SETUP_REQUIRED", arcTestnetFactory: { environment: "arc-testnet", chainId: 5042002, factoryAddress: "0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", vaultDeployerAddress: "0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8", verification: "fully_verified", explorerUrl: "https://explorer.testnet.arc.io/address/0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", checkedAt: "2026-10-04T00:00:00.000Z" }, resourceBindings: path.startsWith(`organizations/${orgId}`) ? activeBindings() : [] };
   if (method === "GET" && path.endsWith("/members")) return members;
   if (method === "GET" && path.endsWith("/treasury/position")) return { assetSymbol: "USDC", committedPayablesAtomic: "2500000", approvedUnsettledPaymentAtomic: "1000000", plannedLiquidityAtomic: "500000", supportedNetworks: [{ environment: "arc-testnet" }, { environment: "base-sepolia" }] };
-  if (path === "onboarding") return { user, organization: organizations[0], membership: { id: "member-owner", role: "OWNER" }, agent: { id: "agent-1", lifecycleStatus: "PROVISIONING" }, sessionToken: "mock-session-token" };
-  if (path.startsWith("organization-invitations/")) return { user, organization: organizations[0], membership: members[0], sessionToken: "mock-session-token" };
+  if (path === "onboarding") return { user, organization: organizations[0], membership: { id: "member-owner", role: "OWNER" }, agent: { id: "agent-1", lifecycleStatus: "PROVISIONING" } };
+  if (path.startsWith("organization-invitations/")) return { user, organization: organizations[0], membership: members[0] };
   if (path.endsWith("/members")) return { id: "member-invited", userId: "user-2", email: body.email, displayName: body.displayName, role: body.role, status: "INVITED", createdAt: "2026-10-04T00:00:00.000Z", invitationToken: "invite-token-123" };
   if (path.endsWith("/agent/provisioning/arc-testnet")) return binding("factory-1", "arc", "factory_provisioning", null, "PENDING");
   if (path.endsWith("/vendors")) return { id: "vendor-1", displayName: body.displayName, status: "PENDING_REVIEW", version: 1, metadata: {} };

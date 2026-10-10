@@ -42,13 +42,17 @@ export interface InvitedOrganizationMember extends OrganizationMember {
 
 export interface AuthSessionResult {
   user: SessionUser;
+  sessionToken: string;
+}
+
+export interface OrganizationAccessResult {
+  user: SessionUser;
   organization: {
     id: string;
     slug: string;
     displayName: string;
     lifecycleStatus: string;
   };
-  sessionToken: string;
 }
 
 export interface AgentResourceBinding {
@@ -93,22 +97,27 @@ export function getApiBaseUrl() {
   return apiBaseUrl;
 }
 
-export async function onboardOrganization(input: {
-  email: string;
-  displayName: string;
+export async function exchangePrivySession(accessToken: string) {
+  return request<AuthSessionResult>("/auth/privy/session", accessToken, {
+    method: "POST",
+  });
+}
+
+export async function onboardOrganization(token: string, input: {
   organizationName: string;
   organizationSlug?: string;
 }) {
-  return publicRequest<AuthSessionResult>("/onboarding", {
+  return request<OrganizationAccessResult>("/onboarding", token, {
     method: "POST",
     headers: idempotencyHeaders(),
     body: JSON.stringify(input),
   });
 }
 
-export async function acceptInvitation(token: string) {
-  return publicRequest<AuthSessionResult>(
-    `/organization-invitations/${encodeURIComponent(token)}/accept`,
+export async function acceptInvitation(sessionToken: string, invitationToken: string) {
+  return request<OrganizationAccessResult>(
+    `/organization-invitations/${encodeURIComponent(invitationToken)}/accept`,
+    sessionToken,
     { method: "POST" },
   );
 }
@@ -167,13 +176,6 @@ export async function inviteOrganizationMember(
 
 export async function revokeSession(token: string) {
   await request<{ revoked: true }>("/session", token, { method: "DELETE" });
-}
-
-async function publicRequest<T>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  return fetchJson<T>(path, init);
 }
 
 async function request<T>(
