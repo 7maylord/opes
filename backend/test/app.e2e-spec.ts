@@ -8,6 +8,8 @@ import {
   useCorrelationIds,
 } from './../src/correlation-id';
 
+jest.mock('@privy-io/node', () => ({ PrivyClient: jest.fn() }));
+
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
 

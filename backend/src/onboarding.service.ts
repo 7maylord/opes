@@ -17,6 +17,7 @@ export interface OnboardingResult {
     id: string;
     email: string;
     displayName: string;
+    ownerWalletAddress: string;
   };
   organization: {
     id: string;
@@ -75,9 +76,14 @@ export class OnboardingService {
     );
     const request = {
       userId: user.id,
+      ownerWalletAddress: user.ownerWalletAddress,
       organizationName,
       organizationSlug,
     };
+    if (user.ownerWalletAddress === null) {
+      throw new ConflictException('Owner wallet setup is incomplete');
+    }
+    const ownerWalletAddress = user.ownerWalletAddress;
 
     return this.database.withTransaction(async (database) => {
       await reserveGlobalIdempotency(
@@ -109,6 +115,7 @@ export class OnboardingService {
           id: user.id,
           email: user.email,
           displayName: user.displayName,
+          ownerWalletAddress,
         },
         organization: {
           id: organization.id,

@@ -17,6 +17,7 @@ describe('linkPrivyUser', () => {
             email: 'owner@example.com',
             display_name: 'Owner',
             privy_user_id: null,
+            owner_wallet_address: null,
           },
         ],
       })
@@ -27,6 +28,7 @@ describe('linkPrivyUser', () => {
             email: 'owner@example.com',
             display_name: 'Owner',
             privy_user_id: 'did:privy:1',
+            owner_wallet_address: '0x1111111111111111111111111111111111111111',
           },
         ],
       });
@@ -35,6 +37,7 @@ describe('linkPrivyUser', () => {
         { query } as TenantDatabase,
         'did:privy:1',
         'OWNER@example.com',
+        '0x1111111111111111111111111111111111111111',
       ),
     ).resolves.toMatchObject({ id: 'user-1', privy_user_id: 'did:privy:1' });
   });
@@ -47,6 +50,7 @@ describe('linkPrivyUser', () => {
           email: 'owner@example.com',
           display_name: 'Owner',
           privy_user_id: 'did:privy:other',
+          owner_wallet_address: null,
         },
       ],
     });
@@ -55,6 +59,30 @@ describe('linkPrivyUser', () => {
         { query } as TenantDatabase,
         'did:privy:1',
         'owner@example.com',
+        '0x1111111111111111111111111111111111111111',
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not silently replace an established owner wallet', async () => {
+    const query = jest.fn().mockResolvedValueOnce({
+      rows: [
+        {
+          id: 'user-1',
+          email: 'owner@example.com',
+          display_name: 'Owner',
+          privy_user_id: 'did:privy:1',
+          owner_wallet_address: '0x2222222222222222222222222222222222222222',
+        },
+      ],
+    });
+    await expect(
+      linkPrivyUser(
+        { query } as TenantDatabase,
+        'did:privy:1',
+        'owner@example.com',
+        '0x1111111111111111111111111111111111111111',
       ),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(query).toHaveBeenCalledTimes(1);

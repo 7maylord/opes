@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { CircleWalletService } from './circle-wallet.service';
 import { DatabaseService } from './database.service';
 import { DecisionController } from './decision.controller';
 import { DecisionService } from './decision.service';
@@ -59,6 +60,7 @@ import { TenantContextService } from './tenant-context.service';
     AgentService,
     AppService,
     AuthService,
+    CircleWalletService,
     DatabaseService,
     DecisionService,
     EvidenceService,

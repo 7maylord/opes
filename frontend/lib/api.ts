@@ -6,6 +6,7 @@ export interface SessionUser {
   id: string;
   email: string;
   displayName: string;
+  ownerWalletAddress: string | null;
 }
 
 export interface UserOrganization {

@@ -1,5 +1,6 @@
 import { DatabaseService, TenantDatabase } from './database.service';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
+import { CircleWalletService } from './circle-wallet.service';
 
 const factoryManifests = {
   getArcTestnetFactory: jest.fn(() => ({
@@ -7,13 +8,17 @@ const factoryManifests = {
     chainId: 5042002,
     factoryAddress: '0xfactory',
     vaultDeployerAddress: '0xdeployer',
+    tokenAddress: '0x3600000000000000000000000000000000000000',
     verification: 'fully_verified',
     explorerUrl: 'https://explorer.testnet.arc.io/address/0xfactory',
     checkedAt: '2026-10-02T09:05:47.854Z',
   })),
 };
 
-function serviceWithWorker(query: TenantDatabase['query']): {
+function serviceWithWorker(
+  query: TenantDatabase['query'],
+  circle: Partial<CircleWalletService> = { isConfigured: () => false },
+): {
   service: ProvisioningWorkerService;
   withWorker: jest.Mock;
 } {
@@ -23,6 +28,7 @@ function serviceWithWorker(query: TenantDatabase['query']): {
   const service = new ProvisioningWorkerService(
     { withWorker } as unknown as DatabaseService,
     factoryManifests,
+    circle as CircleWalletService,
   );
 
   return { service, withWorker };
@@ -65,14 +71,14 @@ describe('ProvisioningWorkerService', () => {
       'binding-1',
       'arc',
       'factory_provisioning',
-      'Arc provisioning provider is not configured',
+      'Circle wallets are not configured',
     ]);
     expect(queries[2]?.text).toContain(
       "payload = payload || jsonb_build_object('failureReason'",
     );
     expect(queries[2]?.values).toEqual([
       'event-1',
-      'Arc provisioning provider is not configured',
+      'Circle wallets are not configured',
     ]);
   });
 
@@ -106,7 +112,7 @@ describe('ProvisioningWorkerService', () => {
       'binding-1',
       'circle',
       'operator_wallet',
-      'Arc wallet provider is not configured',
+      'Circle wallets are not configured',
     ]);
   });
 
@@ -120,6 +126,98 @@ describe('ProvisioningWorkerService', () => {
       expect.stringContaining(
         "status = 'PROCESSING' AND updated_at < now() - interval '5 minutes'",
       ),
+    );
+  });
+
+  it('reconciles and activates one Circle operator wallet before factory provisioning', async () => {
+    const operator = {
+      id: 'circle-operator-1',
+      address: '0x1111111111111111111111111111111111111111',
+      accountType: 'EOA',
+    };
+    const query = jest.fn((sql: string) => {
+      if (sql.includes('RETURNING id, organization_id, aggregate_id')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'event-1',
+              organization_id: 'organization-1',
+              aggregate_id: 'binding-1',
+              event_type: 'agent.wallet.provision.arc_testnet',
+            },
+          ],
+        });
+      }
+      if (sql.includes('INSERT INTO opes.provider_resources')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'resource',
+              provider_resource_id: null,
+              address: null,
+              metadata: {
+                idempotencyKey: '11111111-1111-4111-8111-111111111111',
+              },
+            },
+          ],
+        });
+      }
+      if (sql.includes('FROM opes.tenant_resource_bindings binding')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'binding-1',
+              organization_id: 'organization-1',
+              resource_id: 'organization-1',
+              address: null,
+              status: 'PENDING',
+              metadata: {},
+              owner_wallet_address:
+                '0x2222222222222222222222222222222222222222',
+            },
+          ],
+        });
+      }
+      if (
+        sql.includes('RETURNING id') &&
+        sql.includes('factory_provisioning')
+      ) {
+        return Promise.resolve({ rows: [{ id: 'factory-binding-1' }] });
+      }
+      if (sql.includes("resource_type = 'operator_wallet'")) {
+        return Promise.resolve({ rows: [{ id: 'binding-1' }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const circle = {
+      isConfigured: () => true,
+      createWalletSet: jest.fn().mockResolvedValue('wallet-set-1'),
+      findWallet: jest
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(operator),
+      createWallet: jest.fn().mockResolvedValue({
+        id: 'circle-provisioner-1',
+        address: '0x3333333333333333333333333333333333333333',
+        accountType: 'EOA',
+      }),
+      requestArcTestnetTokens: jest.fn().mockResolvedValue(undefined),
+    };
+    const { service } = serviceWithWorker(query, circle);
+
+    await expect(service.processDueArcProvisioning(1)).resolves.toBe(1);
+    expect(circle.createWalletSet).toHaveBeenCalledTimes(1);
+    expect(circle.findWallet).toHaveBeenNthCalledWith(
+      2,
+      'opes:tenant:organization-1:operator:arc-testnet',
+    );
+    expect(circle.createWallet).toHaveBeenCalledTimes(1);
+    expect(circle.requestArcTestnetTokens).toHaveBeenCalledWith(
+      '0x3333333333333333333333333333333333333333',
+    );
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status = 'PROCESSED'"),
+      ['event-1'],
     );
   });
 

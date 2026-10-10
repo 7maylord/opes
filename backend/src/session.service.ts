@@ -8,12 +8,14 @@ export interface SessionUser {
   id: string;
   email: string;
   displayName: string;
+  ownerWalletAddress: string | null;
 }
 
 interface SessionUserRow {
   id: string;
   email: string;
   display_name: string;
+  owner_wallet_address: string | null;
 }
 
 @Injectable()
@@ -73,7 +75,8 @@ export class SessionService {
              AND session.token_hash = $1
              AND session.status = 'ACTIVE'
              AND session.expires_at > now()
-          RETURNING app_user.id, app_user.email, app_user.display_name
+          RETURNING app_user.id, app_user.email, app_user.display_name,
+                    app_user.owner_wallet_address
         `,
         [tokenHash],
       ),
@@ -88,6 +91,7 @@ export class SessionService {
       id: row.id,
       email: row.email,
       displayName: row.display_name,
+      ownerWalletAddress: row.owner_wallet_address,
     };
   }
 

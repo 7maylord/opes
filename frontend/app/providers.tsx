@@ -11,7 +11,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       appId={appId}
       config={{
         loginMethods: ["email"],
-        embeddedWallets: { ethereum: { createOnLogin: "off" } },
+        embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } },
       }}
     >
       {children}

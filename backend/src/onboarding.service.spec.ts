@@ -2,7 +2,12 @@ import { ConflictException } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { OnboardingService } from './onboarding.service';
 
-const user = { id: 'user-1', email: 'owner@example.com', displayName: 'Owner' };
+const user = {
+  id: 'user-1',
+  email: 'owner@example.com',
+  displayName: 'Owner',
+  ownerWalletAddress: '0x1111111111111111111111111111111111111111',
+};
 
 describe('OnboardingService', () => {
   it('creates an organization for the authenticated user without minting a session', async () => {

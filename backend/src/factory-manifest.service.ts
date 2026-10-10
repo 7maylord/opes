@@ -6,6 +6,7 @@ export interface VerifiedFactoryManifest {
   chainId: number;
   factoryAddress: string;
   vaultDeployerAddress: string;
+  tokenAddress: string;
   verification: string;
   explorerUrl: string;
   checkedAt: string;
@@ -15,6 +16,7 @@ interface FactoryManifestFile {
   environment: string;
   chainId: number;
   checkedAt: string;
+  token: string;
   contracts: {
     OrganizationFactory: {
       address: string;
@@ -38,6 +40,7 @@ export class FactoryManifestService {
       chainId: file.chainId,
       factoryAddress: file.contracts.OrganizationFactory.address,
       vaultDeployerAddress: file.contracts.VaultDeployer.address,
+      tokenAddress: file.token,
       verification: file.contracts.OrganizationFactory.verification,
       explorerUrl: file.contracts.OrganizationFactory.explorerUrl,
       checkedAt: file.checkedAt,
