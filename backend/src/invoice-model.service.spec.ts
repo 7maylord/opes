@@ -70,6 +70,7 @@ describe('InvoiceModelService', () => {
     const payload = JSON.parse(requestBody) as Record<string, unknown>;
     expect(payload).toMatchObject({
       model: 'test-model',
+      reasoning: { effort: 'none' },
       text: { format: { type: 'json_schema' } },
     });
     expect(payload).not.toHaveProperty('store');

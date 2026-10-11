@@ -110,7 +110,7 @@ export class InvoiceModelService {
       throw new ConflictException('DeepSeek invoice model is not configured');
     const baseUrl =
       process.env.OPES_DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com';
-    const payload = { model, ...request };
+    const payload = { model, reasoning: { effort: 'none' }, ...request };
     const requestHash = createHash('sha256')
       .update(JSON.stringify(payload))
       .digest('hex');
