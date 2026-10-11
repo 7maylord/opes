@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useSendTransaction } from "@privy-io/react-auth";
 import {
   addVendorAddress,
   approveDecision,
@@ -11,6 +12,7 @@ import {
   uploadEvidenceDocument,
   verifyInvoice,
   verifyVendorAddress,
+  confirmLifecycleAction,
   type DecisionApprovalResponse,
   type DocumentExtractionResponse,
   type EvidenceDocumentResponse,
@@ -30,6 +32,7 @@ export function VendorInvoiceWorkflows({
   token: string;
   organizationId: string;
 }) {
+  const { sendTransaction } = useSendTransaction();
   const [vendorName, setVendorName] = useState("");
   const [payoutAddress, setPayoutAddress] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -147,7 +150,10 @@ export function VendorInvoiceWorkflows({
   async function submitApproval() {
     if (decision === null) return setError("Run a decision first.");
     await run("Decision approved", async () => {
-      setApproval(await approveDecision(token, organizationId, decision.id));
+      const result = await approveDecision(token, organizationId, decision.id);
+      const transaction = await sendTransaction({to:result.ownerAction.to,data:result.ownerAction.data,chainId:result.ownerAction.chainId,value:0});
+      await confirmLifecycleAction(token,organizationId,result.ownerAction.id,transaction.hash);
+      setApproval(result);
     });
   }
 

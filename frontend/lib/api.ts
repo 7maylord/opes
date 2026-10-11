@@ -321,7 +321,10 @@ export interface DecisionApprovalResponse {
   policySnapshotHash: string;
   status: string;
   expiresAt: string;
+  ownerAction: ChainActionResponse;
 }
+
+export async function prepareTreasuryAction(token:string,organizationId:string,input:Record<string,unknown>){return request<ChainActionResponse>(`/organizations/${encodeURIComponent(organizationId)}/treasury-actions`,token,{method:'POST',body:JSON.stringify(input)});}
 
 export interface PaymentExecutionResponse {
   id: string;

@@ -32,6 +32,7 @@ import { LandingExperience } from "./landing-experience";
 import { LifecycleWorkflows } from "./lifecycle-workflows";
 import { TreasuryAuditViews } from "./treasury-audit-views";
 import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
+import { OwnerTreasuryControls } from "./owner-treasury-controls";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
@@ -441,23 +442,7 @@ export function AuthenticatedShell() {
                 </Panel>
 
                 <Panel title="Lifecycle controls">
-                  <p className="text-sm leading-6 text-slate-600">
-                    Execution stays locked until the backend reports active wallet,
-                    vault and escrow bindings. Pause and recovery require a backend
-                    owner-authorized endpoint so privileged contract calls never run
-                    from this browser shell.
-                  </p>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <button disabled className="min-h-11 rounded-2xl bg-slate-200 px-4 font-semibold text-slate-500">
-                      {setupComplete ? "Execution ready" : "Execution locked"}
-                    </button>
-                    <button disabled className="min-h-11 rounded-2xl bg-slate-200 px-4 font-semibold text-slate-500">
-                      Pause locked
-                    </button>
-                    <button disabled className="min-h-11 rounded-2xl bg-slate-200 px-4 font-semibold text-slate-500">
-                      Recovery locked
-                    </button>
-                  </div>
+                  {setupComplete && selectedOrganization?.role === 'OWNER' ? <OwnerTreasuryControls token={token} organizationId={selectedOrganizationId}/> : <p className="text-sm text-slate-600">Owner controls unlock after Arc setup completes.</p>}
                 </Panel>
               </div>
 

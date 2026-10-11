@@ -43,6 +43,8 @@ import { OrganizationService } from './organization.service';
 import { SessionController } from './session.controller';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
+import { OwnerTreasuryController } from './owner-treasury.controller';
+import { OwnerTreasuryService } from './owner-treasury.service';
 
 @Module({
   imports: [],
@@ -62,6 +64,7 @@ import { TenantContextService } from './tenant-context.service';
     OrganizationInvitationController,
     OrganizationController,
     SessionController,
+    OwnerTreasuryController,
   ],
   providers: [
     AgentService,
@@ -93,6 +96,7 @@ import { TenantContextService } from './tenant-context.service';
     OrganizationService,
     SessionService,
     TenantContextService,
+    OwnerTreasuryService,
   ],
 })
 export class AppModule {}

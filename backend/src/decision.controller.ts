@@ -14,12 +14,12 @@ import { DecisionService } from './decision.service';
 import type { PaymentExecutionResponse } from './payment-execution.service';
 import { PaymentExecutionService } from './payment-execution.service';
 import type {
-  DecisionApprovalResponse,
   EvaluateInvoiceDecisionRequest,
   PaymentDecisionResponse,
 } from './decision.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
+import { OwnerTreasuryService } from './owner-treasury.service';
 
 @Controller('organizations/:organizationId/decisions')
 export class DecisionController {
@@ -29,6 +29,7 @@ export class DecisionController {
     private readonly executions: PaymentExecutionService,
     private readonly sessions: SessionService,
     private readonly tenantContexts: TenantContextService,
+    private readonly ownerTreasury: OwnerTreasuryService,
   ) {}
 
   @Post(':decisionId/authorize')
@@ -37,7 +38,7 @@ export class DecisionController {
     @Param('decisionId') decisionId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
-  ): Promise<DecisionApprovalResponse> {
+  ) {
     const token = parseBearerToken(authorization);
     if (token === undefined) {
       throw new UnauthorizedException('Bearer session token is required');
@@ -54,7 +55,14 @@ export class DecisionController {
       requestId: resolveCorrelationId(correlationId),
     });
 
-    return this.decisions.approveDecision(context, decisionId);
+    const approval = await this.decisions.approveDecision(context, decisionId);
+    return {
+      ...approval,
+      ownerAction: await this.ownerTreasury.prepareDecisionApproval(
+        context,
+        decisionId,
+      ),
+    };
   }
 
   @Post(':decisionId/execute')

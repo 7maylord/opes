@@ -48,7 +48,7 @@ test("journey 2: invite and accept member", async ({ page }) => {
   await expect(page.getByText("Invitation accepted. Workspace loaded.")).toBeVisible();
 });
 
-test("journey 3: invoice source flows to decision execution", async ({ page }) => {
+test("journey 3: invoice decision reaches owner-signature approval", async ({ page }) => {
   await openSignedIn(page);
   await page.getByLabel("Vendor name").fill("Canteen Supplies");
   await page.getByRole("button", { name: "Create vendor" }).click();
@@ -66,9 +66,7 @@ test("journey 3: invoice source flows to decision execution", async ({ page }) =
   await page.getByRole("button", { name: "Verify invoice" }).click({ force: true });
   await page.getByRole("button", { name: "Generate agent decision" }).click({ force: true });
   await expect(page.getByText('"status": "PASS"')).toBeVisible();
-  await page.getByRole("button", { name: "Approve", exact: true }).click({ force: true });
-  await page.getByRole("button", { name: "Request execution" }).click({ force: true });
-  await expect(page.getByText('"status": "PENDING"')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
 });
 
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
