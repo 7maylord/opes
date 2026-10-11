@@ -39,7 +39,7 @@ describe('EvidenceService', () => {
           sha256_hex:
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           storage_key: 'org/documents/invoice.pdf',
-          status: 'RECORDED',
+          status: 'STAGING',
           metadata: { source: 'upload' },
         },
       ],
@@ -64,7 +64,7 @@ describe('EvidenceService', () => {
       sizeBytes: 1200,
       sha256Hex: 'a'.repeat(64),
       storageKey: 'org/documents/invoice.pdf',
-      status: 'RECORDED',
+      status: 'STAGING',
       metadata: { source: 'upload' },
     });
     expect(withTenant).toHaveBeenCalledWith(context, expect.any(Function));

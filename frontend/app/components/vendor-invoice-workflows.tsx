@@ -1,14 +1,14 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   addVendorAddress,
   approveDecision,
   createVendor,
-  evaluateInvoicePayment,
+  evaluateInvoicePaymentWithAgent,
   executeDecision,
-  recordDocumentExtraction,
-  recordEvidenceDocument,
+  extractInvoiceDocument,
+  uploadEvidenceDocument,
   verifyInvoice,
   verifyVendorAddress,
   type DecisionApprovalResponse,
@@ -34,7 +34,7 @@ export function VendorInvoiceWorkflows({
   const [payoutAddress, setPayoutAddress] = useState("");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceAmount, setInvoiceAmount] = useState("100.00");
-  const [invoiceHash, setInvoiceHash] = useState("");
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const [vendor, setVendor] = useState<VendorResponse | null>(null);
   const [vendorAddress, setVendorAddress] = useState<VendorAddressResponse | null>(null);
   const [document, setDocument] = useState<EvidenceDocumentResponse | null>(null);
@@ -46,17 +46,6 @@ export function VendorInvoiceWorkflows({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
-
-  const extractionOutput = useMemo(
-    () => ({
-      vendorName: vendor?.displayName ?? vendorName,
-      invoiceNumber,
-      currency: "USDC",
-      amount: invoiceAmount,
-      payoutAddress,
-    }),
-    [invoiceAmount, invoiceNumber, payoutAddress, vendor?.displayName, vendorName],
-  );
 
   async function submitVendor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -90,15 +79,12 @@ export function VendorInvoiceWorkflows({
 
   async function submitDocument(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (invoiceFile === null) return setError("Choose an invoice file first.");
     await run("Invoice evidence recorded", async () => {
       setDocument(
-        await recordEvidenceDocument(token, organizationId, {
+        await uploadEvidenceDocument(token, organizationId, {
           documentType: "INVOICE",
-          filename: `${invoiceNumber || "invoice"}.pdf`,
-          contentType: "application/pdf",
-          sizeBytes: 1024,
-          sha256Hex: invoiceHash,
-          storageKey: `invoices/${invoiceHash}.pdf`,
+          file: invoiceFile,
         }),
       );
     });
@@ -106,17 +92,17 @@ export function VendorInvoiceWorkflows({
 
   async function submitExtraction() {
     if (document === null) return setError("Record invoice evidence first.");
-    await run("Extraction provenance recorded", async () => {
-      setExtraction(
-        await recordDocumentExtraction(token, organizationId, document.id, {
-          schemaName: "invoice",
-          schemaVersion: "1",
-          modelProvider: "manual-demo",
-          modelName: "human-entered",
-          sourceSha256Hex: document.sha256Hex,
-          output: extractionOutput,
-        }),
-      );
+    await run("Invoice extracted for review", async () => {
+      const extracted = await extractInvoiceDocument(token, organizationId, document.id);
+      setExtraction(extracted);
+      const output = extracted.output as {
+        invoiceNumber?: string | null;
+        amount?: string | null;
+        payoutAddress?: string | null;
+      };
+      if (output.invoiceNumber) setInvoiceNumber(output.invoiceNumber);
+      if (output.amount) setInvoiceAmount(output.amount);
+      if (output.payoutAddress) setPayoutAddress(output.payoutAddress);
     });
   }
 
@@ -144,12 +130,8 @@ export function VendorInvoiceWorkflows({
     if (obligation === null) return setError("Verify an invoice first.");
     await run("Decision dry run completed", async () => {
       setDecision(
-        await evaluateInvoicePayment(token, organizationId, {
+        await evaluateInvoicePaymentWithAgent(token, organizationId, {
           invoiceVersionId: obligation.versionId,
-          modelAction: "PAY",
-          modelName: "manual-demo",
-          modelRationale: "Invoice matched vendor, payout address and evidence.",
-          promptVersion: "frontend-f2",
           route: {
             liquidityRoute: "OPERATING",
             environment: "arc-testnet",
@@ -222,10 +204,13 @@ export function VendorInvoiceWorkflows({
           <h4 className="font-semibold">3. Invoice evidence</h4>
           <Input label="Invoice number" value={invoiceNumber} onChange={setInvoiceNumber} required />
           <Input label="Invoice amount USDC" value={invoiceAmount} onChange={setInvoiceAmount} required />
-          <Input label="Evidence SHA-256 hex" value={invoiceHash} onChange={setInvoiceHash} required />
-          <button disabled={pending} className="btn">Record document</button>
+          <label className="block text-sm font-medium text-slate-700">
+            Invoice file
+            <input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} className="mt-2 block w-full text-sm" />
+          </label>
+          <button disabled={pending} className="btn">Upload and verify document</button>
           <button type="button" disabled={pending || document === null} onClick={submitExtraction} className="btn-secondary">
-            Record extraction
+            Extract invoice
           </button>
           <Result value={document ?? extraction} />
         </form>
@@ -233,7 +218,7 @@ export function VendorInvoiceWorkflows({
         <div className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">4. Verify, decide, approve</h4>
           <button disabled={pending} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>
-          <button disabled={pending || obligation === null} onClick={submitDecision} className="btn-secondary">Dry-run decision</button>
+          <button disabled={pending || obligation === null} onClick={submitDecision} className="btn-secondary">Generate agent decision</button>
           <button disabled={pending || decision === null} onClick={submitApproval} className="btn-secondary">Approve</button>
           <button disabled={pending || approval === null} onClick={submitExecution} className="btn-secondary">Request execution</button>
           <Result value={execution ?? approval ?? decision ?? obligation} />

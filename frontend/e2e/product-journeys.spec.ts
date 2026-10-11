@@ -56,11 +56,15 @@ test("journey 3: invoice source flows to decision execution", async ({ page }) =
   await page.getByRole("button", { name: "Add address" }).click();
   await page.getByRole("button", { name: "Verify address" }).click();
   await page.getByLabel("Invoice number").fill("INV-100");
-  await page.getByLabel("Evidence SHA-256 hex").fill("a".repeat(64));
-  await page.getByRole("button", { name: "Record document" }).click();
-  await page.getByRole("button", { name: "Record extraction" }).click();
+  await page.getByLabel("Invoice file").setInputFiles({
+    name: "invoice.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Invoice INV-100 for 100 USDC"),
+  });
+  await page.getByRole("button", { name: "Upload and verify document" }).click();
+  await page.getByRole("button", { name: "Extract invoice" }).click();
   await page.getByRole("button", { name: "Verify invoice" }).click({ force: true });
-  await page.getByRole("button", { name: "Dry-run decision" }).click({ force: true });
+  await page.getByRole("button", { name: "Generate agent decision" }).click({ force: true });
   await expect(page.getByText('"status": "PASS"')).toBeVisible();
   await page.getByRole("button", { name: "Approve" }).click({ force: true });
   await page.getByRole("button", { name: "Request execution" }).click({ force: true });
@@ -153,17 +157,18 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (path.endsWith("/vendors")) return { id: "vendor-1", displayName: body.displayName, status: "PENDING_REVIEW", version: 1, metadata: {} };
   if (path.includes("/vendors/") && path.endsWith("/addresses")) return { id: "address-1", vendorId: "vendor-1", environment: body.environment, chainId: body.chainId, assetSymbol: body.assetSymbol, assetAddress: body.assetAddress, payoutAddress: body.payoutAddress, status: "PENDING_REVIEW", version: 1, replacesAddressId: null };
   if (path.includes("/vendor-addresses/")) return { id: "address-1", vendorId: "vendor-1", environment: "arc-testnet", chainId: 5042002, assetSymbol: "USDC", assetAddress: "0x3600000000000000000000000000000000000000", payoutAddress: "0x4000000000000000000000000000000000000004", status: "VERIFIED_ACTIVE", version: 1, replacesAddressId: null };
-  if (path.endsWith("/evidence-documents")) return { id: "doc-1", ...body, status: "RECORDED", metadata: {} };
-  if (path.includes("/evidence-documents/") && path.endsWith("/extractions")) return { id: "extract-1", documentId: "doc-1", ...body, status: "ACCEPTED" };
+  if (path.endsWith("/evidence-documents/uploads")) return { document: { id: "doc-1", ...body, status: "STAGING", storageKey: "staging/doc-1", metadata: {} }, uploadUrl: "http://mock.api/upload/doc-1", uploadHeaders: { "content-type": "text/plain" } };
+  if (path.endsWith("/evidence-documents/doc-1/finalize")) return { id: "doc-1", documentType: "INVOICE", filename: "invoice.txt", contentType: "text/plain", sizeBytes: 30, sha256Hex: "a".repeat(64), storageKey: "documents/doc-1", status: "VERIFIED", metadata: {} };
+  if (path.endsWith("/evidence-documents/doc-1/extract")) return { id: "extract-1", documentId: "doc-1", schemaName: "invoice", schemaVersion: "1", modelProvider: "openai", modelName: "gpt-5-mini", sourceSha256Hex: "a".repeat(64), output: { invoiceNumber: "INV-100", amount: "100", payoutAddress: "0x4000000000000000000000000000000000000004" }, status: "ACCEPTED" };
   if (path.endsWith("/invoices/verify")) return { id: "obligation-1", versionId: "invoice-version-1", version: 1, ...body, extractionId: body.extractionId ?? null, amountAtomic: "100000000", amountDecimals: 6, obligationKey: "obligation-key", contentHash: "content-hash", status: "ACCEPTED" };
-  if (path.endsWith("/decisions/invoice-payment")) {
+  if (path.endsWith("/decisions/invoice-payment/agent")) {
     const route = body.route as {
       liquidityRoute: string;
       environment: string;
       chainId: number;
       assetSymbol: string;
     };
-    return { id: "decision-1", sourceType: "PAYABLE_OBLIGATION", sourceId: "obligation-1", sourceVersionId: body.invoiceVersionId, decisionVersion: 1, paymentMode: "DIRECT", modelAction: body.modelAction, derivedAction: "PAY", liquidityRoute: route.liquidityRoute, routeEnvironment: route.environment, routeChainId: route.chainId, routeAssetSymbol: route.assetSymbol, amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], expiresAt: body.expiresAt };
+    return { id: "decision-1", sourceType: "PAYABLE_OBLIGATION", sourceId: "obligation-1", sourceVersionId: body.invoiceVersionId, decisionVersion: 1, paymentMode: "DIRECT", modelAction: "PAY", derivedAction: "PAY", liquidityRoute: route.liquidityRoute, routeEnvironment: route.environment, routeChainId: route.chainId, routeAssetSymbol: route.assetSymbol, amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], expiresAt: body.expiresAt };
   }
   if (path.endsWith("/decisions/decision-1/authorize")) return { id: "approval-1", decisionId: "decision-1", decisionVersion: 1, sourceVersionId: "invoice-version-1", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", contextHash: "context", policySnapshotHash: "policy", status: "ACTIVE", expiresAt: "2026-10-04T01:00:00.000Z" };
   if (path.endsWith("/decisions/decision-1/execute")) return { id: "execution-1", decisionId: "decision-1", approvalId: "approval-1", sourceVersionId: "invoice-version-1", decisionHash: "decisionhash", idempotencyKey: "key", contextHash: "context", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", routeEnvironment: "arc-testnet", routeChainId: 5042002, routeAssetSymbol: "USDC", vaultAddress: "0x2000000000000000000000000000000000000002", status: "PENDING", failureReason: null, transactionHash: null };

@@ -87,6 +87,9 @@ export interface RecordDocumentExtractionRequest {
   modelName: string;
   sourceSha256Hex: string;
   output: unknown;
+  providerResponseId?: string;
+  promptVersion?: string;
+  requestHash?: string;
 }
 
 export interface DocumentExtractionResponse {
@@ -463,6 +466,12 @@ export class EvidenceService {
       'sourceSha256Hex',
     );
     validateExtractionOutput(input.output);
+    const providerResponseId = optionalText(input.providerResponseId);
+    const promptVersion = optionalText(input.promptVersion);
+    const requestHash =
+      input.requestHash === undefined
+        ? null
+        : validateSha256(input.requestHash, 'requestHash');
 
     const result = await this.database.withTenant(context, async (database) => {
       await requireDocument(
@@ -481,9 +490,16 @@ export class EvidenceService {
             model_name,
             source_sha256_hex,
             output,
+            provider_response_id,
+            prompt_version,
+            request_hash,
             created_by_membership_id
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12)
+          ON CONFLICT (
+            organization_id, document_id, schema_name, schema_version,
+            model_provider, model_name, source_sha256_hex
+          ) DO UPDATE SET created_at = opes.document_extractions.created_at
           RETURNING
             id,
             document_id,
@@ -504,6 +520,9 @@ export class EvidenceService {
           modelName,
           sourceSha256Hex,
           JSON.stringify(input.output),
+          providerResponseId,
+          promptVersion,
+          requestHash,
           context.membershipId,
         ],
       );
@@ -610,6 +629,11 @@ function requireText(value: string | undefined, name: string): string {
     throw new BadRequestException(`${name} is required`);
   }
   return text;
+}
+
+function optionalText(value: string | undefined): string | null {
+  const text = value?.trim();
+  return text ? text : null;
 }
 
 function requireUuid(value: string, name: string): string {

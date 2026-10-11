@@ -391,43 +391,62 @@ export async function verifyVendorAddress(
   );
 }
 
-export async function recordEvidenceDocument(
+export async function uploadEvidenceDocument(
   token: string,
   organizationId: string,
   input: {
     documentType: "INVOICE" | "CONTRACT" | "RECEIPT" | "MILESTONE" | "OTHER";
-    filename: string;
-    contentType: string;
-    sizeBytes: number;
-    sha256Hex: string;
-    storageKey: string;
+    file: File;
     metadata?: unknown;
   },
 ) {
-  return request<EvidenceDocumentResponse>(
-    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents`,
+  if (!input.file.type) throw new Error("Invoice file type is missing");
+  const sha256Hex = Array.from(
+    new Uint8Array(await crypto.subtle.digest("SHA-256", await input.file.arrayBuffer())),
+  )
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+  const initiated = await request<{
+    document: EvidenceDocumentResponse;
+    uploadUrl: string;
+    uploadHeaders: Record<string, string>;
+  }>(
+    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents/uploads`,
     token,
-    { method: "POST", body: JSON.stringify(input) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        documentType: input.documentType,
+        filename: input.file.name,
+        contentType: input.file.type,
+        sizeBytes: input.file.size,
+        sha256Hex,
+        metadata: input.metadata,
+      }),
+    },
+  );
+  const uploaded = await fetch(initiated.uploadUrl, {
+    method: "PUT",
+    headers: initiated.uploadHeaders,
+    body: input.file,
+  });
+  if (!uploaded.ok) throw new Error(`Document upload failed (${uploaded.status})`);
+  return request<EvidenceDocumentResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents/${encodeURIComponent(initiated.document.id)}/finalize`,
+    token,
+    { method: "POST" },
   );
 }
 
-export async function recordDocumentExtraction(
+export async function extractInvoiceDocument(
   token: string,
   organizationId: string,
   documentId: string,
-  input: {
-    schemaName: string;
-    schemaVersion: string;
-    modelProvider: string;
-    modelName: string;
-    sourceSha256Hex: string;
-    output: unknown;
-  },
 ) {
   return request<DocumentExtractionResponse>(
-    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents/${encodeURIComponent(documentId)}/extractions`,
+    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents/${encodeURIComponent(documentId)}/extract`,
     token,
-    { method: "POST", body: JSON.stringify(input) },
+    { method: "POST" },
   );
 }
 
@@ -472,6 +491,27 @@ export async function evaluateInvoicePayment(
 ) {
   return request<PaymentDecisionResponse>(
     `/organizations/${encodeURIComponent(organizationId)}/decisions/invoice-payment`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function evaluateInvoicePaymentWithAgent(
+  token: string,
+  organizationId: string,
+  input: {
+    invoiceVersionId: string;
+    route: {
+      liquidityRoute: "OPERATING" | "GATEWAY" | "CCTP" | "NONE";
+      environment: string;
+      chainId: number;
+      assetSymbol: string;
+    };
+    expiresAt: string;
+  },
+) {
+  return request<PaymentDecisionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/decisions/invoice-payment/agent`,
     token,
     { method: "POST", body: JSON.stringify(input) },
   );

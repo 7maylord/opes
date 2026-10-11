@@ -60,6 +60,7 @@ interface EvidenceDocumentRow {
   id: string;
   document_type: string;
   sha256_hex: string;
+  status: string;
 }
 
 interface ExtractionRow {
@@ -152,6 +153,9 @@ export class InvoiceService {
       );
       if (document.document_type !== 'INVOICE') {
         throw new BadRequestException('Evidence document is not an invoice');
+      }
+      if (document.status !== 'VERIFIED') {
+        throw new ConflictException('Invoice evidence is not verified');
       }
 
       const extraction =
@@ -303,7 +307,7 @@ async function getEvidenceDocument(
 ): Promise<EvidenceDocumentRow> {
   const result = await database.query<EvidenceDocumentRow>(
     `
-      SELECT id, document_type, sha256_hex
+      SELECT id, document_type, sha256_hex, status
         FROM opes.evidence_documents
        WHERE organization_id = $1
          AND id = $2
@@ -555,7 +559,7 @@ function validateExtractionClaims(
     'invoiceNumber',
   );
   compareOptionalString(claims.currency, expected.currency, 'currency');
-  compareOptionalString(claims.totalAmount, expected.amount, 'totalAmount');
+  compareOptionalString(claims.amount, expected.amount, 'amount');
   compareOptionalString(
     claims.payoutAddress,
     expected.payoutAddress,
@@ -568,7 +572,7 @@ function compareOptionalString(
   expected: string,
   name: string,
 ): void {
-  if (actual === undefined) {
+  if (actual === undefined || actual === null) {
     return;
   }
   if (typeof actual !== 'string') {

@@ -62,6 +62,7 @@ function queryReturningHappyPath() {
         {
           id: validRequest.evidenceDocumentId,
           document_type: 'INVOICE',
+          status: 'VERIFIED',
           sha256_hex:
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         },
@@ -78,7 +79,7 @@ function queryReturningHappyPath() {
             vendorName: 'Atlas Studio',
             invoiceNumber: 'INV-1042',
             currency: 'USDC',
-            totalAmount: '12.340001',
+            amount: '12.340001',
             payoutAddress: '0x0000000000000000000000000000000000000002',
           },
         },
@@ -198,6 +199,7 @@ describe('InvoiceService', () => {
           {
             id: validRequest.evidenceDocumentId,
             document_type: 'INVOICE',
+            status: 'VERIFIED',
             sha256_hex:
               'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           },
@@ -281,6 +283,7 @@ describe('InvoiceService', () => {
           {
             id: validRequest.evidenceDocumentId,
             document_type: 'INVOICE',
+            status: 'VERIFIED',
             sha256_hex:
               'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           },

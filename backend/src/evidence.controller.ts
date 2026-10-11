@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   Headers,
   Param,
   Post,
@@ -8,17 +9,21 @@ import {
 } from '@nestjs/common';
 import { parseBearerToken } from './auth-header';
 import { resolveCorrelationId } from './correlation-id';
+import { DocumentExtractionService } from './document-extraction.service';
 import { EvidenceService } from './evidence.service';
 import type {
   CreateVendorAddressRequest,
   CreateVendorRequest,
-  DocumentExtractionResponse,
-  EvidenceDocumentResponse,
-  RecordDocumentExtractionRequest,
-  RecordEvidenceDocumentRequest,
   VendorAddressResponse,
   VendorResponse,
 } from './evidence.service';
+import { DocumentStorageService } from './document-storage.service';
+import type {
+  InitiateDocumentUploadRequest,
+  InitiateDocumentUploadResponse,
+} from './document-storage.service';
+import type { EvidenceDocumentResponse } from './evidence.service';
+import type { DocumentExtractionResponse } from './evidence.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
 
@@ -26,6 +31,8 @@ import { TenantContextService } from './tenant-context.service';
 export class EvidenceController {
   constructor(
     private readonly evidence: EvidenceService,
+    private readonly documents: DocumentStorageService,
+    private readonly extractions: DocumentExtractionService,
     private readonly sessions: SessionService,
     private readonly tenantContexts: TenantContextService,
   ) {}
@@ -79,12 +86,28 @@ export class EvidenceController {
     return this.evidence.verifyVendorAddress(context, addressId);
   }
 
-  @Post('evidence-documents')
-  async recordEvidenceDocument(
+  @Post('evidence-documents/uploads')
+  async initiateDocumentUpload(
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
-    @Body() body: RecordEvidenceDocumentRequest,
+    @Body() body: InitiateDocumentUploadRequest,
+  ): Promise<InitiateDocumentUploadResponse> {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+
+    return this.documents.initiateUpload(context, body);
+  }
+
+  @Post('evidence-documents/:documentId/finalize')
+  async finalizeDocumentUpload(
+    @Param('organizationId') organizationId: string,
+    @Param('documentId') documentId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ): Promise<EvidenceDocumentResponse> {
     const context = await this.resolveContext(
       organizationId,
@@ -92,24 +115,37 @@ export class EvidenceController {
       correlationId,
     );
 
-    return this.evidence.recordEvidenceDocument(context, body);
+    return this.documents.finalizeUpload(context, documentId);
   }
 
-  @Post('evidence-documents/:documentId/extractions')
-  async recordDocumentExtraction(
+  @Get('evidence-documents/:documentId/download')
+  async downloadDocument(
     @Param('organizationId') organizationId: string,
     @Param('documentId') documentId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
-    @Body() body: RecordDocumentExtractionRequest,
+  ): Promise<{ url: string; expiresAt: string }> {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.documents.createDownload(context, documentId);
+  }
+
+  @Post('evidence-documents/:documentId/extract')
+  async extractInvoiceDocument(
+    @Param('organizationId') organizationId: string,
+    @Param('documentId') documentId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
   ): Promise<DocumentExtractionResponse> {
     const context = await this.resolveContext(
       organizationId,
       authorization,
       correlationId,
     );
-
-    return this.evidence.recordDocumentExtraction(context, documentId, body);
+    return this.extractions.extractInvoice(context, documentId);
   }
 
   private async resolveContext(
