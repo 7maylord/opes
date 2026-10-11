@@ -550,6 +550,17 @@ export interface SubscriptionResponse {
   anchorDate: string;
   timezone: string;
   amountAtomic: string;
+  ownerActions: ChainActionResponse[];
+}
+
+export interface ChainActionResponse {
+  id: string;
+  actionType: string;
+  actor: "OWNER" | "OPERATOR";
+  to: string;
+  data: string;
+  chainId: number;
+  status: string;
 }
 
 export interface SubscriptionCycleResponse {
@@ -618,10 +629,27 @@ export async function cancelSubscription(
   organizationId: string,
   subscriptionId: string,
 ) {
-  return request<{ id: string; status: string }>(
+  return request<ChainActionResponse>(
     `/organizations/${encodeURIComponent(organizationId)}/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`,
     token,
     { method: "POST" },
+  );
+}
+
+export async function changeSubscriptionStatus(token: string, organizationId: string, subscriptionId: string, operation: 'pause' | 'resume') {
+  return request<ChainActionResponse>(`/organizations/${encodeURIComponent(organizationId)}/subscriptions/${encodeURIComponent(subscriptionId)}/${operation}`, token, { method: 'POST' });
+}
+
+export async function confirmLifecycleAction(
+  token: string,
+  organizationId: string,
+  actionId: string,
+  transactionHash: string,
+) {
+  return request<ChainActionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/lifecycle-actions/${encodeURIComponent(actionId)}/confirm`,
+    token,
+    { method: "POST", body: JSON.stringify({ transactionHash }) },
   );
 }
 

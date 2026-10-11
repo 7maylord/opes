@@ -1,12 +1,15 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useSendTransaction } from "@privy-io/react-auth";
 import {
   acceptMilestone,
   cancelSubscription,
+  changeSubscriptionStatus,
   createEscrowAgreement,
   createSubscription,
   createSubscriptionCycle,
+  confirmLifecycleAction,
   disputeMilestone,
   submitMilestoneEvidence,
   type EscrowAgreementResponse,
@@ -22,6 +25,7 @@ export function LifecycleWorkflows({
   token: string;
   organizationId: string;
 }) {
+  const { sendTransaction } = useSendTransaction();
   const [vendorId, setVendorId] = useState("");
   const [vendorAddressId, setVendorAddressId] = useState("");
   const [documentId, setDocumentId] = useState("");
@@ -62,12 +66,43 @@ export function LifecycleWorkflows({
     });
   }
 
+  async function activateSubscription() {
+    if (subscription === null) return setError("Create a subscription first.");
+    await run("Recurring mandate activated", async () => {
+      for (const action of subscription.ownerActions) {
+        if (action.status === "CONFIRMED") continue;
+        const transaction = await sendTransaction({
+          to: action.to,
+          data: action.data,
+          chainId: action.chainId,
+          value: 0,
+        });
+        await confirmLifecycleAction(token, organizationId, action.id, transaction.hash);
+      }
+      setSubscription((current) => current === null ? current : { ...current, status: "ACTIVE" });
+    });
+  }
+
   async function submitCancel() {
     if (subscription === null) return setError("Create a subscription first.");
     await run("Subscription cancelled", async () => {
       const result = await cancelSubscription(token, organizationId, subscription.id);
-      setSubscription((current) => current === null ? current : { ...current, status: result.status });
+      await signAction(result);
+      setSubscription((current) => current === null ? current : { ...current, status: "CANCELLED" });
     });
+  }
+
+  async function changeStatus(operation: 'pause' | 'resume') {
+    if (subscription === null) return setError("Create a subscription first.");
+    await run(`Subscription ${operation}d`, async () => {
+      await signAction(await changeSubscriptionStatus(token, organizationId, subscription.id, operation));
+      setSubscription((current) => current === null ? current : { ...current, status: operation === 'pause' ? 'PAUSED' : 'ACTIVE' });
+    });
+  }
+
+  async function signAction(action: import('@/lib/api').ChainActionResponse) {
+    const transaction = await sendTransaction({ to: action.to, data: action.data, chainId: action.chainId, value: 0 });
+    await confirmLifecycleAction(token, organizationId, action.id, transaction.hash);
   }
 
   async function submitEscrow(event: FormEvent<HTMLFormElement>) {
@@ -147,8 +182,11 @@ export function LifecycleWorkflows({
           <Input label="Terms/evidence document ID optional" value={documentId} onChange={setDocumentId} />
           <Input label="Monthly amount USDC" value={amount} onChange={setAmount} required />
           <button disabled={pending} className="btn">Create subscription</button>
+          <button type="button" disabled={pending || subscription === null || subscription.status === "ACTIVE"} onClick={activateSubscription} className="btn-secondary">Sign and activate mandate</button>
           <button type="button" disabled={pending || subscription === null} onClick={submitCycle} className="btn-secondary">Create current cycle</button>
           <button type="button" disabled={pending || subscription === null} onClick={submitCancel} className="btn-secondary">Cancel</button>
+          <button type="button" disabled={pending || subscription?.status !== "ACTIVE"} onClick={() => changeStatus('pause')} className="btn-secondary">Pause</button>
+          <button type="button" disabled={pending || subscription?.status !== "PAUSED"} onClick={() => changeStatus('resume')} className="btn-secondary">Resume</button>
           {subscription !== null ? (
             <p className="rounded-xl border border-slate-200 p-3 text-sm">
               Subscription status: <span className="font-semibold">{subscription.status}</span>

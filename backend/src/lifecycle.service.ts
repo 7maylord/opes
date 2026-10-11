@@ -170,9 +170,10 @@ export class LifecycleService {
             organization_id,
             vendor_id,
             vendor_address_id,
+            status,
             created_by_membership_id
           )
-          VALUES ($1, $2, $3, $4)
+          VALUES ($1, $2, $3, 'SETUP_REQUIRED', $4)
           RETURNING id, status
         `,
         [
@@ -657,7 +658,7 @@ function normalizeMilestones(
   }));
 }
 
-function addPeriod(date: string, cadence: string): string {
+export function addPeriod(date: string, cadence: string): string {
   if (cadence === 'WEEKLY') {
     return addDays(date, 7);
   }
@@ -694,11 +695,35 @@ function addMonths(date: string, months: number): string {
   return formatDate(targetYear, normalizedMonth + 1, day);
 }
 
-function dueAtUtc(date: string, timezone: string): string {
+export function dueAtUtc(date: string, timezone: string): string {
   // ponytail: noon local avoids most DST gaps; replace with Temporal when Node ships it broadly.
-  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: timezone });
-  formatter.format(new Date(`${date}T12:00:00Z`));
-  return `${date}T12:00:00.000Z`;
+  const { year, month, day } = parseDate(date);
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+  let instant = Date.UTC(year, month - 1, day, 12);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(instant).map((part) => [part.type, part.value]),
+    );
+    const represented = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    instant += Date.UTC(year, month - 1, day, 12) - represented;
+  }
+  return new Date(instant).toISOString();
 }
 
 function validateDate(value: string, name: string): string {

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { LifecycleService } from './lifecycle.service';
+import { dueAtUtc, LifecycleService } from './lifecycle.service';
 import { TenantContext } from './tenant-context';
 
 const context: TenantContext = {
@@ -36,6 +36,17 @@ function verifiedPayeeMocks(query: jest.Mock): jest.Mock {
 }
 
 describe('LifecycleService', () => {
+  it('converts local noon across timezone and DST boundaries', () => {
+    expect(dueAtUtc('2026-03-07', 'America/New_York')).toBe(
+      '2026-03-07T17:00:00.000Z',
+    );
+    expect(dueAtUtc('2026-03-09', 'America/New_York')).toBe(
+      '2026-03-09T16:00:00.000Z',
+    );
+    expect(dueAtUtc('2028-02-29', 'Africa/Lagos')).toBe(
+      '2028-02-29T11:00:00.000Z',
+    );
+  });
   it('creates a monthly subscription cycle with month-end leap clamping', async () => {
     const query = jest
       .fn()

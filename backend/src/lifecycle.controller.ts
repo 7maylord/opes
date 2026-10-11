@@ -20,6 +20,7 @@ import type {
 } from './lifecycle.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
+import { RecurringExecutionService } from './recurring-execution.service';
 
 interface SubmitMilestoneEvidenceRequest {
   evidenceDocumentId: string;
@@ -33,6 +34,7 @@ interface DisputeMilestoneRequest {
 export class LifecycleController {
   constructor(
     private readonly lifecycle: LifecycleService,
+    private readonly recurring: RecurringExecutionService,
     private readonly sessions: SessionService,
     private readonly tenantContexts: TenantContextService,
   ) {}
@@ -43,13 +45,37 @@ export class LifecycleController {
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
     @Body() body: CreateSubscriptionRequest,
-  ): Promise<SubscriptionResponse> {
+  ): Promise<SubscriptionResponse & { ownerActions: unknown[] }> {
     const context = await this.resolveContext(
       organizationId,
       authorization,
       correlationId,
     );
-    return this.lifecycle.createSubscription(context, body);
+    const subscription = await this.lifecycle.createSubscription(context, body);
+    return {
+      ...subscription,
+      ownerActions: await this.recurring.prepare(context, subscription.id),
+    };
+  }
+
+  @Post('lifecycle-actions/:actionId/confirm')
+  async confirmOwnerAction(
+    @Param('organizationId') organizationId: string,
+    @Param('actionId') actionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: { transactionHash: string },
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.recurring.confirmOwnerAction(
+      context,
+      actionId,
+      body.transactionHash,
+    );
   }
 
   @Post('subscriptions/:subscriptionId/cycles')
@@ -78,13 +104,51 @@ export class LifecycleController {
     @Param('subscriptionId') subscriptionId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
-  ): Promise<{ id: string; status: string }> {
+  ) {
     const context = await this.resolveContext(
       organizationId,
       authorization,
       correlationId,
     );
-    return this.lifecycle.cancelSubscription(context, subscriptionId);
+    return this.recurring.prepareStatusChange(
+      context,
+      subscriptionId,
+      'cancel',
+    );
+  }
+
+  @Post('subscriptions/:subscriptionId/pause')
+  async pauseSubscription(
+    @Param('organizationId') organizationId: string,
+    @Param('subscriptionId') subscriptionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.recurring.prepareStatusChange(context, subscriptionId, 'pause');
+  }
+
+  @Post('subscriptions/:subscriptionId/resume')
+  async resumeSubscription(
+    @Param('organizationId') organizationId: string,
+    @Param('subscriptionId') subscriptionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.recurring.prepareStatusChange(
+      context,
+      subscriptionId,
+      'resume',
+    );
   }
 
   @Post('escrow-agreements')
