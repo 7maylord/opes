@@ -31,7 +31,7 @@ test("journey 1: owner creates organization and sees setup checklist", async ({ 
   await page.getByRole("button", { name: "Create and queue setup" }).click();
   await expect(page.getByText("Organization created. Arc setup is queued.")).toBeVisible();
   await expect(page.getByText("Factory verified")).toBeVisible();
-  await expect(page.getByText("Execution ready")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Queue Arc contract setup" })).toBeVisible();
 });
 
 test("journey 2: invite and accept member", async ({ page }) => {

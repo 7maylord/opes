@@ -7,6 +7,7 @@ import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.se
 import { loadRuntimeConfig } from './runtime.config';
 import { RecurringExecutionService } from './recurring-execution.service';
 import { EscrowExecutionService } from './escrow-execution.service';
+import { TreasuryReconciliationService } from './treasury-reconciliation.service';
 
 async function bootstrapWorker() {
   const config = loadRuntimeConfig();
@@ -23,6 +24,7 @@ async function bootstrapWorker() {
   const liquidity = app.get(LiquidityExecutionWorkerService);
   const recurring = app.get(RecurringExecutionService);
   const escrow = app.get(EscrowExecutionService);
+  const reconciliation = app.get(TreasuryReconciliationService);
   const runProvisioning = async () => {
     try {
       await provisioning.processDueArcProvisioning();
@@ -58,18 +60,27 @@ async function bootstrapWorker() {
       logger.error('escrow execution worker failed', error);
     }
   };
+  const runReconciliation = async () => {
+    try {
+      await reconciliation.process();
+    } catch (error) {
+      logger.error('treasury reconciliation worker failed', error);
+    }
+  };
 
   await runProvisioning();
   await runPayments();
   await runLiquidity();
   await runRecurring();
   await runEscrow();
+  await runReconciliation();
   const interval = setInterval(() => {
     void runProvisioning();
     void runPayments();
     void runLiquidity();
     void runRecurring();
     void runEscrow();
+    void runReconciliation();
   }, 10_000);
 
   await new Promise<void>((resolve) => {

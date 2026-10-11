@@ -45,6 +45,7 @@ import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
 import { OwnerTreasuryController } from './owner-treasury.controller';
 import { OwnerTreasuryService } from './owner-treasury.service';
+import { TreasuryReconciliationService } from './treasury-reconciliation.service';
 
 @Module({
   imports: [],
@@ -97,6 +98,7 @@ import { OwnerTreasuryService } from './owner-treasury.service';
     SessionService,
     TenantContextService,
     OwnerTreasuryService,
+    TreasuryReconciliationService,
   ],
 })
 export class AppModule {}

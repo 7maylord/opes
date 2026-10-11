@@ -1876,6 +1876,28 @@ async function insertLiquidityLedger(
     ],
   );
 
+  const fee = (
+    await database.query<{ fee_atomic: string }>(
+      `SELECT fee_atomic::text FROM opes.liquidity_actions WHERE organization_id=$1 AND id=$2`,
+      [action.organization_id, action.id],
+    )
+  ).rows[0]?.fee_atomic;
+  if (fee !== undefined && BigInt(fee) > 0n) {
+    await database.query(
+      `INSERT INTO opes.ledger_entries (organization_id,ledger_event_type,ledger_event_id,line_number,account,direction,asset_symbol,amount_atomic,source_type,source_id,transaction_hash)
+       VALUES ($1,'LIQUIDITY_FEE',$2,1,'EXPENSE:LIQUIDITY_FEE','DEBIT','USDC',$3,'LIQUIDITY_ACTION',$2,$4),
+              ($1,'LIQUIDITY_FEE',$2,2,$5,'CREDIT','USDC',$3,'LIQUIDITY_ACTION',$2,$4)
+       ON CONFLICT (organization_id,ledger_event_type,ledger_event_id,line_number) DO NOTHING`,
+      [
+        action.organization_id,
+        action.id,
+        fee,
+        destinationMintHash,
+        liquidityAssetAccount(action.source_environment, 'USDC'),
+      ],
+    );
+  }
+
   if (!hasDestinationSwap(action)) {
     return;
   }
