@@ -300,8 +300,12 @@ export class LiquidityService {
             COALESCE((
               SELECT SUM(version.amount_atomic)
                 FROM opes.payable_obligation_versions AS version
+                JOIN opes.payable_obligations AS obligation
+                  ON obligation.organization_id = version.organization_id
+                 AND obligation.id = version.obligation_id
                WHERE version.organization_id = $1
                  AND version.status = 'ACCEPTED'
+                 AND obligation.status = 'ACCEPTED'
             ), 0)::text AS committed_payables_atomic,
             COALESCE((
               SELECT SUM(execution.amount_atomic)

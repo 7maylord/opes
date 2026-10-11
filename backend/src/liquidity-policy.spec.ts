@@ -31,7 +31,15 @@ describe('liquidity policy', () => {
     }
   });
 
-  it('keeps same-chain Arc USDC as the only executable vendor payment route', () => {
+  it('allows Arc and funded Base Sepolia USDC vendor payment routes', () => {
+    expect(
+      evaluatePaymentRoute({
+        liquidityRoute: 'CCTP',
+        environment: 'base-sepolia',
+        chainId: 84532,
+        assetSymbol: 'USDC',
+      }),
+    ).toMatchObject({ executable: true });
     expect(
       evaluatePaymentRoute({
         liquidityRoute: 'OPERATING',

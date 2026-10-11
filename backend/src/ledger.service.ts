@@ -53,6 +53,7 @@ interface PaymentLedgerSourceRow {
   source_version_id: string;
   vendor_id: string;
   route_asset_symbol: string;
+  route_environment: string;
   amount_atomic: string;
   status: string;
   transaction_hash: string | null;
@@ -168,8 +169,20 @@ export async function projectPaymentSettlementInDatabase(
     counterpartyId: source.vendor_id,
     transactionHash: source.transaction_hash,
     debitAccount: 'LIABILITY:ACCOUNTS_PAYABLE',
-    creditAccount: 'ASSET:OPERATING_USDC',
+    creditAccount:
+      source.route_environment === 'arc-testnet'
+        ? 'ASSET:OPERATING_USDC'
+        : `ASSET:${source.route_environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}:USDC`,
   });
+  await database.query(
+    `UPDATE opes.payable_obligations AS obligation SET status = 'PAID', updated_at = now()
+       FROM opes.payable_obligation_versions AS version
+      WHERE version.organization_id = $1 AND version.id = $2
+        AND obligation.organization_id = version.organization_id
+        AND obligation.id = version.obligation_id
+        AND obligation.status = 'ACCEPTED'`,
+    [organizationId, source.source_version_id],
+  );
 }
 
 async function getInvoiceSource(
@@ -209,6 +222,7 @@ async function getPaymentSource(
         execution.source_version_id,
         decision.vendor_id,
         execution.route_asset_symbol,
+        execution.route_environment,
         execution.amount_atomic::text AS amount_atomic,
         execution.status,
         execution.transaction_hash

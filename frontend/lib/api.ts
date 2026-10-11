@@ -336,7 +336,12 @@ export interface PaymentExecutionResponse {
   routeEnvironment: string;
   routeChainId: number;
   routeAssetSymbol: string;
-  vaultAddress: string;
+  vaultAddress: string | null;
+  executionMode: "DIRECT_VAULT" | "CROSSCHAIN_WALLET";
+  liquidityActionId: string | null;
+  tokenAddress: string | null;
+  maxSourceDebitAtomic: string | null;
+  refundAddress: string | null;
   status: string;
   failureReason: string | null;
   transactionHash?: string | null;

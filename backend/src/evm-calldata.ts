@@ -14,6 +14,18 @@ export interface DirectPaymentCalldataInput {
 const EXECUTE_DIRECT_PAYMENT_SELECTOR = selector(
   'executeDirectPayment(bytes32,bytes32,bytes32,bytes32,address,uint256,uint64)',
 );
+const TRANSFER_SELECTOR = selector('transfer(address,uint256)');
+
+export function buildErc20TransferCalldata(
+  recipient: string,
+  amount: string,
+): string {
+  return `0x${Buffer.concat([
+    TRANSFER_SELECTOR,
+    addressWord(recipient),
+    word(BigInt(amount)),
+  ]).toString('hex')}`;
+}
 
 export function buildExecuteDirectPaymentCalldata(
   input: DirectPaymentCalldataInput,

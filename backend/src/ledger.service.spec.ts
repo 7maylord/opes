@@ -141,12 +141,14 @@ describe('LedgerService', () => {
             source_version_id: '55555555-5555-5555-5555-555555555555',
             vendor_id: '77777777-7777-7777-7777-777777777777',
             route_asset_symbol: 'USDC',
+            route_environment: 'arc-testnet',
             amount_atomic: '12340001',
             status: 'CONFIRMED',
             transaction_hash: `0x${'a'.repeat(64)}`,
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: ledgerRows(
@@ -169,6 +171,11 @@ describe('LedgerService', () => {
       },
       { account: 'ASSET:OPERATING_USDC', direction: 'CREDIT' },
     ]);
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining("SET status = 'PAID'"),
+      [context.organizationId, '55555555-5555-5555-5555-555555555555'],
+    );
   });
 
   it('refuses to settle pending payments', async () => {
@@ -180,6 +187,7 @@ describe('LedgerService', () => {
           source_version_id: '55555555-5555-5555-5555-555555555555',
           vendor_id: '77777777-7777-7777-7777-777777777777',
           route_asset_symbol: 'USDC',
+          route_environment: 'arc-testnet',
           amount_atomic: '12340001',
           status: 'SUBMITTED',
           transaction_hash: `0x${'a'.repeat(64)}`,

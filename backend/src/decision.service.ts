@@ -285,22 +285,24 @@ export class DecisionService {
         expiresAt,
       };
       const contextHash = hashStable(contextPayload);
-      const decisionHash = canHashDirectPayment(route, vaultBinding, invoice)
-        ? buildDirectPaymentDecisionHash({
-            chainId: route.chainId,
-            vault: vaultBinding.address,
-            organizationDomain: bindingOrganizationDomain(
-              context.organizationId,
-              route.environment,
-              vaultBinding,
-            ),
-            token: ARC_TESTNET_USDC,
-            obligationKey: invoice.obligation_key,
-            vendor: invoice.payout_address,
-            amount: invoice.amount_atomic,
-            expiresAt,
-            contextHash,
-          })
+      const decisionHash = routeSupported(route)
+        ? canHashDirectPayment(route, vaultBinding, invoice)
+          ? buildDirectPaymentDecisionHash({
+              chainId: route.chainId,
+              vault: vaultBinding.address,
+              organizationDomain: bindingOrganizationDomain(
+                context.organizationId,
+                route.environment,
+                vaultBinding,
+              ),
+              token: ARC_TESTNET_USDC,
+              obligationKey: invoice.obligation_key,
+              vendor: invoice.payout_address,
+              amount: invoice.amount_atomic,
+              expiresAt,
+              contextHash,
+            })
+          : `0x${contextHash}`
         : null;
 
       const inserted = await database.query<DecisionRow>(
@@ -521,7 +523,10 @@ function canHashDirectPayment(
   invoice: InvoiceVersionRow,
 ): vaultBinding is BindingRow & { address: string } {
   return (
-    routeSupported(route) &&
+    route.liquidityRoute === 'OPERATING' &&
+    route.environment === 'arc-testnet' &&
+    route.chainId === 5042002 &&
+    route.assetSymbol === 'USDC' &&
     isEvmAddress(vaultBinding?.address) &&
     isEvmAddress(invoice.payout_address) &&
     /^[0-9a-f]{64}$/.test(invoice.obligation_key)

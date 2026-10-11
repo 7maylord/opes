@@ -1,4 +1,7 @@
-import { buildExecuteDirectPaymentCalldata } from './evm-calldata';
+import {
+  buildErc20TransferCalldata,
+  buildExecuteDirectPaymentCalldata,
+} from './evm-calldata';
 
 describe('EVM calldata helpers', () => {
   it('encodes BusinessPolicyVault.executeDirectPayment calldata', () => {
@@ -18,6 +21,17 @@ describe('EVM calldata helpers', () => {
       }),
     ).toBe(
       '0x7a154aaeddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeecccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccceeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000bc4b210000000000000000000000000000000000000000000000000000000070dbd880',
+    );
+  });
+
+  it('encodes an exact ERC-20 destination payout', () => {
+    expect(
+      buildErc20TransferCalldata(
+        '0x0000000000000000000000000000000000000002',
+        '500000',
+      ),
+    ).toBe(
+      '0xa9059cbb0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000007a120',
     );
   });
 });

@@ -3,7 +3,10 @@ import { keccak_256 } from '@noble/hashes/sha3.js';
 import { createHash } from 'node:crypto';
 import { CircleWalletService } from './circle-wallet.service';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { buildExecuteDirectPaymentCalldata } from './evm-calldata';
+import {
+  buildErc20TransferCalldata,
+  buildExecuteDirectPaymentCalldata,
+} from './evm-calldata';
 import { isEvmAddress } from './evm-decision-hash';
 import { FactoryManifestService } from './factory-manifest.service';
 import { projectPaymentSettlementInDatabase } from './ledger.service';
@@ -24,7 +27,10 @@ interface ExecutionWorkRow {
   route_chain_id: number;
   route_environment: string;
   route_asset_symbol: string;
-  vault_address: string;
+  vault_address: string | null;
+  execution_mode: 'DIRECT_VAULT' | 'CROSSCHAIN_WALLET';
+  token_address: string | null;
+  liquidity_action_id: string | null;
   expires_at: Date | null;
   wallet_id: string | null;
   wallet_address: string | null;
@@ -105,7 +111,7 @@ export class PaymentExecutionWorkerService {
             SET status = 'PROCESSING', updated_at = now()
           WHERE id = (
             SELECT id FROM opes.outbox_events
-             WHERE event_type = 'payment.execute.direct.arc_testnet'
+             WHERE event_type IN ('payment.execute.direct.arc_testnet', 'payment.execute.crosschain')
                AND ((status = 'PENDING' AND available_at <= now())
                  OR (status = 'PROCESSING' AND updated_at < now() - interval '5 minutes'))
              ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
@@ -144,15 +150,33 @@ export class PaymentExecutionWorkerService {
       return;
     }
 
-    const callData = buildExecuteDirectPaymentCalldata({
-      decisionHash: execution.decision_hash,
-      obligationKey: execution.idempotency_key,
-      contextHash: execution.context_hash,
-      idempotencyKey: execution.idempotency_key,
-      vendor: execution.destination_address,
-      amount: execution.amount_atomic,
-      expiresAt: execution.expires_at.toISOString(),
-    });
+    const callData =
+      execution.execution_mode === 'CROSSCHAIN_WALLET'
+        ? buildErc20TransferCalldata(
+            execution.destination_address,
+            execution.amount_atomic,
+          )
+        : buildExecuteDirectPaymentCalldata({
+            decisionHash: execution.decision_hash,
+            obligationKey: execution.idempotency_key,
+            contextHash: execution.context_hash,
+            idempotencyKey: execution.idempotency_key,
+            vendor: execution.destination_address,
+            amount: execution.amount_atomic,
+            expiresAt: execution.expires_at.toISOString(),
+          });
+    const contractAddress =
+      execution.execution_mode === 'CROSSCHAIN_WALLET'
+        ? execution.token_address
+        : execution.vault_address;
+    if (!contractAddress) {
+      await this.fail(
+        event,
+        execution.attempt_id,
+        'Payment contract is missing',
+      );
+      return;
+    }
     if (
       execution.call_data !== null &&
       execution.call_data.toLowerCase() !== callData.toLowerCase()
@@ -168,7 +192,7 @@ export class PaymentExecutionWorkerService {
       provider: 'circle',
       chainId: execution.route_chain_id,
       from: execution.wallet_address,
-      to: execution.vault_address,
+      to: contractAddress,
       data: callData,
       value: '0',
       idempotencyKey: execution.id,
@@ -187,12 +211,20 @@ export class PaymentExecutionWorkerService {
         return;
       }
       try {
-        const submitted = await this.circle.createDirectPaymentTransaction({
-          walletId: execution.wallet_id,
-          vaultAddress: execution.vault_address,
-          callData,
-          executionId: execution.id,
-        });
+        const submitted =
+          execution.execution_mode === 'CROSSCHAIN_WALLET'
+            ? await this.circle.createCallDataTransaction({
+                walletId: execution.wallet_id,
+                contractAddress,
+                callData,
+                idempotencyKey: execution.id,
+              })
+            : await this.circle.createDirectPaymentTransaction({
+                walletId: execution.wallet_id,
+                vaultAddress: contractAddress,
+                callData,
+                executionId: execution.id,
+              });
         providerTransactionId = submitted.id;
         await this.recordProviderSubmission(event, attemptId, submitted.id);
       } catch (error) {
@@ -233,13 +265,23 @@ export class PaymentExecutionWorkerService {
 
       const transactionHash = requireTransactionHash(transaction.txHash);
       const [chainTransaction, receipt] = await Promise.all([
-        rpc<RpcTransaction | null>('eth_getTransactionByHash', [
-          transactionHash,
-        ]),
-        rpc<RpcReceipt | null>('eth_getTransactionReceipt', [transactionHash]),
+        rpc<RpcTransaction | null>(
+          execution.route_environment,
+          'eth_getTransactionByHash',
+          [transactionHash],
+        ),
+        rpc<RpcReceipt | null>(
+          execution.route_environment,
+          'eth_getTransactionReceipt',
+          [transactionHash],
+        ),
       ]);
       if (chainTransaction === null || receipt === null) {
-        await this.retry(event, attemptId, 'Arc transaction is not yet final');
+        await this.retry(
+          event,
+          attemptId,
+          'Payment transaction is not yet final',
+        );
         return;
       }
       verifyChainEvidence(
@@ -248,7 +290,9 @@ export class PaymentExecutionWorkerService {
         transactionHash,
         chainTransaction,
         receipt,
-        this.factoryManifests.getArcTestnetFactory().tokenAddress,
+        execution.execution_mode === 'CROSSCHAIN_WALLET'
+          ? contractAddress
+          : this.factoryManifests.getArcTestnetFactory().tokenAddress,
       );
       await this.confirm(event, attemptId, transactionHash);
     } catch (error) {
@@ -278,12 +322,13 @@ export class PaymentExecutionWorkerService {
           WHERE execution.organization_id = $1 AND execution.id = $2
             AND execution.status IN ('PENDING', 'PROCESSING', 'SUBMITTED', 'UNKNOWN')
             AND wallet.organization_id = execution.organization_id
-            AND wallet.provider = 'circle' AND wallet.environment = 'arc-testnet'
+            AND wallet.provider = 'circle' AND wallet.environment = execution.route_environment
             AND wallet.resource_type = 'operator_wallet' AND wallet.status = 'ACTIVE'
           RETURNING execution.id, execution.organization_id, execution.decision_hash,
             execution.idempotency_key, execution.context_hash, execution.amount_atomic::text AS amount_atomic,
             execution.destination_address, execution.route_chain_id, execution.route_environment,
             execution.route_asset_symbol, execution.vault_address, execution.expires_at,
+            execution.execution_mode, execution.token_address, execution.liquidity_action_id,
             wallet.resource_id AS wallet_id,
             wallet.address AS wallet_address`,
         [event.organization_id, event.aggregate_id],
@@ -308,6 +353,9 @@ export class PaymentExecutionWorkerService {
             route_environment: 'arc-testnet',
             route_asset_symbol: 'USDC',
             vault_address: '0x0000000000000000000000000000000000000000',
+            execution_mode: 'DIRECT_VAULT',
+            token_address: null,
+            liquidity_action_id: null,
             expires_at: null,
             wallet_id: null,
             wallet_address: null,
@@ -467,13 +515,16 @@ function assertSignerRequest(
   request: SignerRequest,
   callData: string,
 ): void {
+  const expectedContract =
+    execution.execution_mode === 'CROSSCHAIN_WALLET'
+      ? execution.token_address
+      : execution.vault_address;
   if (
     request.provider !== 'circle' ||
-    request.chainId !== 5042002 ||
     request.chainId !== execution.route_chain_id ||
-    execution.route_environment !== 'arc-testnet' ||
     execution.route_asset_symbol !== 'USDC' ||
-    request.to.toLowerCase() !== execution.vault_address.toLowerCase() ||
+    expectedContract === null ||
+    request.to.toLowerCase() !== expectedContract.toLowerCase() ||
     request.data !== callData ||
     request.value !== '0' ||
     request.executionId !== execution.id ||
@@ -487,13 +538,22 @@ function assertCircleTransaction(
   execution: ExecutionWorkRow,
   transaction: CircleTransactionEvidence,
 ): void {
+  const expectedBlockchain =
+    execution.route_environment === 'base-sepolia'
+      ? 'BASE-SEPOLIA'
+      : 'ARC-TESTNET';
+  const expectedContract =
+    execution.execution_mode === 'CROSSCHAIN_WALLET'
+      ? execution.token_address
+      : execution.vault_address;
   if (
-    transaction.blockchain !== 'ARC-TESTNET' ||
+    transaction.blockchain !== expectedBlockchain ||
     transaction.walletId !== execution.wallet_id ||
     transaction.sourceAddress?.toLowerCase() !==
       execution.wallet_address?.toLowerCase() ||
+    expectedContract === null ||
     transaction.contractAddress?.toLowerCase() !==
-      execution.vault_address.toLowerCase()
+      expectedContract.toLowerCase()
   ) {
     throw new Error('Circle transaction does not match the authorized payment');
   }
@@ -507,20 +567,46 @@ function verifyChainEvidence(
   receipt: RpcReceipt,
   tokenAddress: string,
 ): void {
+  const expectedContract =
+    execution.execution_mode === 'CROSSCHAIN_WALLET'
+      ? execution.token_address
+      : execution.vault_address;
   if (
     receipt.status !== '0x1' ||
     receipt.transactionHash.toLowerCase() !== transactionHash ||
     transaction.from.toLowerCase() !==
       execution.wallet_address?.toLowerCase() ||
-    transaction.to?.toLowerCase() !== execution.vault_address.toLowerCase() ||
+    expectedContract === null ||
+    transaction.to?.toLowerCase() !== expectedContract.toLowerCase() ||
     transaction.input.toLowerCase() !== callData.toLowerCase()
   ) {
-    throw new Error('Arc transaction does not match the authorized payment');
+    throw new Error(
+      'Payment transaction does not match the authorized payment',
+    );
   }
   const vendorTopic = addressTopic(execution.destination_address);
+  if (execution.execution_mode === 'CROSSCHAIN_WALLET') {
+    const transfer = receipt.logs.find(
+      (log) =>
+        log.address.toLowerCase() === tokenAddress.toLowerCase() &&
+        log.topics[0]?.toLowerCase() === TRANSFER_TOPIC &&
+        log.topics[1]?.toLowerCase() ===
+          addressTopic(execution.wallet_address ?? '') &&
+        log.topics[2]?.toLowerCase() === vendorTopic &&
+        decodeAmount(log.data) === BigInt(execution.amount_atomic),
+    );
+    if (!transfer)
+      throw new Error(
+        'Destination USDC transfer does not match the authorized payment',
+      );
+    return;
+  }
+  if (execution.vault_address === null)
+    throw new Error('Payment vault is missing');
+  const vaultAddress = execution.vault_address;
   const payment = receipt.logs.find(
     (log) =>
-      log.address.toLowerCase() === execution.vault_address.toLowerCase() &&
+      log.address.toLowerCase() === vaultAddress.toLowerCase() &&
       log.topics[0]?.toLowerCase() === PAYMENT_EXECUTED_TOPIC &&
       log.topics[1]?.toLowerCase() === execution.decision_hash.toLowerCase() &&
       log.topics[2]?.toLowerCase() ===
@@ -541,7 +627,7 @@ function verifyChainEvidence(
     (log) =>
       log.address.toLowerCase() === tokenAddress.toLowerCase() &&
       log.topics[0]?.toLowerCase() === TRANSFER_TOPIC &&
-      log.topics[1]?.toLowerCase() === addressTopic(execution.vault_address) &&
+      log.topics[1]?.toLowerCase() === addressTopic(vaultAddress) &&
       log.topics[2]?.toLowerCase() === vendorTopic &&
       decodeAmount(log.data) === BigInt(execution.amount_atomic),
   );
@@ -574,9 +660,14 @@ function requireTransactionHash(value: string): string {
   return value.toLowerCase();
 }
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const url = process.env.OPES_RPC_ARC_TESTNET?.trim();
-  if (!url) throw new Error('OPES_RPC_ARC_TESTNET is not configured');
+async function rpc<T>(
+  environment: string,
+  method: string,
+  params: unknown[],
+): Promise<T> {
+  const name = `OPES_RPC_${environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  const url = process.env[name]?.trim();
+  if (!url) throw new Error(`${name} is not configured`);
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -584,17 +675,17 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok)
-    throw new TransientError(`Arc RPC returned HTTP ${response.status}`);
+    throw new TransientError(`Chain RPC returned HTTP ${response.status}`);
   const body = (await response.json()) as {
     result?: T;
     error?: { message?: string };
   };
   if (body.error)
     throw new TransientError(
-      `Arc RPC failed: ${body.error.message ?? 'unknown error'}`,
+      `Chain RPC failed: ${body.error.message ?? 'unknown error'}`,
     );
   if (body.result === undefined)
-    throw new TransientError('Arc RPC returned no result');
+    throw new TransientError('Chain RPC returned no result');
   return body.result;
 }
 class TransientError extends Error {}

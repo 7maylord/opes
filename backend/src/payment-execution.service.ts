@@ -20,7 +20,12 @@ export interface PaymentExecutionResponse {
   routeEnvironment: string;
   routeChainId: number;
   routeAssetSymbol: string;
-  vaultAddress: string;
+  vaultAddress: string | null;
+  executionMode: string;
+  liquidityActionId: string | null;
+  tokenAddress: string | null;
+  maxSourceDebitAtomic: string | null;
+  refundAddress: string | null;
   status: string;
   failureReason: string | null;
   transactionHash?: string | null;
@@ -46,6 +51,10 @@ interface ExecutionCandidateRow {
   decision_expires_at: Date;
   approval_expires_at: Date;
   vault_address: string | null;
+  destination_wallet_id: string | null;
+  destination_wallet_address: string | null;
+  liquidity_action_id: string | null;
+  max_source_debit_atomic: string | null;
 }
 
 interface ExecutionRow {
@@ -61,7 +70,12 @@ interface ExecutionRow {
   route_environment: string;
   route_chain_id: number;
   route_asset_symbol: string;
-  vault_address: string;
+  vault_address: string | null;
+  execution_mode: string;
+  liquidity_action_id: string | null;
+  token_address: string | null;
+  max_source_debit_atomic: string | null;
+  refund_address: string | null;
   status: string;
   failure_reason: string | null;
   transaction_hash?: string | null;
@@ -86,7 +100,12 @@ export class PaymentExecutionService {
       assertExecutable(candidate);
 
       const execution = await insertExecution(database, context, candidate);
-      await enqueueExecution(database, context.organizationId, execution.id);
+      await enqueueExecution(
+        database,
+        context.organizationId,
+        execution.id,
+        execution.execution_mode,
+      );
 
       return mapExecution(execution);
     });
@@ -120,6 +139,10 @@ async function getExecutionCandidate(
         decision.expires_at AS decision_expires_at,
         approval.expires_at AS approval_expires_at,
         vault.address AS vault_address
+        , wallet.resource_id AS destination_wallet_id
+        , wallet.address AS destination_wallet_address
+        , liquidity.id AS liquidity_action_id
+        , liquidity.max_source_debit_atomic
       FROM opes.payment_decisions AS decision
       JOIN opes.payment_decision_approvals AS approval
         ON approval.organization_id = decision.organization_id
@@ -134,6 +157,30 @@ async function getExecutionCandidate(
        AND vault.environment = 'arc-testnet'
        AND vault.resource_type = 'business_policy_vault_contract'
        AND vault.status = 'ACTIVE'
+      LEFT JOIN opes.tenant_resource_bindings AS wallet
+        ON wallet.organization_id = decision.organization_id
+       AND wallet.provider = 'circle'
+       AND wallet.environment = decision.route_environment
+       AND wallet.resource_type = 'operator_wallet'
+       AND wallet.status = 'ACTIVE'
+      LEFT JOIN LATERAL (
+        SELECT action.id,
+               (action.amount_atomic + action.fee_atomic)::text AS max_source_debit_atomic
+          FROM opes.liquidity_actions AS action
+         WHERE action.organization_id = decision.organization_id
+           AND action.status = 'CONFIRMED'
+           AND action.destination_environment = decision.route_environment
+           AND action.destination_chain_id = decision.route_chain_id
+           AND action.destination_asset_symbol = decision.route_asset_symbol
+           AND action.amount_atomic >= decision.amount_atomic
+           AND NOT EXISTS (
+             SELECT 1 FROM opes.payment_executions AS used
+              WHERE used.organization_id = action.organization_id
+                AND used.liquidity_action_id = action.id
+           )
+         ORDER BY action.confirmed_at ASC
+         LIMIT 1
+      ) AS liquidity ON true
       WHERE decision.organization_id = $1
         AND decision.id = $2
       LIMIT 1
@@ -164,11 +211,13 @@ function assertExecutable(candidate: ExecutionCandidateRow): void {
   if (candidate.decision_hash === null) {
     throw new ConflictException('Payment decision is missing contract hash');
   }
-  if (
-    candidate.route_environment !== 'arc-testnet' ||
-    candidate.route_chain_id !== 5042002 ||
-    candidate.route_asset_symbol !== 'USDC'
-  ) {
+  const direct =
+    candidate.route_environment === 'arc-testnet' &&
+    candidate.route_chain_id === 5042002;
+  const crosschain =
+    candidate.route_environment === 'base-sepolia' &&
+    candidate.route_chain_id === 84532;
+  if ((!direct && !crosschain) || candidate.route_asset_symbol !== 'USDC') {
     throw new ConflictException('Payment route is not executable');
   }
   if (
@@ -179,9 +228,19 @@ function assertExecutable(candidate: ExecutionCandidateRow): void {
   ) {
     throw new ConflictException('Payment approval no longer matches decision');
   }
-  if (candidate.vault_address === null) {
+  if (direct && candidate.vault_address === null) {
     throw new ConflictException('Active payment vault binding is missing');
   }
+  if (
+    crosschain &&
+    (candidate.destination_wallet_id === null ||
+      candidate.destination_wallet_address === null ||
+      candidate.liquidity_action_id === null ||
+      candidate.max_source_debit_atomic === null)
+  )
+    throw new ConflictException(
+      'Confirmed destination liquidity is unavailable',
+    );
 }
 
 async function insertExecution(
@@ -189,6 +248,7 @@ async function insertExecution(
   context: TenantContext,
   candidate: ExecutionCandidateRow,
 ): Promise<ExecutionRow> {
+  const crosschain = candidate.route_environment === 'base-sepolia';
   const result = await database.query<ExecutionRow>(
     `
       INSERT INTO opes.payment_executions (
@@ -207,8 +267,11 @@ async function insertExecution(
         vault_address,
         expires_at,
         requested_by_membership_id
+        , execution_mode, liquidity_action_id, token_address,
+        max_source_debit_atomic, refund_address
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+        $16, $17, $18, $19, $20)
       ON CONFLICT (organization_id, decision_id)
       DO UPDATE SET updated_at = opes.payment_executions.updated_at
       RETURNING
@@ -228,6 +291,9 @@ async function insertExecution(
         status,
         failure_reason,
         transaction_hash
+        , execution_mode, liquidity_action_id, token_address,
+        max_source_debit_atomic::text AS max_source_debit_atomic,
+        refund_address
     `,
     [
       context.organizationId,
@@ -245,6 +311,11 @@ async function insertExecution(
       candidate.vault_address,
       candidate.decision_expires_at.toISOString(),
       context.membershipId,
+      crosschain ? 'CROSSCHAIN_WALLET' : 'DIRECT_VAULT',
+      crosschain ? candidate.liquidity_action_id : null,
+      !crosschain ? null : '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      crosschain ? candidate.max_source_debit_atomic : null,
+      !crosschain ? null : candidate.destination_wallet_address,
     ],
   );
 
@@ -259,7 +330,12 @@ async function enqueueExecution(
   database: TenantDatabase,
   organizationId: string,
   executionId: string,
+  executionMode: string,
 ): Promise<void> {
+  const eventType =
+    executionMode === 'CROSSCHAIN_WALLET'
+      ? 'payment.execute.crosschain'
+      : 'payment.execute.direct.arc_testnet';
   await database.query(
     `
       INSERT INTO opes.outbox_events (
@@ -269,18 +345,18 @@ async function enqueueExecution(
         aggregate_id,
         payload
       )
-      SELECT $1, 'payment.execute.direct.arc_testnet', 'payment_execution', $2, '{}'::jsonb
+      SELECT $1, $3, 'payment_execution', $2, '{}'::jsonb
       WHERE NOT EXISTS (
         SELECT 1
           FROM opes.outbox_events
          WHERE organization_id = $1
-           AND event_type = 'payment.execute.direct.arc_testnet'
+           AND event_type = $3
            AND aggregate_type = 'payment_execution'
            AND aggregate_id = $2
            AND status IN ('PENDING', 'PROCESSING')
       )
     `,
-    [organizationId, executionId],
+    [organizationId, executionId, eventType],
   );
 }
 
@@ -314,5 +390,10 @@ function mapExecution(row: ExecutionRow): PaymentExecutionResponse {
     status: row.status,
     failureReason: row.failure_reason,
     transactionHash: row.transaction_hash ?? null,
+    executionMode: row.execution_mode,
+    liquidityActionId: row.liquidity_action_id,
+    tokenAddress: row.token_address ?? null,
+    maxSourceDebitAtomic: row.max_source_debit_atomic ?? null,
+    refundAddress: row.refund_address ?? null,
   };
 }

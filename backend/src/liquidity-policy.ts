@@ -161,6 +161,16 @@ export function evaluatePaymentRoute(route: {
   }
 
   if (route.liquidityRoute === 'CCTP') {
+    if (
+      route.environment === 'base-sepolia' &&
+      route.chainId === 84532 &&
+      normalizeAsset(route.assetSymbol) === 'USDC'
+    )
+      return {
+        supported: true,
+        executable: true,
+        reason: 'CCTP-funded Base Sepolia payout is supported',
+      };
     return {
       supported: false,
       executable: false,
@@ -169,6 +179,16 @@ export function evaluatePaymentRoute(route: {
   }
 
   if (route.liquidityRoute === 'GATEWAY') {
+    if (
+      route.environment === 'base-sepolia' &&
+      route.chainId === 84532 &&
+      normalizeAsset(route.assetSymbol) === 'USDC'
+    )
+      return {
+        supported: true,
+        executable: true,
+        reason: 'Gateway-funded Base Sepolia payout is supported',
+      };
     return {
       supported: false,
       executable: false,

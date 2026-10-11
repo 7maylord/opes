@@ -1,7 +1,10 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { CircleWalletService } from './circle-wallet.service';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { buildExecuteDirectPaymentCalldata } from './evm-calldata';
+import {
+  buildErc20TransferCalldata,
+  buildExecuteDirectPaymentCalldata,
+} from './evm-calldata';
 import { FactoryManifestService } from './factory-manifest.service';
 import { PaymentExecutionWorkerService } from './payment-execution-worker.service';
 
@@ -104,6 +107,7 @@ function recordingQuery(
           source_version_id: 'version-1',
           vendor_id: 'vendor-1',
           route_asset_symbol: 'USDC',
+          route_environment: work?.route_environment ?? 'arc-testnet',
           amount_atomic: '12340001',
           status: 'CONFIRMED',
           transaction_hash: txHash,
@@ -129,11 +133,14 @@ function word(value: bigint | string): string {
 describe('PaymentExecutionWorkerService', () => {
   const originalFetch = global.fetch;
   const originalRpc = process.env.OPES_RPC_ARC_TESTNET;
+  const originalBaseRpc = process.env.OPES_RPC_BASE_SEPOLIA;
 
   afterEach(() => {
     global.fetch = originalFetch;
     if (originalRpc === undefined) delete process.env.OPES_RPC_ARC_TESTNET;
     else process.env.OPES_RPC_ARC_TESTNET = originalRpc;
+    if (originalBaseRpc === undefined) delete process.env.OPES_RPC_BASE_SEPOLIA;
+    else process.env.OPES_RPC_BASE_SEPOLIA = originalBaseRpc;
   });
 
   it('fails visibly when the tenant operator wallet is missing', async () => {
@@ -306,6 +313,9 @@ describe('PaymentExecutionWorkerService', () => {
       ),
     ).toBe(true);
     expect(
+      queries.some((item) => item.text.includes("SET status = 'PAID'")),
+    ).toBe(true);
+    expect(
       queries.some((item) => item.text.includes("SET status = 'PROCESSED'")),
     ).toBe(true);
   });
@@ -351,6 +361,103 @@ describe('PaymentExecutionWorkerService', () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    { transferAmount: '12340001', confirmed: true },
+    { transferAmount: '12340002', confirmed: false },
+  ])(
+    'settles Base USDC only when the transfer amount is exact: $confirmed',
+    async ({ transferAmount, confirmed }) => {
+      process.env.OPES_RPC_BASE_SEPOLIA = 'https://base-rpc.example.test';
+      const baseUsdc = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+      const row = workRow({
+        route_chain_id: 84532,
+        route_environment: 'base-sepolia',
+        vault_address: null,
+        execution_mode: 'CROSSCHAIN_WALLET',
+        token_address: baseUsdc,
+        liquidity_action_id: 'liquidity-1',
+      });
+      const callData = buildErc20TransferCalldata(
+        row.destination_address,
+        row.amount_atomic,
+      );
+      const attempt = {
+        id: 'attempt-1',
+        provider_transaction_id: 'circle-tx-1',
+        call_data: callData,
+      };
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              result: {
+                from: row.wallet_address,
+                to: baseUsdc,
+                input: callData,
+              },
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              result: {
+                status: '0x1',
+                transactionHash: txHash,
+                logs: [
+                  {
+                    address: baseUsdc,
+                    topics: [
+                      eventTopic('Transfer(address,address,uint256)'),
+                      addressTopic(row.wallet_address),
+                      addressTopic(row.destination_address),
+                    ],
+                    data: `0x${word(BigInt(transferAmount))}`,
+                  },
+                ],
+              },
+            }),
+        });
+      const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+      const { service } = serviceWithWorker(
+        recordingQuery(queries, row, attempt),
+        {
+          getTransaction: jest.fn().mockResolvedValue({
+            id: 'circle-tx-1',
+            state: 'CONFIRMED',
+            txHash,
+            blockchain: 'BASE-SEPOLIA',
+            walletId: row.wallet_id,
+            sourceAddress: row.wallet_address,
+            contractAddress: baseUsdc,
+          }),
+        },
+      );
+
+      await expect(service.processDuePaymentExecutions(1)).resolves.toBe(1);
+      expect(
+        queries.some((item) => item.text.includes("SET status = 'CONFIRMED'")),
+      ).toBe(confirmed);
+      expect(
+        queries.some((item) =>
+          item.text.includes('INSERT INTO opes.ledger_entries'),
+        ),
+      ).toBe(confirmed);
+      expect(
+        queries.some(
+          (item) =>
+            item.text.includes('INSERT INTO opes.ledger_entries') &&
+            item.values?.includes('ASSET:BASE_SEPOLIA:USDC'),
+        ),
+      ).toBe(confirmed);
+      expect(
+        queries.some((item) => item.text.includes("SET status = 'PAID'")),
+      ).toBe(confirmed);
+    },
+  );
 
   it('stops when no execution event is ready', async () => {
     const query = jest.fn(() => queryResult([]));

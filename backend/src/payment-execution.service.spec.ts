@@ -113,8 +113,12 @@ describe('PaymentExecutionService', () => {
     );
     expect(query).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining('payment.execute.direct.arc_testnet'),
-      [context.organizationId, 'execution-1'],
+      expect.stringContaining('SELECT $1, $3'),
+      [
+        context.organizationId,
+        'execution-1',
+        'payment.execute.direct.arc_testnet',
+      ],
     );
   });
 
@@ -131,6 +135,74 @@ describe('PaymentExecutionService', () => {
       ),
     ).rejects.toThrow(ConflictException);
     expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('reserves confirmed Base liquidity once for an approved payout', async () => {
+    const liquidityActionId = '66666666-6666-4666-8666-666666666666';
+    const crosschain = candidate({
+      route_environment: 'base-sepolia',
+      route_chain_id: 84532,
+      vault_address: null,
+      destination_wallet_id: 'base-wallet-1',
+      destination_wallet_address: '0x0000000000000000000000000000000000000004',
+      liquidity_action_id: liquidityActionId,
+      max_source_debit_atomic: '25000000',
+    });
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [crosschain] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'execution-2',
+            decision_id: crosschain.decision_id,
+            approval_id: crosschain.approval_id,
+            source_version_id: crosschain.source_version_id,
+            decision_hash: crosschain.decision_hash,
+            idempotency_key: crosschain.obligation_key,
+            context_hash: crosschain.decision_context_hash,
+            amount_atomic: crosschain.amount_atomic,
+            destination_address: crosschain.destination_address,
+            route_environment: crosschain.route_environment,
+            route_chain_id: crosschain.route_chain_id,
+            route_asset_symbol: 'USDC',
+            vault_address: null,
+            execution_mode: 'CROSSCHAIN_WALLET',
+            liquidity_action_id: liquidityActionId,
+            token_address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+            max_source_debit_atomic: '25000000',
+            refund_address: '0x0000000000000000000000000000000000000004',
+            status: 'PENDING',
+            failure_reason: null,
+            transaction_hash: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+    const service = serviceWithQuery(query);
+
+    await expect(
+      service.requestDecisionExecution(context, crosschain.decision_id),
+    ).resolves.toMatchObject({
+      executionMode: 'CROSSCHAIN_WALLET',
+      liquidityActionId,
+      maxSourceDebitAtomic: '25000000',
+    });
+    expect(query).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.arrayContaining([
+        'CROSSCHAIN_WALLET',
+        liquidityActionId,
+        '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        '25000000',
+      ]),
+    );
+    expect(query).toHaveBeenNthCalledWith(3, expect.any(String), [
+      context.organizationId,
+      'execution-2',
+      'payment.execute.crosschain',
+    ]);
   });
 
   it('requires an approving role to request execution', async () => {
