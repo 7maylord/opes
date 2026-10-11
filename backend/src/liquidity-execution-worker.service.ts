@@ -122,6 +122,11 @@ interface CctpSourceMessage {
   sourceMessageHash: string;
 }
 
+interface CctpAttestation {
+  message: string;
+  attestation: string;
+}
+
 interface GatewaySubmissionResponse {
   providerReference: string;
   transactionHash: string | null;
@@ -229,6 +234,13 @@ export class LiquidityExecutionWorkerService {
     }
 
     if (action.status === 'SUBMITTED') {
+      if (
+        action.action_type === 'CCTP_TRANSFER' &&
+        typeof action.provider_payload.sourceBurnTransactionHash !== 'string'
+      ) {
+        await this.reconcileSourceBurn(event, action);
+        return;
+      }
       await this.resolveSourceMessageAndMint(event, action);
       return;
     }
@@ -449,8 +461,50 @@ export class LiquidityExecutionWorkerService {
     }
 
     try {
-      const transactionHash = await submitSignerRequest(request);
-      await this.recordSubmitted(event, transactionHash);
+      const source = objectAt(action.provider_payload.source, 'source');
+      const approvalId =
+        action.provider_payload.cctpApprovalCircleTransactionId;
+      if (typeof approvalId !== 'string') {
+        const transaction = await this.circle.createContractTransaction({
+          walletAddress: requireAddress(
+            source.walletAddress,
+            'source.walletAddress',
+          ),
+          blockchain: circleBlockchain(action.source_chain_id),
+          contractAddress: requireAddress(source.usdc, 'source.usdc'),
+          abiFunctionSignature: 'approve(address,uint256)',
+          abiParameters: [request.to, action.amount_atomic],
+          idempotencyKey: stableUuid(`${action.id}:cctp-approve`),
+        });
+        await this.recordCctpProviderStep(
+          event,
+          'cctpApprovalCircleTransactionId',
+          transaction.id,
+        );
+        return;
+      }
+      if (
+        typeof action.provider_payload.cctpApprovalTransactionHash !== 'string'
+      ) {
+        const hash = await circleTransactionHash(this.circle, approvalId);
+        if (hash === null) {
+          await markOutboxPendingLater(this.database, event.id, 15);
+          return;
+        }
+        await this.recordCctpProviderStep(
+          event,
+          'cctpApprovalTransactionHash',
+          hash,
+        );
+        return;
+      }
+      const transaction = await this.circle.createCallDataTransaction({
+        walletId: requireText(source.walletId, 'source.walletId'),
+        contractAddress: request.to,
+        callData: request.data,
+        idempotencyKey: stableUuid(`${action.id}:cctp-burn`),
+      });
+      await this.recordCctpBurnSubmitted(event, transaction.id);
     } catch (error) {
       if (error instanceof UnknownSubmissionError) {
         await this.recordUnknown(
@@ -462,6 +516,31 @@ export class LiquidityExecutionWorkerService {
       await this.failLiquidityAction(
         event,
         error instanceof Error ? error.message : 'Liquidity signer failed',
+      );
+    }
+  }
+
+  private async reconcileSourceBurn(
+    event: OutboxEventRow,
+    action: LiquidityWorkRow,
+  ): Promise<void> {
+    try {
+      const transactionId = requireText(
+        action.provider_payload.cctpBurnCircleTransactionId,
+        'cctpBurnCircleTransactionId',
+      );
+      const hash = await circleTransactionHash(this.circle, transactionId);
+      if (hash === null) {
+        await markOutboxPendingLater(this.database, event.id, 15);
+        return;
+      }
+      await this.recordCctpBurnConfirmed(event, hash);
+    } catch (error) {
+      await this.failLiquidityAction(
+        event,
+        error instanceof Error
+          ? error.message
+          : 'CCTP burn reconciliation failed',
       );
     }
   }
@@ -526,7 +605,34 @@ export class LiquidityExecutionWorkerService {
     }
 
     try {
-      const transactionHash = await submitSignerRequest(request);
+      const transactionId = action.provider_payload.cctpMintCircleTransactionId;
+      if (typeof transactionId !== 'string') {
+        const destination = objectAt(
+          action.provider_payload.destination,
+          'destination',
+        );
+        const transaction = await this.circle.createCallDataTransaction({
+          walletId: requireText(destination.walletId, 'destination.walletId'),
+          contractAddress: request.to,
+          callData: request.data,
+          idempotencyKey: stableUuid(`${action.id}:cctp-mint`),
+        });
+        await this.recordCctpProviderStep(
+          event,
+          'cctpMintCircleTransactionId',
+          transaction.id,
+          15,
+        );
+        return;
+      }
+      const transactionHash = await circleTransactionHash(
+        this.circle,
+        transactionId,
+      );
+      if (transactionHash === null) {
+        await markOutboxPendingLater(this.database, event.id, 15);
+        return;
+      }
       await this.recordMinted(event, transactionHash);
     } catch (error) {
       if (error instanceof UnknownSubmissionError) {
@@ -541,6 +647,74 @@ export class LiquidityExecutionWorkerService {
         error instanceof Error ? error.message : 'Destination mint failed',
       );
     }
+  }
+
+  private async recordCctpProviderStep(
+    event: OutboxEventRow,
+    key: string,
+    value: string,
+    delaySeconds = 0,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `UPDATE opes.liquidity_actions
+            SET provider_payload = provider_payload || jsonb_build_object($3::text, $4::text), updated_at = now()
+          WHERE organization_id = $1 AND id = $2`,
+        [event.organization_id, event.aggregate_id, key, value],
+      );
+      await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        'liquidity.execute.cctp',
+        delaySeconds,
+      );
+    });
+  }
+
+  private async recordCctpBurnSubmitted(
+    event: OutboxEventRow,
+    transactionId: string,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `UPDATE opes.liquidity_actions SET status = 'SUBMITTED', submitted_at = now(),
+                provider_payload = provider_payload || jsonb_build_object('cctpBurnCircleTransactionId', $3::text), updated_at = now()
+          WHERE organization_id = $1 AND id = $2`,
+        [event.organization_id, event.aggregate_id, transactionId],
+      );
+      await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        'liquidity.execute.cctp',
+        15,
+      );
+    });
+  }
+
+  private async recordCctpBurnConfirmed(
+    event: OutboxEventRow,
+    transactionHash: string,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `UPDATE opes.liquidity_actions SET provider_reference = $3,
+                provider_payload = provider_payload || jsonb_build_object('sourceBurnTransactionHash', $3::text), updated_at = now()
+          WHERE organization_id = $1 AND id = $2`,
+        [event.organization_id, event.aggregate_id, transactionHash],
+      );
+      await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        'liquidity.execute.cctp',
+        15,
+      );
+    });
   }
 
   private async prepareLiquidityAction(
@@ -676,35 +850,6 @@ export class LiquidityExecutionWorkerService {
     });
   }
 
-  private async recordSubmitted(
-    event: OutboxEventRow,
-    transactionHash: string,
-  ): Promise<void> {
-    await this.database.withWorker(async (database) => {
-      await database.query(
-        `
-          UPDATE opes.liquidity_actions
-             SET status = 'SUBMITTED',
-                 provider_reference = $3,
-                 provider_payload = provider_payload || jsonb_build_object(
-                   'sourceBurnTransactionHash', $3::text
-                 ),
-                 submitted_at = now(),
-                 updated_at = now()
-           WHERE organization_id = $1
-             AND id = $2
-        `,
-        [event.organization_id, event.aggregate_id, transactionHash],
-      );
-      await markOutboxProcessed(database, event.id);
-      await enqueueLiquidityAction(
-        database,
-        event.organization_id,
-        event.aggregate_id,
-      );
-    });
-  }
-
   private async recordSourceMessage(
     event: OutboxEventRow,
     message: CctpSourceMessage,
@@ -753,7 +898,7 @@ export class LiquidityExecutionWorkerService {
 
   private async recordAttested(
     event: OutboxEventRow,
-    attestation: string,
+    attestation: CctpAttestation,
   ): Promise<LiquidityWorkRow> {
     return this.database.withWorker(async (database) => {
       const result = await database.query<LiquidityWorkRow>(
@@ -761,7 +906,8 @@ export class LiquidityExecutionWorkerService {
           UPDATE opes.liquidity_actions
              SET status = 'ATTESTED',
                  provider_payload = provider_payload || jsonb_build_object(
-                   'attestation', $3::text
+                   'attestation', $3::text,
+                   'attestedSourceMessage', $4::text
                  ),
                  updated_at = now()
            WHERE organization_id = $1
@@ -780,7 +926,12 @@ export class LiquidityExecutionWorkerService {
              amount_atomic::text AS amount_atomic,
              provider_payload
         `,
-        [event.organization_id, event.aggregate_id, attestation],
+        [
+          event.organization_id,
+          event.aggregate_id,
+          attestation.attestation,
+          attestation.message,
+        ],
       );
       const row = result.rows[0];
       if (row === undefined) {
@@ -958,14 +1109,16 @@ export class LiquidityExecutionWorkerService {
   }
 }
 
-function buildSourceBurnRequest(action: LiquidityWorkRow): SignerRequest {
+function buildSourceBurnRequest(
+  action: LiquidityWorkRow,
+): ContractSignerRequest {
   const request = (action.provider_payload as { signerRequest?: unknown })
     .signerRequest;
   if (request === null || typeof request !== 'object') {
     throw new Error('Liquidity action is missing signer request');
   }
   const value = request as Record<string, unknown>;
-  const signerRequest: SignerRequest = {
+  const signerRequest: ContractSignerRequest = {
     provider: 'circle',
     chainId: requireNumber(value.chainId, 'signerRequest.chainId'),
     from: requireAddress(value.from, 'signerRequest.from'),
@@ -988,10 +1141,15 @@ function buildSourceBurnRequest(action: LiquidityWorkRow): SignerRequest {
   return signerRequest;
 }
 
-function buildDestinationMintRequest(action: LiquidityWorkRow): SignerRequest {
+function buildDestinationMintRequest(
+  action: LiquidityWorkRow,
+): ContractSignerRequest {
   const payload = action.provider_payload;
   const destination = objectAt(payload.destination, 'destination');
-  const sourceMessage = requireHex(payload.sourceMessage, 'sourceMessage');
+  const sourceMessage = requireHex(
+    payload.attestedSourceMessage,
+    'attestedSourceMessage',
+  );
   const attestation = requireHex(payload.attestation, 'attestation');
   const messageTransmitter = requireAddress(
     destination.messageTransmitterV2,
@@ -1331,7 +1489,9 @@ async function assertDestinationTransactionSucceeded(
   }
 }
 
-async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
+async function fetchAttestation(
+  action: LiquidityWorkRow,
+): Promise<CctpAttestation> {
   const sourceMessage = requireHex(
     action.provider_payload.sourceMessage,
     'sourceMessage',
@@ -1358,12 +1518,32 @@ async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
   const message = body.messages?.find(
     (item) =>
       typeof item.message === 'string' &&
-      item.message.toLowerCase() === sourceMessage,
+      matchesCctpV2Template(sourceMessage, item.message),
   );
   if (message?.status !== 'complete') {
     throw new AttestationPendingError('CCTP attestation is pending');
   }
-  return requireHex(message.attestation, 'attestation');
+  return {
+    message: requireHex(message.message, 'attested message'),
+    attestation: requireHex(message.attestation, 'attestation'),
+  };
+}
+
+function matchesCctpV2Template(template: string, canonical: string): boolean {
+  const left = Buffer.from(
+    requireHex(template, 'sourceMessage').slice(2),
+    'hex',
+  );
+  const right = Buffer.from(
+    requireHex(canonical, 'attested message').slice(2),
+    'hex',
+  );
+  if (left.length !== right.length || left.length < 148) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if ((index >= 12 && index < 44) || (index >= 144 && index < 148)) continue;
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function attestationBaseUrl(payload: Record<string, unknown>): string {
@@ -1375,17 +1555,6 @@ function attestationBaseUrl(payload: Record<string, unknown>): string {
   return source.tier === 'testnet'
     ? 'https://iris-api-sandbox.circle.com'
     : 'https://iris-api.circle.com';
-}
-
-async function submitSignerRequest(request: SignerRequest): Promise<string> {
-  const body = await submitSignerRequestBody(request);
-  if (
-    typeof body.transactionHash !== 'string' ||
-    !/^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
-  ) {
-    throw new Error('Payment signer returned an invalid transaction hash');
-  }
-  return body.transactionHash.toLowerCase();
 }
 
 async function submitGatewayTransfer(
@@ -1492,6 +1661,18 @@ async function reconcileGatewayTransfer(
     providerReference: request.transferId,
     transactionHash: requireHex32(transaction.txHash, 'Gateway mint hash'),
   };
+}
+
+async function circleTransactionHash(
+  circle: CircleWalletService,
+  transactionId: string,
+): Promise<string | null> {
+  const transaction = await circle.getTransaction(transactionId);
+  if (transaction.txHash)
+    return requireHex32(transaction.txHash, 'Circle transaction hash');
+  if (['FAILED', 'CANCELLED', 'DENIED', 'STUCK'].includes(transaction.state))
+    throw new Error(`Circle transaction failed (${transaction.state})`);
+  return null;
 }
 
 const GATEWAY_EIP712_TYPES = {

@@ -46,10 +46,14 @@ function workRow(overrides: Record<string, unknown> = {}) {
         environment: 'arc-mainnet',
         tier: 'mainnet',
         domain: 26,
+        walletAddress: '0x0000000000000000000000000000000000000001',
+        walletId: 'arc-wallet-1',
+        usdc: '0x3600000000000000000000000000000000000000',
         messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
       },
       destination: {
         walletAddress: '0x0000000000000000000000000000000000000002',
+        walletId: 'destination-wallet-1',
         messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
       },
       signerRequest: {
@@ -100,6 +104,7 @@ function recordingQuery(
             sourceMessage: '0x123456',
             sourceMessageHash: `0x${'1'.repeat(64)}`,
             attestation: '0xabcdef01',
+            attestedSourceMessage: values?.[3],
           },
         },
       ]);
@@ -260,36 +265,62 @@ describe('LiquidityExecutionWorkerService', () => {
     global.fetch = originalFetch;
   });
 
-  it('fails visibly when signer is not configured', async () => {
-    delete process.env.OPES_PAYMENT_SIGNER_URL;
+  it('submits and persists the CCTP token approval through Circle', async () => {
     const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
-    const service = serviceWithWorker(recordingQuery(queries, workRow()));
+    const circle = {
+      createContractTransaction: jest
+        .fn()
+        .mockResolvedValue({ id: 'circle-approval-1', state: 'INITIATED' }),
+    };
+    const service = serviceWithWorker(
+      recordingQuery(queries, workRow()),
+      circle,
+    );
 
     await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    expect(circle.createContractTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abiFunctionSignature: 'approve(address,uint256)',
+        abiParameters: [
+          '0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d',
+          '25000000',
+        ],
+      }),
+    );
     expect(
-      queries.some((item) =>
-        item.values?.includes('Payment signer adapter is not configured'),
-      ),
+      queries.some((item) => item.values?.includes('circle-approval-1')),
     ).toBe(true);
   });
 
-  it('submits the precomputed CCTP burn request', async () => {
-    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ transactionHash: `0x${'a'.repeat(64)}` }),
-    });
+  it('submits the precomputed CCTP burn through Circle after approval', async () => {
     const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
-    const service = serviceWithWorker(recordingQuery(queries, workRow()));
+    const base = workRow();
+    const circle = {
+      createCallDataTransaction: jest
+        .fn()
+        .mockResolvedValue({ id: 'circle-burn-1', state: 'INITIATED' }),
+    };
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        workRow({
+          provider_payload: {
+            ...(base.provider_payload as Record<string, unknown>),
+            cctpApprovalCircleTransactionId: 'circle-approval-1',
+            cctpApprovalTransactionHash: `0x${'9'.repeat(64)}`,
+          },
+        }),
+      ),
+      circle,
+    );
 
     await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://signer.example.test/tx',
-      expect.objectContaining({ method: 'POST' }),
+    expect(circle.createCallDataTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 'arc-wallet-1' }),
     );
-    expect(
-      queries.some((item) => item.values?.includes(`0x${'a'.repeat(64)}`)),
-    ).toBe(true);
+    expect(queries.some((item) => item.values?.includes('circle-burn-1'))).toBe(
+      true,
+    );
     expect(
       queries.some(
         (item) =>
@@ -561,29 +592,29 @@ describe('LiquidityExecutionWorkerService', () => {
     ).toBe(true);
   });
 
-  it('records attestation and submits destination receiveMessage', async () => {
-    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+  it('records attestation and submits destination receiveMessage through Circle', async () => {
     process.env.OPES_CCTP_ATTESTATION_URL = 'https://iris.example.test';
-    global.fetch = jest
-      .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        json: () =>
-          Promise.resolve({
-            messages: [
-              {
-                status: 'complete',
-                message: '0x123456',
-                attestation: '0xabcdef01',
-              },
-            ],
-          }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ transactionHash: `0x${'b'.repeat(64)}` }),
-      });
+    const templateMessage = `0x${'00'.repeat(148)}`;
+    const canonicalMessage = `0x${'00'.repeat(12)}${'11'.repeat(32)}${'00'.repeat(100)}000007d0`;
+    global.fetch = jest.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          messages: [
+            {
+              status: 'complete',
+              message: canonicalMessage,
+              attestation: '0xabcdef01',
+            },
+          ],
+        }),
+    });
+    const circle = {
+      createCallDataTransaction: jest
+        .fn()
+        .mockResolvedValue({ id: 'circle-mint-1', state: 'INITIATED' }),
+    };
     const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
     const service = serviceWithWorker(
       recordingQuery(
@@ -594,15 +625,17 @@ describe('LiquidityExecutionWorkerService', () => {
             source: { tier: 'mainnet', domain: 26 },
             destination: {
               walletAddress: '0x0000000000000000000000000000000000000002',
+              walletId: 'destination-wallet-1',
               messageTransmitterV2:
                 '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
             },
-            sourceMessage: '0x123456',
+            sourceMessage: templateMessage,
             sourceMessageHash: `0x${'1'.repeat(64)}`,
             sourceBurnTransactionHash: `0x${'a'.repeat(64)}`,
           },
         }),
       ),
+      circle,
     );
 
     await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
@@ -610,14 +643,12 @@ describe('LiquidityExecutionWorkerService', () => {
       1,
       `https://iris.example.test/v2/messages/26?transactionHash=0x${'a'.repeat(64)}`,
     );
-    expect(global.fetch).toHaveBeenNthCalledWith(
-      2,
-      'https://signer.example.test/tx',
-      expect.objectContaining({ method: 'POST' }),
+    expect(circle.createCallDataTransaction).toHaveBeenCalledWith(
+      expect.objectContaining({ walletId: 'destination-wallet-1' }),
     );
-    expect(
-      queries.some((item) => item.values?.includes(`0x${'b'.repeat(64)}`)),
-    ).toBe(true);
+    expect(queries.some((item) => item.values?.includes('circle-mint-1'))).toBe(
+      true,
+    );
   });
 
   it('stops when no liquidity event is ready', async () => {

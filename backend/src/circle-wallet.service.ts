@@ -192,6 +192,24 @@ export class CircleWalletService {
     return transaction;
   }
 
+  async createCallDataTransaction(input: {
+    walletId: string;
+    contractAddress: string;
+    callData: string;
+    idempotencyKey: string;
+  }): Promise<{ id: string; state: string }> {
+    const response = await this.getClient().createContractExecutionTransaction({
+      walletId: input.walletId,
+      contractAddress: input.contractAddress,
+      callData: input.callData as `0x${string}`,
+      fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
+      idempotencyKey: input.idempotencyKey,
+    });
+    const transaction = response.data;
+    if (!transaction) throw new Error('Circle did not return a transaction');
+    return transaction;
+  }
+
   async getTransaction(id: string): Promise<Transaction> {
     const response = await this.getClient().getTransaction({ id });
     const transaction = response.data?.transaction;
