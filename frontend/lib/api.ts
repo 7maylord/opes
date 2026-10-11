@@ -589,6 +589,7 @@ export interface EscrowAgreementResponse {
   status: string;
   totalAmountAtomic: string;
   milestones: EscrowMilestoneResponse[];
+  ownerActions: ChainActionResponse[];
 }
 
 export async function createSubscription(
@@ -689,7 +690,7 @@ export async function acceptMilestone(
   organizationId: string,
   milestoneId: string,
 ) {
-  return request<EscrowMilestoneResponse>(
+  return request<ChainActionResponse>(
     `/organizations/${encodeURIComponent(organizationId)}/escrow-milestones/${encodeURIComponent(milestoneId)}/accept`,
     token,
     { method: "POST" },
@@ -702,11 +703,19 @@ export async function disputeMilestone(
   milestoneId: string,
   reason: string,
 ) {
-  return request<EscrowMilestoneResponse>(
+  return request<ChainActionResponse>(
     `/organizations/${encodeURIComponent(organizationId)}/escrow-milestones/${encodeURIComponent(milestoneId)}/dispute`,
     token,
     { method: "POST", body: JSON.stringify({ reason }) },
   );
+}
+
+export async function fundEscrow(token:string, organizationId:string, agreementId:string) {
+  return request<ChainActionResponse>(`/organizations/${encodeURIComponent(organizationId)}/escrow-agreements/${encodeURIComponent(agreementId)}/fund`, token, { method: 'POST' });
+}
+
+export async function cancelEscrow(token:string, organizationId:string, agreementId:string, reason:string) {
+  return request<ChainActionResponse>(`/organizations/${encodeURIComponent(organizationId)}/escrow-agreements/${encodeURIComponent(agreementId)}/cancel`, token, { method: 'POST', body: JSON.stringify({ reason }) });
 }
 
 export interface LiquidityActionResponse {

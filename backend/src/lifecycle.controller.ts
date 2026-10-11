@@ -14,13 +14,13 @@ import type {
   CreateSubscriptionCycleRequest,
   CreateSubscriptionRequest,
   EscrowAgreementResponse,
-  EscrowMilestoneResponse,
   SubscriptionCycleResponse,
   SubscriptionResponse,
 } from './lifecycle.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
 import { RecurringExecutionService } from './recurring-execution.service';
+import { EscrowExecutionService } from './escrow-execution.service';
 
 interface SubmitMilestoneEvidenceRequest {
   evidenceDocumentId: string;
@@ -35,6 +35,7 @@ export class LifecycleController {
   constructor(
     private readonly lifecycle: LifecycleService,
     private readonly recurring: RecurringExecutionService,
+    private readonly escrow: EscrowExecutionService,
     private readonly sessions: SessionService,
     private readonly tenantContexts: TenantContextService,
   ) {}
@@ -71,11 +72,13 @@ export class LifecycleController {
       authorization,
       correlationId,
     );
-    return this.recurring.confirmOwnerAction(
+    const action = await this.recurring.confirmOwnerAction(
       context,
       actionId,
       body.transactionHash,
     );
+    await this.escrow.ownerActionConfirmed(context, actionId);
+    return action;
   }
 
   @Post('subscriptions/:subscriptionId/cycles')
@@ -157,13 +160,48 @@ export class LifecycleController {
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
     @Body() body: CreateEscrowAgreementRequest,
-  ): Promise<EscrowAgreementResponse> {
+  ): Promise<EscrowAgreementResponse & { ownerActions: unknown[] }> {
     const context = await this.resolveContext(
       organizationId,
       authorization,
       correlationId,
     );
-    return this.lifecycle.createEscrowAgreement(context, body);
+    const agreement = await this.lifecycle.createEscrowAgreement(context, body);
+    return {
+      ...agreement,
+      ownerActions: await this.escrow.prepareAgreement(context, agreement.id),
+    };
+  }
+
+  @Post('escrow-agreements/:agreementId/fund')
+  async fundEscrow(
+    @Param('organizationId') organizationId: string,
+    @Param('agreementId') agreementId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.escrow.prepareFunding(context, agreementId);
+  }
+
+  @Post('escrow-agreements/:agreementId/cancel')
+  async cancelEscrow(
+    @Param('organizationId') organizationId: string,
+    @Param('agreementId') agreementId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: { reason: string },
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.escrow.prepareCancel(context, agreementId, body.reason);
   }
 
   @Post('escrow-milestones/:milestoneId/submissions')
@@ -173,7 +211,7 @@ export class LifecycleController {
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
     @Body() body: SubmitMilestoneEvidenceRequest,
-  ): Promise<EscrowMilestoneResponse> {
+  ) {
     const context = await this.resolveContext(
       organizationId,
       authorization,
@@ -192,13 +230,13 @@ export class LifecycleController {
     @Param('milestoneId') milestoneId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
-  ): Promise<EscrowMilestoneResponse> {
+  ) {
     const context = await this.resolveContext(
       organizationId,
       authorization,
       correlationId,
     );
-    return this.lifecycle.acceptMilestone(context, milestoneId);
+    return this.escrow.prepareMilestoneApproval(context, milestoneId);
   }
 
   @Post('escrow-milestones/:milestoneId/dispute')
@@ -208,13 +246,13 @@ export class LifecycleController {
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
     @Body() body: DisputeMilestoneRequest,
-  ): Promise<EscrowMilestoneResponse> {
+  ) {
     const context = await this.resolveContext(
       organizationId,
       authorization,
       correlationId,
     );
-    return this.lifecycle.disputeMilestone(context, milestoneId, body.reason);
+    return this.escrow.prepareDispute(context, milestoneId, body.reason);
   }
 
   private async resolveContext(

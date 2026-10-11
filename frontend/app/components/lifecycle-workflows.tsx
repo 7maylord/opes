@@ -7,6 +7,8 @@ import {
   cancelSubscription,
   changeSubscriptionStatus,
   createEscrowAgreement,
+  fundEscrow,
+  cancelEscrow,
   createSubscription,
   createSubscriptionCycle,
   confirmLifecycleAction,
@@ -134,11 +136,27 @@ export function LifecycleWorkflows({
     });
   }
 
+  async function activateEscrow() {
+    if (!agreement) return setError("Create an escrow agreement first.");
+    await run("Escrow agreement activated", async () => { for (const action of agreement.ownerActions) if (action.status !== 'CONFIRMED') await signAction(action); setAgreement(current => current ? {...current,status:'CREATED'} : current); });
+  }
+
+  async function submitFunding() {
+    if (!agreement) return setError("Create an escrow agreement first.");
+    await run("Escrow funding approved", async () => { await signAction(await fundEscrow(token, organizationId, agreement.id)); setAgreement(current => current ? {...current,status:'FUNDING_APPROVED'} : current); });
+  }
+
+  async function submitEscrowCancel() {
+    if (!agreement) return setError("Create an escrow agreement first.");
+    await run("Escrow cancelled; refund queued", async () => { await signAction(await cancelEscrow(token, organizationId, agreement.id, 'Cancelled by owner')); setAgreement(current => current ? {...current,status:'CANCELLED'} : current); });
+  }
+
   async function submitAccept() {
     const target = milestone ?? agreement?.milestones[0];
     if (target === undefined) return setError("Create an escrow agreement first.");
     await run("Milestone accepted", async () => {
-      setMilestone(await acceptMilestone(token, organizationId, target.id));
+      await signAction(await acceptMilestone(token, organizationId, target.id));
+      setMilestone({ ...target, status: 'ACCEPTED' });
     });
   }
 
@@ -146,7 +164,8 @@ export function LifecycleWorkflows({
     const target = milestone ?? agreement?.milestones[0];
     if (target === undefined) return setError("Create an escrow agreement first.");
     await run("Milestone disputed", async () => {
-      setMilestone(await disputeMilestone(token, organizationId, target.id, "Needs review"));
+      await signAction(await disputeMilestone(token, organizationId, target.id, "Needs review"));
+      setMilestone({ ...target, status: 'DISPUTED' });
     });
   }
 
@@ -202,9 +221,12 @@ export function LifecycleWorkflows({
           <Input label="Agreement/evidence document ID" value={documentId} onChange={setDocumentId} />
           <Input label="Total amount USDC" value={amount} onChange={setAmount} required />
           <button disabled={pending} className="btn">Create escrow</button>
+          <button type="button" disabled={pending || agreement === null} onClick={activateEscrow} className="btn-secondary">Sign escrow setup</button>
+          <button type="button" disabled={pending || agreement?.status !== 'CREATED'} onClick={submitFunding} className="btn-secondary">Approve funding</button>
           <button type="button" disabled={pending || agreement === null} onClick={submitEvidence} className="btn-secondary">Submit first milestone evidence</button>
           <button type="button" disabled={pending || agreement === null} onClick={submitAccept} className="btn-secondary">Accept milestone</button>
           <button type="button" disabled={pending || agreement === null} onClick={submitDispute} className="btn-secondary">Dispute milestone</button>
+          <button type="button" disabled={pending || agreement === null} onClick={submitEscrowCancel} className="btn-secondary">Cancel and refund</button>
           <Result value={milestone ?? agreement} />
         </form>
       </div>

@@ -66,35 +66,28 @@ test("journey 3: invoice source flows to decision execution", async ({ page }) =
   await page.getByRole("button", { name: "Verify invoice" }).click({ force: true });
   await page.getByRole("button", { name: "Generate agent decision" }).click({ force: true });
   await expect(page.getByText('"status": "PASS"')).toBeVisible();
-  await page.getByRole("button", { name: "Approve" }).click({ force: true });
+  await page.getByRole("button", { name: "Approve", exact: true }).click({ force: true });
   await page.getByRole("button", { name: "Request execution" }).click({ force: true });
   await expect(page.getByText('"status": "PENDING"')).toBeVisible();
 });
 
-test("journey 4: recurring subscription cycle and cancellation", async ({ page }) => {
+test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
   await openSignedIn(page);
   await page.getByLabel("Vendor ID").first().fill("vendor-1");
   await page.getByLabel("Vendor address ID").first().fill("address-1");
   await page.getByRole("button", { name: "Create subscription" }).click();
-  await expect(page.getByText('"status": "ACTIVE"')).toBeVisible();
-  await page.getByRole("button", { name: "Create current cycle" }).click();
-  await expect(page.getByText('"status": "DUE"')).toBeVisible();
-  await page.getByRole("button", { name: "Cancel" }).click();
-  await expect(page.getByText("Subscription status: CANCELLED")).toBeVisible();
+  await expect(page.getByText('"status": "SETUP_REQUIRED"')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign and activate mandate" })).toBeEnabled();
 });
 
-test("journey 5: escrow evidence acceptance and dispute views", async ({ page }) => {
+test("journey 5: escrow requires owner-signed setup before funding", async ({ page }) => {
   await openSignedIn(page);
   await page.getByLabel("Vendor ID").nth(1).fill("vendor-1");
   await page.getByLabel("Vendor address ID").nth(1).fill("address-1");
   await page.getByLabel("Agreement/evidence document ID").fill("doc-1");
   await page.getByRole("button", { name: "Create escrow" }).click();
-  await page.getByRole("button", { name: "Submit first milestone evidence" }).click();
-  await expect(page.getByText('"status": "SUBMITTED"')).toBeVisible();
-  await page.getByRole("button", { name: "Accept milestone" }).click();
-  await expect(page.getByText('"status": "ACCEPTED"')).toBeVisible();
-  await page.getByRole("button", { name: "Dispute milestone" }).click();
-  await expect(page.getByText('"status": "DISPUTED"')).toBeVisible();
+  await expect(page.getByText('"status": "SETUP_REQUIRED"')).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign escrow setup" })).toBeEnabled();
 });
 
 test("journey 6: treasury separates planned from settled", async ({ page }) => {
@@ -172,10 +165,10 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   }
   if (path.endsWith("/decisions/decision-1/authorize")) return { id: "approval-1", decisionId: "decision-1", decisionVersion: 1, sourceVersionId: "invoice-version-1", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", contextHash: "context", policySnapshotHash: "policy", status: "ACTIVE", expiresAt: "2026-10-04T01:00:00.000Z" };
   if (path.endsWith("/decisions/decision-1/execute")) return { id: "execution-1", decisionId: "decision-1", approvalId: "approval-1", sourceVersionId: "invoice-version-1", decisionHash: "decisionhash", idempotencyKey: "key", contextHash: "context", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", routeEnvironment: "arc-testnet", routeChainId: 5042002, routeAssetSymbol: "USDC", vaultAddress: "0x2000000000000000000000000000000000000002", status: "PENDING", failureReason: null, transactionHash: null };
-  if (path.endsWith("/subscriptions")) return { id: "subscription-1", versionId: "subscription-version-1", version: 1, status: "ACTIVE", cadence: body.cadence, anchorDate: body.anchorDate, timezone: body.timezone, amountAtomic: "100000000" };
+  if (path.endsWith("/subscriptions")) return { id: "subscription-1", versionId: "subscription-version-1", version: 1, status: "SETUP_REQUIRED", cadence: body.cadence, anchorDate: body.anchorDate, timezone: body.timezone, amountAtomic: "100000000", ownerActions: [chainAction("mandate-action", "CREATE_RECURRING_MANDATE")] };
   if (path.endsWith("/subscriptions/subscription-1/cycles")) return { id: "cycle-1", subscriptionId: "subscription-1", subscriptionVersionId: "subscription-version-1", servicePeriodStart: body.servicePeriodStart, servicePeriodEnd: "2026-11-04", dueAt: "2026-11-04T00:00:00.000Z", amountAtomic: "100000000", status: "DUE" };
   if (path.endsWith("/subscriptions/subscription-1/cancel")) return { id: "subscription-1", status: "CANCELLED" };
-  if (path.endsWith("/escrow-agreements")) return { id: "agreement-1", status: "DRAFT", totalAmountAtomic: "100000000", milestones: [{ id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "PENDING", evidenceDocumentId: null }] };
+  if (path.endsWith("/escrow-agreements")) return { id: "agreement-1", status: "SETUP_REQUIRED", totalAmountAtomic: "100000000", ownerActions: [chainAction("escrow-action", "CREATE_ESCROW_AGREEMENT")], milestones: [{ id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "PENDING", evidenceDocumentId: null }] };
   if (path.endsWith("/escrow-milestones/milestone-1/submissions")) return { id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "SUBMITTED", evidenceDocumentId: body.evidenceDocumentId };
   if (path.endsWith("/escrow-milestones/milestone-1/accept")) return { id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "ACCEPTED", evidenceDocumentId: "doc-1" };
   if (path.endsWith("/escrow-milestones/milestone-1/dispute")) return { id: "milestone-1", agreementId: "agreement-1", milestoneIndex: 0, title: "Kickoff", amountAtomic: "50000000", status: "DISPUTED", evidenceDocumentId: "doc-1" };
@@ -184,6 +177,8 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (path.endsWith("/ledger/payment-executions/execution-1/settle")) return ledger("PAYMENT_SETTLED", "execution-1");
   return { message: `Unhandled ${method} ${path}` };
 }
+
+function chainAction(id:string, actionType:string) { return { id, actionType, actor:'OWNER', to:'0x2000000000000000000000000000000000000002', data:'0x1234', chainId:5042002, status:'PREPARED' }; }
 
 function activeBindings() {
   return [

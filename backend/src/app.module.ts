@@ -35,6 +35,7 @@ import { PaymentExecutionWorkerService } from './payment-execution-worker.servic
 import { ProvisioningWorkerService } from './provisioning-worker.service';
 import { RailwayBucketService } from './railway-bucket.service';
 import { RecurringExecutionService } from './recurring-execution.service';
+import { EscrowExecutionService } from './escrow-execution.service';
 import { OnboardingService } from './onboarding.service';
 import { OrganizationInvitationController } from './organization-invitation.controller';
 import { OrganizationController } from './organization.controller';
@@ -88,6 +89,7 @@ import { TenantContextService } from './tenant-context.service';
     ProvisioningWorkerService,
     RailwayBucketService,
     RecurringExecutionService,
+    EscrowExecutionService,
     OrganizationService,
     SessionService,
     TenantContextService,

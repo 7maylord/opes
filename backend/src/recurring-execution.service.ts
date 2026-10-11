@@ -44,7 +44,7 @@ interface SubscriptionSetupRow {
   vault_address: string;
 }
 
-interface ActionRow {
+export interface ActionRow {
   id: string;
   organization_id: string;
   action_type: string;
@@ -133,10 +133,6 @@ export class RecurringExecutionService {
       );
       const total = BigInt(row.amount_atomic) * BigInt(schedule.length);
       const actions = [
-        [
-          'UNPAUSE_RECURRING_VAULT',
-          encodeFunctionData({ abi: vaultAbi, functionName: 'unpause' }),
-        ],
         [
           'SET_RECURRING_LIMITS',
           encodeFunctionData({
@@ -526,7 +522,7 @@ export function buildSchedule(
   return result;
 }
 
-async function insertAction(
+export async function insertAction(
   database: TenantDatabase,
   organizationId: string,
   actionType: string,
@@ -557,7 +553,7 @@ async function insertAction(
   return result.rows[0];
 }
 
-function mapAction(row: ActionRow): ChainActionResponse {
+export function mapAction(row: ActionRow): ChainActionResponse {
   return {
     id: row.id,
     actionType: row.action_type,
