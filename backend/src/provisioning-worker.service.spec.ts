@@ -201,6 +201,11 @@ describe('ProvisioningWorkerService', () => {
         address: '0x3333333333333333333333333333333333333333',
         accountType: 'EOA',
       }),
+      deriveWallet: jest.fn().mockResolvedValue({
+        id: 'circle-base-1',
+        address: operator.address,
+        accountType: 'EOA',
+      }),
       requestArcTestnetTokens: jest.fn().mockResolvedValue(undefined),
     };
     const { service } = serviceWithWorker(query, circle);
@@ -212,6 +217,12 @@ describe('ProvisioningWorkerService', () => {
       'opes:tenant:organization-1:operator:arc-testnet',
     );
     expect(circle.createWallet).toHaveBeenCalledTimes(1);
+    expect(circle.deriveWallet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceWalletId: operator.id,
+        blockchain: 'BASE-SEPOLIA',
+      }),
+    );
     expect(circle.requestArcTestnetTokens).toHaveBeenCalledWith(
       '0x3333333333333333333333333333333333333333',
     );

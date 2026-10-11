@@ -75,6 +75,22 @@ export class CircleWalletService {
     return wallet;
   }
 
+  async deriveWallet(input: {
+    sourceWalletId: string;
+    blockchain: 'BASE-SEPOLIA';
+    refId: string;
+    name: string;
+  }): Promise<WalletsDataWalletsInner> {
+    const response = await this.getClient().deriveWallet({
+      id: input.sourceWalletId,
+      blockchain: input.blockchain,
+      metadata: { name: input.name, refId: input.refId },
+    });
+    const wallet = response.data?.wallet;
+    if (!wallet) throw new Error('Circle did not return a derived wallet');
+    return wallet;
+  }
+
   async requestArcTestnetTokens(address: string): Promise<void> {
     await this.getClient().requestTestnetTokens({
       address,
@@ -133,6 +149,43 @@ export class CircleWalletService {
       },
       refId: `opes:payment:${input.executionId}`,
       idempotencyKey: input.executionId,
+    });
+    const transaction = response.data;
+    if (!transaction) throw new Error('Circle did not return a transaction');
+    return transaction;
+  }
+
+  async signTypedData(input: {
+    walletAddress: string;
+    blockchain: string;
+    data: string;
+  }): Promise<string> {
+    const response = await this.getClient().signTypedData({
+      walletAddress: input.walletAddress,
+      blockchain: input.blockchain,
+      data: input.data,
+    });
+    const signature = response.data?.signature;
+    if (!signature) throw new Error('Circle did not return a signature');
+    return signature;
+  }
+
+  async createContractTransaction(input: {
+    walletAddress: string;
+    blockchain: string;
+    contractAddress: string;
+    abiFunctionSignature: string;
+    abiParameters: string[];
+    idempotencyKey: string;
+  }): Promise<{ id: string; state: string }> {
+    const response = await this.getClient().createContractExecutionTransaction({
+      walletAddress: input.walletAddress,
+      blockchain: input.blockchain,
+      contractAddress: input.contractAddress,
+      abiFunctionSignature: input.abiFunctionSignature,
+      abiParameters: input.abiParameters,
+      fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
+      idempotencyKey: input.idempotencyKey,
     });
     const transaction = response.data;
     if (!transaction) throw new Error('Circle did not return a transaction');

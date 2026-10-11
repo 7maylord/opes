@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { buildCctpReceiveMessageCalldata } from './cctp-calldata';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { isEvmAddress } from './evm-decision-hash';
+import { CircleWalletService } from './circle-wallet.service';
 
 interface OutboxEventRow {
   id: string;
@@ -48,6 +50,8 @@ interface GatewaySignerRequest {
   destinationRecipient: string;
   sourceToken: string;
   destinationToken: string;
+  sourceContract: string;
+  destinationContract: string;
   amountAtomic: string;
   quoteExpiresAt: string;
   gatewayApiUrl: string;
@@ -96,8 +100,11 @@ type SignerRequest =
   | SwapStatusRequest;
 
 interface AttestationResponse {
-  status?: unknown;
-  attestation?: unknown;
+  messages?: Array<{
+    status?: unknown;
+    message?: unknown;
+    attestation?: unknown;
+  }>;
 }
 
 interface JsonRpcResponse<T> {
@@ -118,6 +125,8 @@ interface CctpSourceMessage {
 interface GatewaySubmissionResponse {
   providerReference: string;
   transactionHash: string | null;
+  attestation?: string;
+  signature?: string;
 }
 
 interface SwapSubmissionResponse {
@@ -139,7 +148,10 @@ class AttestationPendingError extends Error {}
 export class LiquidityExecutionWorkerService {
   private readonly logger = new Logger(LiquidityExecutionWorkerService.name);
 
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly circle: CircleWalletService,
+  ) {}
 
   async processDueLiquidityActions(limit = 10): Promise<number> {
     let processed = 0;
@@ -267,7 +279,7 @@ export class LiquidityExecutionWorkerService {
     try {
       await this.recordGatewaySubmitted(
         event,
-        await submitGatewaySignerRequest(request),
+        await submitGatewayTransfer(request, this.circle),
       );
     } catch (error) {
       if (error instanceof UnknownSubmissionError) {
@@ -286,8 +298,17 @@ export class LiquidityExecutionWorkerService {
     action: LiquidityWorkRow,
   ): Promise<void> {
     try {
-      const response = await submitGatewayStatusRequest(
+      if (
+        typeof action.provider_payload.gatewayMintCircleTransactionId !==
+        'string'
+      ) {
+        const transactionId = await submitGatewayMint(action, this.circle);
+        await this.recordGatewayMintSubmitted(event, transactionId);
+        return;
+      }
+      const response = await reconcileGatewayTransfer(
         buildGatewayStatusRequest(action),
+        this.circle,
       );
       if (response.transactionHash === null) {
         await markOutboxPendingLater(this.database, event.id, 60);
@@ -314,6 +335,30 @@ export class LiquidityExecutionWorkerService {
           : 'Gateway reconciliation failed',
       );
     }
+  }
+
+  private async recordGatewayMintSubmitted(
+    event: OutboxEventRow,
+    transactionId: string,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `UPDATE opes.liquidity_actions
+            SET provider_payload = provider_payload || jsonb_build_object(
+                  'gatewayMintCircleTransactionId', $3::text
+                ), updated_at = now()
+          WHERE organization_id = $1 AND id = $2`,
+        [event.organization_id, event.aggregate_id, transactionId],
+      );
+      await markOutboxProcessed(database, event.id);
+      await enqueueLiquidityAction(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+        'liquidity.execute.gateway',
+        15,
+      );
+    });
   }
 
   private async settleMintedLiquidity(
@@ -560,7 +605,9 @@ export class LiquidityExecutionWorkerService {
                  provider_payload = provider_payload || jsonb_strip_nulls(
                    jsonb_build_object(
                      'gatewayTransferReference', $4::text,
-                     'destinationMintTransactionHash', $5::text
+                     'destinationMintTransactionHash', $5::text,
+                     'gatewayAttestation', $6::text,
+                     'gatewaySignature', $7::text
                    )
                  ),
                  submitted_at = COALESCE(submitted_at, now()),
@@ -575,6 +622,8 @@ export class LiquidityExecutionWorkerService {
           status,
           response.providerReference,
           response.transactionHash,
+          response.attestation,
+          response.signature,
         ],
       );
       await markOutboxProcessed(database, event.id);
@@ -1013,6 +1062,14 @@ function buildGatewayTransferRequest(
       request.destinationToken,
       'gatewayRequest.destinationToken',
     ),
+    sourceContract: requireAddress(
+      request.sourceContract,
+      'gatewayRequest.sourceContract',
+    ),
+    destinationContract: requireAddress(
+      request.destinationContract,
+      'gatewayRequest.destinationContract',
+    ),
     amountAtomic: requireIntegerString(
       request.amountAtomic,
       'gatewayRequest.amountAtomic',
@@ -1050,8 +1107,8 @@ function buildGatewayStatusRequest(
     provider: 'circle-gateway',
     action: 'getTransferStatus',
     transferId: requireText(
-      action.provider_payload.gatewayTransferReference,
-      'gatewayTransferReference',
+      action.provider_payload.gatewayMintCircleTransactionId,
+      'gatewayMintCircleTransactionId',
     ),
     destinationChainId: action.destination_chain_id,
     idempotencyKey: `${action.id}:gateway-status`,
@@ -1275,13 +1332,21 @@ async function assertDestinationTransactionSucceeded(
 }
 
 async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
-  const sourceMessageHash = requireHex(
-    action.provider_payload.sourceMessageHash,
-    'sourceMessageHash',
+  const sourceMessage = requireHex(
+    action.provider_payload.sourceMessage,
+    'sourceMessage',
+  );
+  const transactionHash = requireHex32(
+    action.provider_payload.sourceBurnTransactionHash,
+    'sourceBurnTransactionHash',
+  );
+  const sourceDomain = requireNumber(
+    objectAt(action.provider_payload.source, 'source').domain,
+    'source.domain',
   );
   const baseUrl = attestationBaseUrl(action.provider_payload);
   const response = await fetch(
-    `${baseUrl.replace(/\/$/, '')}/v1/attestations/${sourceMessageHash}`,
+    `${baseUrl.replace(/\/$/, '')}/v2/messages/${sourceDomain}?transactionHash=${transactionHash}`,
   );
   if (response.status === 404) {
     throw new AttestationPendingError('CCTP attestation is pending');
@@ -1290,10 +1355,15 @@ async function fetchAttestation(action: LiquidityWorkRow): Promise<string> {
     throw new Error(`CCTP attestation returned HTTP ${response.status}`);
   }
   const body = (await response.json()) as AttestationResponse;
-  if (body.status !== 'complete') {
+  const message = body.messages?.find(
+    (item) =>
+      typeof item.message === 'string' &&
+      item.message.toLowerCase() === sourceMessage,
+  );
+  if (message?.status !== 'complete') {
     throw new AttestationPendingError('CCTP attestation is pending');
   }
-  return requireHex(body.attestation, 'attestation');
+  return requireHex(message.attestation, 'attestation');
 }
 
 function attestationBaseUrl(payload: Record<string, unknown>): string {
@@ -1318,57 +1388,160 @@ async function submitSignerRequest(request: SignerRequest): Promise<string> {
   return body.transactionHash.toLowerCase();
 }
 
-async function submitGatewaySignerRequest(
+async function submitGatewayTransfer(
   request: GatewaySignerRequest,
+  circle: CircleWalletService,
 ): Promise<GatewaySubmissionResponse> {
-  const body = await submitSignerRequestBody(request);
-  const providerReference =
-    typeof body.providerReference === 'string'
-      ? body.providerReference
-      : typeof body.transferId === 'string'
-        ? body.transferId
-        : typeof body.transactionHash === 'string'
-          ? body.transactionHash
-          : null;
-  if (providerReference === null || providerReference.trim() === '') {
-    throw new Error('Payment signer returned an invalid Gateway reference');
+  if (Date.parse(request.quoteExpiresAt) <= Date.now()) {
+    throw new Error('Gateway quote has expired');
   }
-  const transactionHash =
-    typeof body.transactionHash === 'string' &&
-    /^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
-      ? body.transactionHash.toLowerCase()
-      : null;
+  const burnIntent = {
+    maxBlockHeight: ((1n << 256n) - 1n).toString(),
+    maxFee: process.env.OPES_GATEWAY_MAX_FEE_ATOMIC?.trim() || '2010000',
+    spec: {
+      version: 1,
+      sourceDomain: request.sourceDomain,
+      destinationDomain: request.destinationDomain,
+      sourceContract: addressToBytes32(request.sourceContract),
+      destinationContract: addressToBytes32(request.destinationContract),
+      sourceToken: addressToBytes32(request.sourceToken),
+      destinationToken: addressToBytes32(request.destinationToken),
+      sourceDepositor: addressToBytes32(request.sourceDepositor),
+      destinationRecipient: addressToBytes32(request.destinationRecipient),
+      sourceSigner: addressToBytes32(request.sourceDepositor),
+      destinationCaller: addressToBytes32(
+        '0x0000000000000000000000000000000000000000',
+      ),
+      value: request.amountAtomic,
+      salt: `0x${createHash('sha256').update(request.idempotencyKey).digest('hex')}`,
+      hookData: '0x',
+    },
+  };
+  const typedData = JSON.stringify({
+    types: GATEWAY_EIP712_TYPES,
+    domain: { name: 'GatewayWallet', version: '1' },
+    primaryType: 'BurnIntent',
+    message: burnIntent,
+  });
+  const signature = await circle.signTypedData({
+    walletAddress: request.sourceDepositor,
+    blockchain: circleBlockchain(request.sourceChainId),
+    data: typedData,
+  });
+  const response = await fetch(request.gatewayApiUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify([{ burnIntent, signature }]),
+  });
+  if (!response.ok)
+    throw new Error(`Gateway API returned HTTP ${response.status}`);
+  const body = (await response.json()) as Record<string, unknown>;
   return {
-    providerReference,
-    transactionHash,
+    providerReference: request.idempotencyKey,
+    transactionHash: null,
+    attestation: requireHex(body.attestation, 'Gateway attestation'),
+    signature: requireHex(body.signature, 'Gateway signature'),
   };
 }
 
-async function submitGatewayStatusRequest(
+async function submitGatewayMint(
+  action: LiquidityWorkRow,
+  circle: CircleWalletService,
+): Promise<string> {
+  const destination = objectAt(
+    action.provider_payload.destination,
+    'destination',
+  );
+  const transaction = await circle.createContractTransaction({
+    walletAddress: requireAddress(
+      destination.walletAddress,
+      'destination.walletAddress',
+    ),
+    blockchain: circleBlockchain(action.destination_chain_id),
+    contractAddress: requireAddress(
+      destination.gatewayMinter,
+      'destination.gatewayMinter',
+    ),
+    abiFunctionSignature: 'gatewayMint(bytes,bytes)',
+    abiParameters: [
+      requireHex(
+        action.provider_payload.gatewayAttestation,
+        'gatewayAttestation',
+      ),
+      requireHex(action.provider_payload.gatewaySignature, 'gatewaySignature'),
+    ],
+    idempotencyKey: stableUuid(`${action.id}:gateway-mint`),
+  });
+  return transaction.id;
+}
+
+async function reconcileGatewayTransfer(
   request: GatewayStatusRequest,
+  circle: CircleWalletService,
 ): Promise<GatewaySubmissionResponse> {
-  const body = await submitSignerRequestBody(request);
-  const pending =
-    typeof body.status === 'string' &&
-    ['pending', 'submitted', 'processing'].includes(body.status.toLowerCase());
-  if (pending) {
+  const transaction = await circle.getTransaction(request.transferId);
+  if (!transaction.txHash) {
+    if (['FAILED', 'CANCELLED', 'DENIED', 'STUCK'].includes(transaction.state))
+      throw new Error(`Gateway mint failed (${transaction.state})`);
     return {
       providerReference: request.transferId,
       transactionHash: null,
     };
   }
-  const transactionHash =
-    typeof body.transactionHash === 'string' &&
-    /^0x[0-9a-fA-F]{64}$/.test(body.transactionHash)
-      ? body.transactionHash.toLowerCase()
-      : null;
-  if (transactionHash === null) {
-    throw new UnknownSubmissionError('Gateway transfer status is unknown');
-  }
   return {
     providerReference: request.transferId,
-    transactionHash,
+    transactionHash: requireHex32(transaction.txHash, 'Gateway mint hash'),
   };
+}
+
+const GATEWAY_EIP712_TYPES = {
+  EIP712Domain: [
+    { name: 'name', type: 'string' },
+    { name: 'version', type: 'string' },
+  ],
+  TransferSpec: [
+    ['version', 'uint32'],
+    ['sourceDomain', 'uint32'],
+    ['destinationDomain', 'uint32'],
+    ['sourceContract', 'bytes32'],
+    ['destinationContract', 'bytes32'],
+    ['sourceToken', 'bytes32'],
+    ['destinationToken', 'bytes32'],
+    ['sourceDepositor', 'bytes32'],
+    ['destinationRecipient', 'bytes32'],
+    ['sourceSigner', 'bytes32'],
+    ['destinationCaller', 'bytes32'],
+    ['value', 'uint256'],
+    ['salt', 'bytes32'],
+    ['hookData', 'bytes'],
+  ].map(([name, type]) => ({ name, type })),
+  BurnIntent: [
+    { name: 'maxBlockHeight', type: 'uint256' },
+    { name: 'maxFee', type: 'uint256' },
+    { name: 'spec', type: 'TransferSpec' },
+  ],
+};
+
+function addressToBytes32(address: string): string {
+  return `0x${address.slice(2).toLowerCase().padStart(64, '0')}`;
+}
+
+function circleBlockchain(chainId: number): string {
+  if (chainId === 5042002) return 'ARC-TESTNET';
+  if (chainId === 84532) return 'BASE-SEPOLIA';
+  if (chainId === 5042001) return 'ARC';
+  if (chainId === 8453) return 'BASE';
+  throw new Error(
+    `Circle wallet blockchain is unsupported for chain ${chainId}`,
+  );
+}
+
+function stableUuid(value: string): string {
+  const bytes = createHash('sha256').update(value).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 async function submitSwapSignerRequest(

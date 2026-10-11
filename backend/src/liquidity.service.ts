@@ -82,6 +82,7 @@ interface LiquidityActionRow {
 }
 
 interface WalletBindingRow {
+  resource_id: string | null;
   address: string | null;
 }
 
@@ -374,6 +375,7 @@ async function buildProviderPayload(
       domain: route.source.cctpDomain,
       tier: route.source.tier,
       walletAddress: sourceWallet.address,
+      walletId: sourceWallet.resource_id,
       usdc: route.source.cctpContracts?.usdc,
       tokenMessengerV2: route.source.cctpContracts?.tokenMessengerV2,
       messageTransmitterV2: route.source.cctpContracts?.messageTransmitterV2,
@@ -384,6 +386,7 @@ async function buildProviderPayload(
       domain: route.destination.cctpDomain,
       tier: route.destination.tier,
       walletAddress: destinationWallet.address,
+      walletId: destinationWallet.resource_id,
       usdc: route.destination.cctpContracts?.usdc,
       messageTransmitterV2:
         route.destination.cctpContracts?.messageTransmitterV2,
@@ -450,6 +453,7 @@ async function buildGatewayProviderPayload(
       domain: route.source.cctpDomain,
       tier: route.source.tier,
       walletAddress: sourceWallet.address,
+      walletId: sourceWallet.resource_id,
       usdc: route.source.gatewayContracts?.usdc,
       gatewayWallet: route.source.gatewayContracts?.gatewayWallet,
     },
@@ -459,6 +463,7 @@ async function buildGatewayProviderPayload(
       domain: route.destination.cctpDomain,
       tier: route.destination.tier,
       walletAddress: destinationWallet.address,
+      walletId: destinationWallet.resource_id,
       requestedAssetSymbol: action.destination.assetSymbol,
       deliveredAssetSymbol: 'USDC',
       usdc: route.destination.gatewayContracts?.usdc,
@@ -476,6 +481,8 @@ async function buildGatewayProviderPayload(
       destinationRecipient: destinationWallet.address,
       sourceToken: route.source.gatewayContracts?.usdc,
       destinationToken: route.destination.gatewayContracts?.usdc,
+      sourceContract: route.source.gatewayContracts?.gatewayWallet,
+      destinationContract: route.destination.gatewayContracts?.gatewayMinter,
       amountAtomic: action.amountAtomic,
       quoteExpiresAt: action.quoteExpiresAt,
       gatewayApiUrl: gatewayApiUrl(route.source.tier),
@@ -495,7 +502,7 @@ async function getActiveWalletBinding(
 ): Promise<WalletBindingRow> {
   const result = await database.query<WalletBindingRow>(
     `
-      SELECT address
+      SELECT address, resource_id
         FROM opes.tenant_resource_bindings
        WHERE organization_id = $1
          AND provider = 'circle'
@@ -506,7 +513,7 @@ async function getActiveWalletBinding(
     `,
     [organizationId, environment],
   );
-  return result.rows[0] ?? { address: null };
+  return result.rows[0] ?? { resource_id: null, address: null };
 }
 
 async function enqueueLiquidityAction(
@@ -708,10 +715,13 @@ function liquidityExecutionMode(): 'sandbox' | 'live' {
       return 'sandbox';
     }
   }
-  if (process.env.OPES_PAYMENT_SIGNER_URL?.trim()) {
+  if (
+    process.env.CIRCLE_API_KEY?.trim() &&
+    process.env.CIRCLE_ENTITY_SECRET?.trim()
+  ) {
     return 'live';
   }
-  throw new ConflictException('Liquidity provider adapter is not configured');
+  throw new ConflictException('Circle wallets are not configured');
 }
 
 function mapAction(row: LiquidityActionRow): LiquidityActionResponse {

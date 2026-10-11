@@ -83,7 +83,8 @@ describe('LiquidityService', () => {
   const originalSandbox = process.env.OPES_LIQUIDITY_SANDBOX;
   const originalNodeEnv = process.env.NODE_ENV;
   const originalAllowedOrigins = process.env.OPES_ALLOWED_ORIGINS;
-  const originalSignerUrl = process.env.OPES_PAYMENT_SIGNER_URL;
+  const originalCircleApiKey = process.env.CIRCLE_API_KEY;
+  const originalCircleEntitySecret = process.env.CIRCLE_ENTITY_SECRET;
   const originalGatewayApiUrl = process.env.OPES_GATEWAY_API_URL;
   const originalBaseUsdt = process.env.OPES_BASE_MAINNET_USDT_ADDRESS;
   const originalBaseSwapProvider =
@@ -107,10 +108,15 @@ describe('LiquidityService', () => {
     } else {
       process.env.OPES_ALLOWED_ORIGINS = originalAllowedOrigins;
     }
-    if (originalSignerUrl === undefined) {
-      delete process.env.OPES_PAYMENT_SIGNER_URL;
+    if (originalCircleApiKey === undefined) {
+      delete process.env.CIRCLE_API_KEY;
     } else {
-      process.env.OPES_PAYMENT_SIGNER_URL = originalSignerUrl;
+      process.env.CIRCLE_API_KEY = originalCircleApiKey;
+    }
+    if (originalCircleEntitySecret === undefined) {
+      delete process.env.CIRCLE_ENTITY_SECRET;
+    } else {
+      process.env.CIRCLE_ENTITY_SECRET = originalCircleEntitySecret;
     }
     if (originalGatewayApiUrl === undefined) {
       delete process.env.OPES_GATEWAY_API_URL;
@@ -255,23 +261,34 @@ describe('LiquidityService', () => {
     const service = serviceWithQuery(query);
 
     await expect(service.planLiquidityAction(context, request)).rejects.toThrow(
-      'Liquidity provider adapter is not configured',
+      'Circle wallets are not configured',
     );
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('prepares a live CCTP action in production when signer is configured', async () => {
+  it('prepares a live CCTP action in production when Circle is configured', async () => {
     process.env.NODE_ENV = 'production';
     process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
-    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.CIRCLE_API_KEY = 'test-key';
+    process.env.CIRCLE_ENTITY_SECRET = 'test-secret';
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
-        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+        rows: [
+          {
+            address: '0x0000000000000000000000000000000000000001',
+            resource_id: 'arc-wallet-1',
+          },
+        ],
       })
       .mockResolvedValueOnce({
-        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+        rows: [
+          {
+            address: '0x0000000000000000000000000000000000000002',
+            resource_id: 'arb-wallet-1',
+          },
+        ],
       })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -305,16 +322,27 @@ describe('LiquidityService', () => {
   it('prepares a live Gateway action from Arc USDC to Base USDC', async () => {
     process.env.NODE_ENV = 'production';
     process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
-    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.CIRCLE_API_KEY = 'test-key';
+    process.env.CIRCLE_ENTITY_SECRET = 'test-secret';
     process.env.OPES_GATEWAY_API_URL = 'https://gateway.example.test/transfer';
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
-        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+        rows: [
+          {
+            address: '0x0000000000000000000000000000000000000001',
+            resource_id: 'arc-wallet-1',
+          },
+        ],
       })
       .mockResolvedValueOnce({
-        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+        rows: [
+          {
+            address: '0x0000000000000000000000000000000000000002',
+            resource_id: 'base-wallet-1',
+          },
+        ],
       })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -371,7 +399,8 @@ describe('LiquidityService', () => {
   it('adds the configured Base USDC to USDT swap leg to Gateway actions', async () => {
     process.env.NODE_ENV = 'production';
     process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
-    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+    process.env.CIRCLE_API_KEY = 'test-key';
+    process.env.CIRCLE_ENTITY_SECRET = 'test-secret';
     process.env.OPES_BASE_MAINNET_USDT_ADDRESS =
       '0x0000000000000000000000000000000000000003';
     process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER = 'configured';
@@ -386,10 +415,20 @@ describe('LiquidityService', () => {
       .fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
-        rows: [{ address: '0x0000000000000000000000000000000000000001' }],
+        rows: [
+          {
+            address: '0x0000000000000000000000000000000000000001',
+            resource_id: 'arc-wallet-1',
+          },
+        ],
       })
       .mockResolvedValueOnce({
-        rows: [{ address: '0x0000000000000000000000000000000000000002' }],
+        rows: [
+          {
+            address: '0x0000000000000000000000000000000000000002',
+            resource_id: 'base-wallet-1',
+          },
+        ],
       })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({

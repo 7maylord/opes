@@ -1,16 +1,21 @@
 import { keccak_256 } from '@noble/hashes/sha3.js';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.service';
+import { CircleWalletService } from './circle-wallet.service';
 
 function serviceWithWorker(
   query: TenantDatabase['query'],
+  circle: Partial<CircleWalletService> = {},
 ): LiquidityExecutionWorkerService {
   const withWorker = jest.fn(
     (work: (database: TenantDatabase) => Promise<unknown>) => work({ query }),
   );
-  return new LiquidityExecutionWorkerService({
-    withWorker,
-  } as unknown as DatabaseService);
+  return new LiquidityExecutionWorkerService(
+    {
+      withWorker,
+    } as unknown as DatabaseService,
+    circle as CircleWalletService,
+  );
 }
 
 function queryResult(rows: Array<Record<string, unknown>>) {
@@ -40,6 +45,7 @@ function workRow(overrides: Record<string, unknown> = {}) {
       source: {
         environment: 'arc-mainnet',
         tier: 'mainnet',
+        domain: 26,
         messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
       },
       destination: {
@@ -178,6 +184,8 @@ function gatewayWorkRow(overrides: Record<string, unknown> = {}) {
       destination: {
         environment: 'base-mainnet',
         walletAddress: '0x0000000000000000000000000000000000000002',
+        walletId: 'base-wallet-1',
+        gatewayMinter: '0x2222222d7164433c4C09B0b0D809a9b52C04C205',
       },
       gatewayRequest: {
         provider: 'circle-gateway',
@@ -190,6 +198,8 @@ function gatewayWorkRow(overrides: Record<string, unknown> = {}) {
         destinationRecipient: '0x0000000000000000000000000000000000000002',
         sourceToken: '0x3600000000000000000000000000000000000000',
         destinationToken: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        sourceContract: '0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE',
+        destinationContract: '0x2222222d7164433c4C09B0b0D809a9b52C04C205',
         amountAtomic: '25000000',
         quoteExpiresAt: '2030-01-01T00:00:00.000Z',
         gatewayApiUrl: 'https://gateway.example.test/transfer',
@@ -290,47 +300,119 @@ describe('LiquidityExecutionWorkerService', () => {
     ).toBe(true);
   });
 
-  it('submits a Gateway transfer request through the signer adapter', async () => {
-    process.env.OPES_PAYMENT_SIGNER_URL = 'https://signer.example.test/tx';
+  it('persists the Gateway attestation before submitting its mint', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       json: () =>
         Promise.resolve({
-          transferId: 'gateway-transfer-1',
-          transactionHash: `0x${'c'.repeat(64)}`,
+          attestation: '0x1234',
+          signature: '0xabcd',
         }),
     });
+    const circle = {
+      signTypedData: jest.fn().mockResolvedValue('0x5678'),
+      createContractTransaction: jest
+        .fn()
+        .mockResolvedValue({ id: 'circle-mint-1', state: 'INITIATED' }),
+    };
     const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
     const service = serviceWithWorker(
       recordingQuery(queries, gatewayWorkRow()),
+      circle,
     );
 
     await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
-    const calls = (global.fetch as jest.MockedFunction<typeof fetch>).mock
-      .calls;
-    const requestInit = calls[0]?.[1];
-    if (
-      requestInit === undefined ||
-      typeof requestInit !== 'object' ||
-      typeof requestInit.body !== 'string'
-    ) {
-      throw new Error('expected signer request body');
-    }
-    const body = JSON.parse(requestInit.body) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      provider: 'circle-gateway',
-      action: 'transferUnifiedUsdc',
-      sourceChainId: 5042001,
-      destinationChainId: 8453,
-      amountAtomic: '25000000',
-    });
-    expect(body.destinationSwap).toMatchObject({ outputAssetSymbol: 'USDT' });
+    expect(circle.signTypedData).toHaveBeenCalledWith(
+      expect.objectContaining({ blockchain: 'ARC' }),
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://gateway.example.test/transfer',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(circle.createContractTransaction).not.toHaveBeenCalled();
     expect(
       queries.some(
         (item) =>
           item.text.includes('SET status = $3') &&
-          item.values?.includes('MINTED') &&
-          item.values?.includes('gateway-transfer-1'),
+          item.values?.includes('SUBMITTED') &&
+          item.values?.includes('0x1234') &&
+          item.values?.includes('0xabcd'),
+      ),
+    ).toBe(true);
+  });
+
+  it('submits a persisted Gateway attestation through the destination Circle wallet', async () => {
+    const circle = {
+      createContractTransaction: jest
+        .fn()
+        .mockResolvedValue({ id: 'circle-mint-1', state: 'INITIATED' }),
+    };
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const base = gatewayWorkRow();
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        gatewayWorkRow({
+          status: 'SUBMITTED',
+          provider_payload: {
+            ...(base.provider_payload as Record<string, unknown>),
+            gatewayAttestation: '0x1234',
+            gatewaySignature: '0xabcd',
+          },
+        }),
+      ),
+      circle,
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    expect(circle.createContractTransaction).toHaveBeenCalledWith({
+      walletAddress: '0x0000000000000000000000000000000000000002',
+      blockchain: 'BASE',
+      contractAddress: '0x2222222d7164433c4C09B0b0D809a9b52C04C205',
+      abiFunctionSignature: 'gatewayMint(bytes,bytes)',
+      abiParameters: ['0x1234', '0xabcd'],
+      idempotencyKey: 'c00f2606-32a6-4428-b4dc-6078a17cda9e',
+    });
+    expect(queries.some((item) => item.values?.includes('circle-mint-1'))).toBe(
+      true,
+    );
+  });
+
+  it('settles a Circle-confirmed Gateway mint with a transaction hash', async () => {
+    process.env.OPES_RPC_BASE_MAINNET = 'https://base-rpc.example.test';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ result: { status: '0x1', logs: [] } }),
+    });
+    const base = gatewayWorkRow();
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const service = serviceWithWorker(
+      recordingQuery(
+        queries,
+        gatewayWorkRow({
+          status: 'SUBMITTED',
+          destination_asset_symbol: 'USDC',
+          provider_payload: {
+            ...(base.provider_payload as Record<string, unknown>),
+            destinationSwap: null,
+            gatewayMintCircleTransactionId: 'circle-mint-1',
+          },
+        }),
+      ),
+      {
+        getTransaction: jest.fn().mockResolvedValue({
+          state: 'CONFIRMED',
+          txHash: `0x${'c'.repeat(64)}`,
+        }),
+      },
+    );
+
+    await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes("SET status = 'CONFIRMED'") &&
+          item.values?.includes('action-1'),
       ),
     ).toBe(true);
   });
@@ -460,9 +542,10 @@ describe('LiquidityExecutionWorkerService', () => {
         workRow({
           status: 'SUBMITTED',
           provider_payload: {
-            source: { tier: 'mainnet' },
+            source: { tier: 'mainnet', domain: 26 },
             sourceMessage: '0x123456',
             sourceMessageHash: `0x${'1'.repeat(64)}`,
+            sourceBurnTransactionHash: `0x${'a'.repeat(64)}`,
           },
         }),
       ),
@@ -487,7 +570,15 @@ describe('LiquidityExecutionWorkerService', () => {
         ok: true,
         status: 200,
         json: () =>
-          Promise.resolve({ status: 'complete', attestation: '0xabcdef01' }),
+          Promise.resolve({
+            messages: [
+              {
+                status: 'complete',
+                message: '0x123456',
+                attestation: '0xabcdef01',
+              },
+            ],
+          }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -500,7 +591,7 @@ describe('LiquidityExecutionWorkerService', () => {
         workRow({
           status: 'SUBMITTED',
           provider_payload: {
-            source: { tier: 'mainnet' },
+            source: { tier: 'mainnet', domain: 26 },
             destination: {
               walletAddress: '0x0000000000000000000000000000000000000002',
               messageTransmitterV2:
@@ -508,6 +599,7 @@ describe('LiquidityExecutionWorkerService', () => {
             },
             sourceMessage: '0x123456',
             sourceMessageHash: `0x${'1'.repeat(64)}`,
+            sourceBurnTransactionHash: `0x${'a'.repeat(64)}`,
           },
         }),
       ),
@@ -516,7 +608,7 @@ describe('LiquidityExecutionWorkerService', () => {
     await expect(service.processDueLiquidityActions(1)).resolves.toBe(1);
     expect(global.fetch).toHaveBeenNthCalledWith(
       1,
-      `https://iris.example.test/v1/attestations/0x${'1'.repeat(64)}`,
+      `https://iris.example.test/v2/messages/26?transactionHash=0x${'a'.repeat(64)}`,
     );
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,

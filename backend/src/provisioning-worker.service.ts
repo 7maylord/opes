@@ -555,6 +555,17 @@ export class ProvisioningWorkerService {
         idempotencyKey: stableUuid(`circle-wallet:${event.organization_id}`),
       }));
     assertHexAddress('Circle operator wallet', wallet.address);
+    const baseRefId = `opes:${event.organization_id}:operator:base-sepolia`;
+    const baseWallet = await this.circle.deriveWallet({
+      sourceWalletId: wallet.id,
+      blockchain: 'BASE-SEPOLIA',
+      refId: baseRefId,
+      name: 'OPES Base Sepolia operator',
+    });
+    assertHexAddress('Circle Base operator wallet', baseWallet.address);
+    if (baseWallet.address.toLowerCase() !== wallet.address.toLowerCase()) {
+      throw new Error('Circle Base wallet does not match Arc operator address');
+    }
 
     await this.database.withWorker(async (database) => {
       const updated = await database.query(
@@ -582,6 +593,28 @@ export class ProvisioningWorkerService {
       );
       if (!updated.rows[0])
         throw new Error('Conflicting Circle operator wallet binding');
+      await database.query(
+        `INSERT INTO opes.tenant_resource_bindings (
+           organization_id, environment, chain_id, provider, resource_type,
+           resource_id, address, status, metadata
+         ) VALUES ($1, 'base-sepolia', 84532, 'circle', 'operator_wallet',
+                   $2, $3, 'ACTIVE', $4::jsonb)
+         ON CONFLICT (provider, environment, resource_type, resource_id)
+         DO UPDATE SET address = EXCLUDED.address, status = 'ACTIVE',
+                       metadata = opes.tenant_resource_bindings.metadata || EXCLUDED.metadata,
+                       updated_at = now()`,
+        [
+          event.organization_id,
+          baseWallet.id,
+          baseWallet.address,
+          JSON.stringify({
+            walletSetId,
+            refId: baseRefId,
+            accountType: baseWallet.accountType,
+            derivedFromWalletId: wallet.id,
+          }),
+        ],
+      );
       const provisioning = await ensureFactoryProvisioningBinding(
         database,
         event.organization_id,
