@@ -52,8 +52,8 @@ export class DocumentExtractionService {
     context: TenantContext,
     documentId: string,
   ): Promise<DocumentExtractionResponse | null> {
-    const modelName = process.env.OPES_OPENAI_MODEL?.trim();
-    if (!modelName) return null;
+    const modelName =
+      process.env.OPES_DEEPSEEK_MODEL?.trim() || 'deepseek-flash';
     const result = await this.database.withTenant(context, (database) =>
       database.query<{
         id: string;
@@ -75,7 +75,7 @@ export class DocumentExtractionService {
             AND document.id = extraction.document_id
           WHERE extraction.organization_id = $1 AND extraction.document_id = $2
             AND extraction.schema_name = 'invoice' AND extraction.schema_version = '1'
-            AND extraction.model_provider = 'openai'
+            AND extraction.model_provider = 'deepseek'
             AND extraction.model_name = $3
             AND extraction.source_sha256_hex = document.sha256_hex
           ORDER BY extraction.created_at DESC LIMIT 1`,
