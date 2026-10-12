@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSendTransaction } from "@privy-io/react-auth";
 import {
   acceptMilestone,
@@ -13,12 +13,14 @@ import {
   createSubscriptionCycle,
   confirmLifecycleAction,
   disputeMilestone,
+  listWorkspaceRecords,
   submitMilestoneEvidence,
   type EscrowAgreementResponse,
   type EscrowMilestoneResponse,
   type SubscriptionCycleResponse,
   type SubscriptionResponse,
 } from "@/lib/api";
+import type { WorkspaceRecord } from "@/lib/workspace-api.generated";
 
 export function LifecycleWorkflows({
   token,
@@ -39,6 +41,36 @@ export function LifecycleWorkflows({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const [vendors, setVendors] = useState<WorkspaceRecord[]>([]);
+  const [documents, setDocuments] = useState<WorkspaceRecord[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      listWorkspaceRecords(token, organizationId, "vendor", { limit: 50 }),
+      listWorkspaceRecords(token, organizationId, "evidence", { limit: 50 }),
+    ]).then(([vendorPage, documentPage]) => {
+      if (cancelled) return;
+      setVendors(vendorPage.items);
+      setDocuments(documentPage.items);
+      const firstVendor = vendorPage.items[0];
+      setVendorId(firstVendor?.id ?? "");
+      setVendorAddressId(readAddresses(firstVendor)[0]?.id ?? "");
+    }).catch((reason: unknown) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load lifecycle options");
+    });
+    return () => { cancelled = true; };
+  }, [organizationId, token]);
+
+  const addresses = useMemo(
+    () => readAddresses(vendors.find((vendor) => vendor.id === vendorId)),
+    [vendorId, vendors],
+  );
+
+  function selectVendor(id: string) {
+    setVendorId(id);
+    setVendorAddressId(readAddresses(vendors.find((vendor) => vendor.id === id))[0]?.id ?? "");
+  }
 
   async function submitSubscription(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -187,7 +219,7 @@ export function LifecycleWorkflows({
     <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
       <h3 className="font-semibold">Recurring and escrow workflows</h3>
       <p className="mt-2 text-sm text-slate-600">
-        Uses verified vendor/address IDs and document IDs from the invoice workflow.
+        Choose persisted vendors, verified payout addresses and evidence from this workspace.
         Returned backend states are shown before any next action.
       </p>
       {error !== "" ? <Notice tone="error" text={error} /> : null}
@@ -196,9 +228,9 @@ export function LifecycleWorkflows({
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <form onSubmit={submitSubscription} className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">Subscription</h4>
-          <Input label="Vendor ID" value={vendorId} onChange={setVendorId} required />
-          <Input label="Vendor address ID" value={vendorAddressId} onChange={setVendorAddressId} required />
-          <Input label="Terms/evidence document ID optional" value={documentId} onChange={setDocumentId} />
+          <Select label="Vendor" value={vendorId} onChange={selectVendor} options={vendors.map((item) => ({ value: item.id, label: item.title }))} />
+          <Select label="Verified payout address" value={vendorAddressId} onChange={setVendorAddressId} options={addresses.map((item) => ({ value: item.id, label: `${item.environment} · ${item.assetSymbol} · ${item.payoutAddress}` }))} />
+          <Select label="Terms/evidence optional" value={documentId} onChange={setDocumentId} optional options={documents.map((item) => ({ value: item.id, label: item.title }))} />
           <Input label="Monthly amount USDC" value={amount} onChange={setAmount} required />
           <button disabled={pending} className="btn">Create subscription</button>
           <button type="button" disabled={pending || subscription === null || subscription.status === "ACTIVE"} onClick={activateSubscription} className="btn-secondary">Sign and activate mandate</button>
@@ -216,9 +248,9 @@ export function LifecycleWorkflows({
 
         <form onSubmit={submitEscrow} className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">Escrow agreement</h4>
-          <Input label="Vendor ID" value={vendorId} onChange={setVendorId} required />
-          <Input label="Vendor address ID" value={vendorAddressId} onChange={setVendorAddressId} required />
-          <Input label="Agreement/evidence document ID" value={documentId} onChange={setDocumentId} />
+          <Select label="Vendor" value={vendorId} onChange={selectVendor} options={vendors.map((item) => ({ value: item.id, label: item.title }))} />
+          <Select label="Verified payout address" value={vendorAddressId} onChange={setVendorAddressId} options={addresses.map((item) => ({ value: item.id, label: `${item.environment} · ${item.assetSymbol} · ${item.payoutAddress}` }))} />
+          <Select label="Agreement/evidence optional" value={documentId} onChange={setDocumentId} optional options={documents.map((item) => ({ value: item.id, label: item.title }))} />
           <Input label="Total amount USDC" value={amount} onChange={setAmount} required />
           <button disabled={pending} className="btn">Create escrow</button>
           <button type="button" disabled={pending || agreement === null} onClick={activateEscrow} className="btn-secondary">Sign escrow setup</button>
@@ -245,7 +277,24 @@ function Input({ label, value, onChange, required = false }: { label: string; va
 
 function Result({ value }: { value: unknown }) {
   if (value === null || value === undefined) return null;
-  return <pre className="max-h-52 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(value, null, 2)}</pre>;
+  const entries = Object.entries(value as Record<string, unknown>).filter(([key, item]) => !["ownerActions", "milestones"].includes(key) && item !== null && typeof item !== "object").slice(0, 8);
+  return <dl className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">{entries.map(([key, item]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-500">{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt><dd className="max-w-[60%] truncate font-medium">{String(item)}</dd></div>)}</dl>;
+}
+
+function Select({ label, value, onChange, options, optional = false }: { label: string; value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }>; optional?: boolean }) {
+  return <label className="block text-sm font-medium text-slate-700">{label}<select value={value} required={!optional} onChange={(event) => onChange(event.target.value)} className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500"><option value="">{optional ? "None" : options.length ? "Choose…" : "No records available"}</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+}
+
+function readAddresses(vendor: WorkspaceRecord | undefined): Array<{ id: string; environment: string; assetSymbol: string; payoutAddress: string }> {
+  const addresses = vendor?.details.addresses;
+  if (!Array.isArray(addresses)) return [];
+  return addresses.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const address = item as Record<string, unknown>;
+    return typeof address.id === "string" && typeof address.environment === "string" && typeof address.assetSymbol === "string" && typeof address.payoutAddress === "string" && address.status === "VERIFIED_ACTIVE"
+      ? [{ id: address.id, environment: address.environment, assetSymbol: address.assetSymbol, payoutAddress: address.payoutAddress }]
+      : [];
+  });
 }
 
 function Notice({ tone, text }: { tone: "error" | "success"; text: string }) {

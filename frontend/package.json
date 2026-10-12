@@ -4,11 +4,14 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "pnpm api:generate",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "api:generate": "node scripts/generate-workspace-types.mjs",
     "test": "tsc --target es2022 --module nodenext --moduleResolution nodenext --outDir .next-test lib/session-cache.ts lib/setup-checklist.ts lib/money.ts && node --test tests/*.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:fullstack": "playwright test --config playwright.fullstack.config.ts"
   },
   "dependencies": {
     "@privy-io/react-auth": "3.48.1",

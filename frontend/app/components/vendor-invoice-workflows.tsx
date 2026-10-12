@@ -24,6 +24,11 @@ import {
 } from "@/lib/api";
 
 const arcUsdc = "0x3600000000000000000000000000000000000000";
+const paymentRoutes = [
+  { value: "OPERATING|arc-testnet|5042002|USDC", label: "Arc testnet · operating USDC" },
+  { value: "GATEWAY|base-sepolia|84532|USDC", label: "Base Sepolia · Gateway USDC" },
+  { value: "CCTP|base-sepolia|84532|USDC", label: "Base Sepolia · CCTP USDC" },
+] as const;
 
 export function VendorInvoiceWorkflows({
   token,
@@ -38,6 +43,7 @@ export function VendorInvoiceWorkflows({
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceAmount, setInvoiceAmount] = useState("100.00");
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [paymentRoute, setPaymentRoute] = useState(paymentRoutes[0].value);
   const [vendor, setVendor] = useState<VendorResponse | null>(null);
   const [vendorAddress, setVendorAddress] = useState<VendorAddressResponse | null>(null);
   const [document, setDocument] = useState<EvidenceDocumentResponse | null>(null);
@@ -132,14 +138,15 @@ export function VendorInvoiceWorkflows({
   async function submitDecision() {
     if (obligation === null) return setError("Verify an invoice first.");
     await run("Decision dry run completed", async () => {
+      const [liquidityRoute, environment, chainId, assetSymbol] = paymentRoute.split("|");
       setDecision(
         await evaluateInvoicePaymentWithAgent(token, organizationId, {
           invoiceVersionId: obligation.versionId,
           route: {
-            liquidityRoute: "OPERATING",
-            environment: "arc-testnet",
-            chainId: 5042002,
-            assetSymbol: "USDC",
+            liquidityRoute: liquidityRoute as "OPERATING" | "GATEWAY" | "CCTP",
+            environment,
+            chainId: Number(chainId),
+            assetSymbol,
           },
           expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
         }),
@@ -223,6 +230,7 @@ export function VendorInvoiceWorkflows({
 
         <div className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">4. Verify, decide, approve</h4>
+          <label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label>
           <button disabled={pending} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>
           <button disabled={pending || obligation === null} onClick={submitDecision} className="btn-secondary">Generate agent decision</button>
           <button disabled={pending || decision === null} onClick={submitApproval} className="btn-secondary">Approve</button>
@@ -245,7 +253,8 @@ function Input({ label, value, onChange, required = false }: { label: string; va
 
 function Result({ value }: { value: unknown }) {
   if (value === null || value === undefined) return null;
-  return <pre className="max-h-52 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">{JSON.stringify(value, null, 2)}</pre>;
+  const entries = Object.entries(value as Record<string, unknown>).filter(([key, item]) => !["metadata", "providerPayload", "ownerAction", "ownerActions"].includes(key) && item !== null && typeof item !== "object").slice(0, 8);
+  return <dl className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">{entries.map(([key, item]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-500">{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt><dd className="max-w-[60%] truncate font-medium">{String(item)}</dd></div>)}</dl>;
 }
 
 function Notice({ tone, text }: { tone: "error" | "success"; text: string }) {

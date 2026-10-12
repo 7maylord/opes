@@ -9,8 +9,10 @@ const organizations = [
 ];
 const members = [{ id: "member-owner", userId: "user-1", email: "owner@example.com", displayName: "Owner User", role: "OWNER", status: "ACTIVE", createdAt: "2026-10-04T00:00:00.000Z" }];
 
-async function installApiMock(page: Page) {
-  const state = { onboarded: false };
+type MockState = { onboarded: boolean; expiredSession: boolean };
+
+async function installApiMock(page: Page, options: Partial<MockState> = {}) {
+  const state: MockState = { onboarded: false, expiredSession: false, ...options };
   await page.route("http://mock.api/**", async (route) => respond(route, state));
 }
 
@@ -65,26 +67,28 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   await page.getByRole("button", { name: "Extract invoice" }).click();
   await page.getByRole("button", { name: "Verify invoice" }).click({ force: true });
   await page.getByRole("button", { name: "Generate agent decision" }).click({ force: true });
-  await expect(page.getByText('"status": "PASS"')).toBeVisible();
+  await expect(page.getByText("Decision dry run completed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
 });
 
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
   await openSignedIn(page);
-  await page.getByLabel("Vendor ID").first().fill("vendor-1");
-  await page.getByLabel("Vendor address ID").first().fill("address-1");
+  const subscription = page.getByRole("heading", { name: "Subscription", exact: true }).locator("..");
+  await subscription.getByRole("combobox").nth(0).selectOption("vendor-1");
+  await subscription.getByRole("combobox").nth(1).selectOption("address-1");
   await page.getByRole("button", { name: "Create subscription" }).click();
-  await expect(page.getByText('"status": "SETUP_REQUIRED"')).toBeVisible();
+  await expect(page.getByText("Subscription status:")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign and activate mandate" })).toBeEnabled();
 });
 
 test("journey 5: escrow requires owner-signed setup before funding", async ({ page }) => {
   await openSignedIn(page);
-  await page.getByLabel("Vendor ID").nth(1).fill("vendor-1");
-  await page.getByLabel("Vendor address ID").nth(1).fill("address-1");
-  await page.getByLabel("Agreement/evidence document ID").fill("doc-1");
+  const escrow = page.getByRole("heading", { name: "Escrow agreement", exact: true }).locator("..");
+  await escrow.getByRole("combobox").nth(0).selectOption("vendor-1");
+  await escrow.getByRole("combobox").nth(1).selectOption("address-1");
+  await escrow.getByRole("combobox").nth(2).selectOption("doc-1");
   await page.getByRole("button", { name: "Create escrow" }).click();
-  await expect(page.getByText('"status": "SETUP_REQUIRED"')).toBeVisible();
+  await expect(page.getByText("Escrow agreement created")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign escrow setup" })).toBeEnabled();
 });
 
@@ -93,24 +97,62 @@ test("journey 6: treasury separates planned from settled", async ({ page }) => {
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("Planned liquidity", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Plan route" }).click();
-  await expect(page.getByText('"status": "PLANNED"')).toBeVisible();
-  await page.getByLabel("Invoice version ID").fill("invoice-version-1");
+  await expect(page.getByText("PLANNED", { exact: true })).toBeVisible();
+  const projection = page.getByRole("heading", { name: "Ledger projection" }).locator("..");
+  await projection.getByRole("combobox").nth(0).selectOption("invoice-version-1");
   await page.getByRole("button", { name: "Accrue invoice" }).click();
-  await expect(page.getByText("INVOICE_ACCEPTED")).toBeVisible();
-  await page.getByLabel("Payment execution ID").fill("execution-1");
+  await expect(page.getByText("Invoice accrual projected")).toBeVisible();
+  await projection.getByRole("combobox").nth(1).selectOption("execution-1");
   await page.getByRole("button", { name: "Settle payment" }).click();
-  await expect(page.getByText("PAYMENT_SETTLED")).toBeVisible();
+  await expect(page.getByText("Payment settlement projected")).toBeVisible();
 });
 
-test("journey 7: keyboard tenant switching and responsive shell", async ({ page }) => {
+test("journey 7: persisted invoice opens with its audit timeline", async ({ page }) => {
+  await openSignedIn(page);
+  await expect(page.getByRole("heading", { name: "History and evidence" })).toBeVisible();
+  await page.getByRole("button", { name: "View detail" }).first().click();
+  await expect(page.getByRole("complementary").getByRole("heading", { name: "Invoice INV-100" })).toBeVisible();
+  await expect(page.getByText("invoice verified")).toBeVisible();
+});
+
+test("journey 8: keyboard tenant switching and responsive shell", async ({ page }) => {
   await openSignedIn(page);
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.getByLabel("Organization").selectOption(secondOrgId);
   await expect(page.getByRole("heading", { name: "Beta Co" })).toBeVisible();
+  await expect(page.getByText("No invoices match this view.")).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByText("OPES command center")).toBeVisible();
+});
+
+test("workspace history exposes an error and recovers on retry", async ({ page }) => {
+  await installApiMock(page);
+  let failing = true;
+  await page.route("http://mock.api/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (failing && url.pathname.includes("/workspace/invoice") && url.searchParams.get("limit") === "12") {
+      await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Workspace history is temporarily unavailable" }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("opes:session-token", "mock-session-token"));
+  await page.reload();
+  await expect(page.getByText("Workspace history is temporarily unavailable")).toBeVisible();
+  failing = false;
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("heading", { name: "Invoice INV-100", exact: true })).toBeVisible();
+});
+
+test("expired sessions clear the authenticated workspace", async ({ page }) => {
+  await installApiMock(page, { expiredSession: true });
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("opes:session-token", "expired-token"));
+  await page.reload();
+  await expect(page.getByRole("button", { name: /Sign in with email/i })).toBeVisible();
 });
 
 test("basic accessibility landmarks and labels are present", async ({ page }) => {
@@ -121,9 +163,10 @@ test("basic accessibility landmarks and labels are present", async ({ page }) =>
   await expect(page.getByLabel("Mode")).toBeVisible();
 });
 
-async function respond(route: Route, state: { onboarded: boolean }) {
+async function respond(route: Route, state: MockState) {
   const request = route.request();
-  const path = new URL(request.url()).pathname.slice(1);
+  const url = new URL(request.url());
+  const path = url.pathname.slice(1);
   let body: Record<string, unknown> = {};
   if (request.method() !== "GET") {
     try {
@@ -131,16 +174,21 @@ async function respond(route: Route, state: { onboarded: boolean }) {
     } catch {}
   }
   if (path === "onboarding") state.onboarded = true;
+  if (request.method() === "GET" && path === "session" && state.expiredSession) {
+    await route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ message: "Session is invalid or expired" }) });
+    return;
+  }
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(responseFor(request.method(), path, body, request.headers().authorization, state)) });
 }
 
-function responseFor(method: string, path: string, body: Record<string, unknown>, authorization: string | undefined, state: { onboarded: boolean }) {
+function responseFor(method: string, path: string, body: Record<string, unknown>, authorization: string | undefined, state: MockState) {
   if (method === "DELETE" && path === "session") return { revoked: true };
   if (method === "GET" && path === "session") return user;
   if (method === "GET" && path === "organizations") return authorization === "Bearer mock-session-token" || state.onboarded ? organizations : [];
   if (method === "GET" && path.endsWith("/agent")) return { id: "agent-1", lifecycleStatus: "SETUP_REQUIRED", arcTestnetFactory: { environment: "arc-testnet", chainId: 5042002, factoryAddress: "0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", vaultDeployerAddress: "0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8", verification: "fully_verified", explorerUrl: "https://explorer.testnet.arc.io/address/0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", checkedAt: "2026-10-04T00:00:00.000Z" }, resourceBindings: path.startsWith(`organizations/${orgId}`) ? activeBindings() : [] };
   if (method === "GET" && path.endsWith("/members")) return members;
-  if (method === "GET" && path.endsWith("/treasury/position")) return { assetSymbol: "USDC", committedPayablesAtomic: "2500000", approvedUnsettledPaymentAtomic: "1000000", plannedLiquidityAtomic: "500000", supportedNetworks: [{ environment: "arc-testnet" }, { environment: "base-sepolia" }] };
+  if (method === "GET" && path.endsWith("/treasury/position")) return { assetSymbol: "USDC", committedPayablesAtomic: "2500000", approvedUnsettledPaymentAtomic: "1000000", plannedLiquidityAtomic: "500000", supportedNetworks: [{ environment: "arc-testnet", chainId: 5042002, family: "arc", tier: "testnet", cctpContracts: {}, gatewayContracts: {}, gateway: true }, { environment: "base-sepolia", chainId: 84532, family: "base", tier: "testnet", cctpContracts: {}, gatewayContracts: {}, gateway: true }, { environment: "arbitrum-sepolia", chainId: 421614, family: "arbitrum", tier: "testnet", cctpContracts: {}, gatewayContracts: null, gateway: false }] };
+  if (method === "GET" && path.includes("/workspace/")) return workspaceResponse(path);
   if (path === "onboarding") return { user, organization: organizations[0], membership: { id: "member-owner", role: "OWNER" }, agent: { id: "agent-1", lifecycleStatus: "PROVISIONING" } };
   if (path.startsWith("organization-invitations/")) return { user, organization: organizations[0], membership: members[0] };
   if (path.endsWith("/members")) return { id: "member-invited", userId: "user-2", email: body.email, displayName: body.displayName, role: body.role, status: "INVITED", createdAt: "2026-10-04T00:00:00.000Z", invitationToken: "invite-token-123" };
@@ -195,4 +243,24 @@ function ledger(type: string, id: string) {
     { id: `${id}-1`, ledgerEventType: type, ledgerEventId: id, lineNumber: 1, account: "EXPENSE:PAYABLES", direction: "DEBIT", assetSymbol: "USDC", amountAtomic: "100000000", sourceType: "TEST", sourceId: id, sourceVersionId: null, counterpartyId: "vendor-1", transactionHash: type === "PAYMENT_SETTLED" ? "0xtx" : null },
     { id: `${id}-2`, ledgerEventType: type, ledgerEventId: id, lineNumber: 2, account: "LIABILITY:ACCOUNTS_PAYABLE", direction: "CREDIT", assetSymbol: "USDC", amountAtomic: "100000000", sourceType: "TEST", sourceId: id, sourceVersionId: null, counterpartyId: "vendor-1", transactionHash: type === "PAYMENT_SETTLED" ? "0xtx" : null },
   ];
+}
+
+function workspaceResponse(path: string) {
+  const parts = path.split("/");
+  const kind = parts.at(-2) === "workspace" ? parts.at(-1) : parts.at(-2);
+  const records: Record<string, Array<Record<string, unknown>>> = {
+    vendor: [workspaceRecord("vendor-1", "vendor", "Canteen Supplies", "Vendor", "VERIFIED", null, null, { addresses: [{ id: "address-1", environment: "arc-testnet", assetSymbol: "USDC", payoutAddress: "0x4000000000000000000000000000000000000004", status: "VERIFIED_ACTIVE" }] })],
+    evidence: [workspaceRecord("doc-1", "evidence", "invoice.txt", "INVOICE", "RECORDED", null, null, {})],
+    invoice: [workspaceRecord("invoice-version-1", "invoice", "Invoice INV-100", "Canteen Supplies", "ACCEPTED", "100000000", "USDC", { invoiceNumber: "INV-100", vendorId: "vendor-1" })],
+    decision: [],
+    execution: [workspaceRecord("execution-1", "execution", "Payment execution", "arc-testnet", "CONFIRMED", "100000000", "USDC", {})],
+    subscription: [], escrow: [], ledger: [], audit: [],
+  };
+  const items = path.includes(secondOrgId) ? [] : records[kind ?? ""] ?? [];
+  const isDetail = parts.at(-3) === "workspace";
+  return isDetail ? { record: items.find((item) => item.id === parts.at(-1)), history: [{ id: "audit-1", eventType: "invoice.verified", status: "RECORDED", transactionHash: null, createdAt: "2026-10-04T00:00:00.000Z", details: {} }] } : { items, nextCursor: null };
+}
+
+function workspaceRecord(id: string, kind: string, title: string, subtitle: string, status: string, amountAtomic: string | null, assetSymbol: string | null, details: Record<string, unknown>) {
+  return { id, kind, title, subtitle, status, amountAtomic, assetSymbol, chainId: null, transactionHash: null, createdAt: "2026-10-04T00:00:00.000Z", updatedAt: "2026-10-04T00:00:00.000Z", details };
 }

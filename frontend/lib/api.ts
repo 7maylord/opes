@@ -1,3 +1,9 @@
+import type {
+  WorkspaceDetail,
+  WorkspaceKind,
+  WorkspacePage,
+} from "./workspace-api.generated";
+
 const apiBaseUrl = (
   process.env.NEXT_PUBLIC_OPES_API_URL ?? "http://localhost:3000"
 ).replace(/\/$/, "");
@@ -743,7 +749,16 @@ export interface TreasuryPositionResponse {
   committedPayablesAtomic: string;
   approvedUnsettledPaymentAtomic: string;
   plannedLiquidityAtomic: string;
-  supportedNetworks: unknown[];
+  supportedNetworks: Array<{
+    environment: string;
+    chainId: number;
+    family: string;
+    tier: "mainnet" | "testnet";
+    cctpDomain: number | null;
+    cctpContracts: Record<string, string> | null;
+    gatewayContracts: Record<string, string> | null;
+    gateway: boolean;
+  }>;
 }
 
 export interface LedgerEntryResponse {
@@ -809,5 +824,35 @@ export async function projectPaymentSettlement(
     `/organizations/${encodeURIComponent(organizationId)}/ledger/payment-executions/${encodeURIComponent(executionId)}/settle`,
     token,
     { method: "POST" },
+  );
+}
+
+export async function listWorkspaceRecords(
+  token: string,
+  organizationId: string,
+  kind: WorkspaceKind,
+  filters: { cursor?: string; status?: string; search?: string; limit?: number } = {},
+) {
+  const query = new URLSearchParams();
+  if (filters.cursor) query.set("cursor", filters.cursor);
+  if (filters.status) query.set("status", filters.status);
+  if (filters.search) query.set("search", filters.search);
+  if (filters.limit) query.set("limit", String(filters.limit));
+  const suffix = query.size === 0 ? "" : `?${query}`;
+  return request<WorkspacePage>(
+    `/organizations/${encodeURIComponent(organizationId)}/workspace/${kind}${suffix}`,
+    token,
+  );
+}
+
+export async function getWorkspaceRecord(
+  token: string,
+  organizationId: string,
+  kind: WorkspaceKind,
+  recordId: string,
+) {
+  return request<WorkspaceDetail>(
+    `/organizations/${encodeURIComponent(organizationId)}/workspace/${kind}/${encodeURIComponent(recordId)}`,
+    token,
   );
 }

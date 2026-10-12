@@ -33,6 +33,7 @@ import { LifecycleWorkflows } from "./lifecycle-workflows";
 import { TreasuryAuditViews } from "./treasury-audit-views";
 import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
 import { OwnerTreasuryControls } from "./owner-treasury-controls";
+import { WorkspaceHistory } from "./workspace-history";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
@@ -445,6 +446,14 @@ export function AuthenticatedShell() {
                   {setupComplete && selectedOrganization?.role === 'OWNER' ? <OwnerTreasuryControls token={token} organizationId={selectedOrganizationId}/> : <p className="text-sm text-slate-600">Owner controls unlock after Arc setup completes.</p>}
                 </Panel>
               </div>
+
+              {selectedOrganizationId !== "" ? (
+                <WorkspaceHistory
+                  key={selectedOrganizationId}
+                  token={token}
+                  organizationId={selectedOrganizationId}
+                />
+              ) : null}
 
               {selectedOrganizationId !== "" ? (
                 <VendorInvoiceWorkflows
