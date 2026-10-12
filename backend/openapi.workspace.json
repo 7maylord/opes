@@ -1,0 +1,82 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "OPES Workspace API", "version": "1.0.0" },
+  "paths": {
+    "/organizations/{organizationId}/workspace/{kind}": {
+      "get": {
+        "operationId": "listWorkspaceRecords",
+        "parameters": [
+          { "name": "organizationId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "kind", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/WorkspaceKind" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 50 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "search", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Tenant-scoped page", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspacePage" } } } } }
+      }
+    },
+    "/organizations/{organizationId}/workspace/{kind}/{recordId}": {
+      "get": {
+        "operationId": "getWorkspaceRecord",
+        "parameters": [
+          { "name": "organizationId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+          { "name": "kind", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/WorkspaceKind" } },
+          { "name": "recordId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+        ],
+        "responses": { "200": { "description": "Record with history", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspaceDetail" } } } } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WorkspaceKind": { "type": "string", "enum": ["vendor", "evidence", "invoice", "decision", "execution", "subscription", "escrow", "ledger", "audit"] },
+      "WorkspaceRecord": {
+        "type": "object",
+        "required": ["id", "kind", "title", "subtitle", "status", "amountAtomic", "assetSymbol", "chainId", "transactionHash", "createdAt", "updatedAt", "details"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "kind": { "$ref": "#/components/schemas/WorkspaceKind" },
+          "title": { "type": "string" },
+          "subtitle": { "type": "string" },
+          "status": { "type": "string" },
+          "amountAtomic": { "type": ["string", "null"] },
+          "assetSymbol": { "type": ["string", "null"] },
+          "chainId": { "type": ["integer", "null"] },
+          "transactionHash": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "WorkspacePage": {
+        "type": "object",
+        "required": ["items", "nextCursor"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceRecord" } },
+          "nextCursor": { "type": ["string", "null"] }
+        }
+      },
+      "WorkspaceHistoryEvent": {
+        "type": "object",
+        "required": ["id", "eventType", "status", "transactionHash", "createdAt", "details"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "eventType": { "type": "string" },
+          "status": { "type": "string" },
+          "transactionHash": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "WorkspaceDetail": {
+        "type": "object",
+        "required": ["record", "history"],
+        "properties": {
+          "record": { "$ref": "#/components/schemas/WorkspaceRecord" },
+          "history": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceHistoryEvent" } }
+        }
+      }
+    }
+  }
+}
