@@ -1,4 +1,5 @@
 OPES_PRD_TRD.md
+/docs
 # Environment variables
 .env
 .env.local
