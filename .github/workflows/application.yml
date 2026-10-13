@@ -1,0 +1,94 @@
+name: Application
+
+permissions: {}
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: opes
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d opes"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CI: true
+      NODE_ENV: test
+      DATABASE_URL: postgresql://opes_runtime:opes_runtime@127.0.0.1:5432/opes
+      OPES_TEST_DATABASE_URL: postgresql://opes_runtime:opes_runtime@127.0.0.1:5432/opes
+      OPES_ALLOWED_ORIGINS: http://127.0.0.1:3205
+      NEXT_PUBLIC_OPES_API_URL: http://127.0.0.1:3204
+      NEXT_PUBLIC_PRIVY_APP_ID: cltestopes000000000000000
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.25.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: |
+            backend/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Install application dependencies
+        run: |
+          pnpm --dir backend install --frozen-lockfile
+          pnpm --dir frontend install --frozen-lockfile
+
+      - name: Apply migrations twice and create the non-bypass runtime role
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/opes
+        run: |
+          pnpm --dir backend db:migrate
+          pnpm --dir backend db:migrate
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f backend/test/prepare-runtime-role.sql
+
+      - name: Check backend
+        run: |
+          pnpm --dir backend lint
+          pnpm --dir backend build
+          pnpm --dir backend test --runInBand
+          pnpm --dir backend test:e2e --runInBand
+
+      - name: Build production backend image
+        run: docker build -t opes-backend:ci backend
+
+      - name: Check generated API types and frontend
+        run: |
+          pnpm --dir frontend api:generate
+          git diff --exit-code -- frontend/lib/workspace-api.generated.ts
+          pnpm --dir frontend lint
+          pnpm --dir frontend test
+          pnpm --dir frontend build
+
+      - name: Install Chromium
+        run: pnpm --dir frontend exec playwright install --with-deps chromium
+
+      - name: Run browser journeys
+        run: |
+          pnpm --dir frontend test:e2e
+          pnpm --dir frontend test:e2e:fullstack
+
+      - name: Scan tracked files for secrets
+        run: scripts/check-secrets.sh
