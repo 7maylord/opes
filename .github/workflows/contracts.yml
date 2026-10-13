@@ -37,7 +37,7 @@ jobs:
         run: forge fmt --check
 
       - name: Run Forge build
-        run: forge build --sizes
+        run: forge build --offline --sizes
 
       - name: Install Node.js for ABI checks
         uses: actions/setup-node@v4
@@ -48,4 +48,4 @@ jobs:
         run: node script/ExportAbis.mjs --check
 
       - name: Run Forge tests
-        run: forge test -vvv
+        run: forge test --offline -vvv
