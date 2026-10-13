@@ -44,6 +44,13 @@ describe('AppController (e2e)', () => {
       .expect(401);
   });
 
+  it('/ready (GET) checks the database', () => {
+    return request(app.getHttpAdapter().getInstance() as App)
+      .get('/ready')
+      .expect(200)
+      .expect({ status: 'ready', database: 'ok' });
+  });
+
   afterEach(async () => {
     await app.close();
   });

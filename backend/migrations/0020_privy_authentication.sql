@@ -19,3 +19,7 @@ ALTER TABLE opes.app_users
 CREATE UNIQUE INDEX IF NOT EXISTS app_users_privy_user_id_key
   ON opes.app_users (privy_user_id)
   WHERE privy_user_id IS NOT NULL;
+
+INSERT INTO opes.schema_migrations (version)
+VALUES ('0020_privy_authentication')
+ON CONFLICT (version) DO NOTHING;

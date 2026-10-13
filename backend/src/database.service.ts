@@ -59,6 +59,31 @@ export class DatabaseService implements OnModuleDestroy {
     return this.withOrganizationScope(context.organizationId, work);
   }
 
+  async withUserScope<T>(
+    userId: string,
+    work: (database: TenantDatabase) => Promise<T>,
+  ): Promise<T> {
+    if (userId.trim() === '') {
+      throw new Error('userId is required');
+    }
+
+    const client = await this.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('opes.user_id', $1, true)", [
+        userId,
+      ]);
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async withOrganizationScope<T>(
     organizationId: string,
     work: (database: TenantDatabase) => Promise<T>,

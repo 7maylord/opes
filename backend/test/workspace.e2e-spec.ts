@@ -67,6 +67,22 @@ describe('Workspace read models (e2e)', () => {
     }
   });
 
+  it('runs as a non-bypass role and hides tenant rows without scope', async () => {
+    const role = await database.withDatabase((sql) =>
+      sql.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`,
+      ),
+    );
+    expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+
+    const unscoped = await database.withDatabase((sql) =>
+      sql.query('SELECT id FROM opes.organizations WHERE id = $1', [
+        organizationId,
+      ]),
+    );
+    expect(unscoped.rows).toEqual([]);
+  });
+
   it('serves only the authenticated tenant and rejects expired sessions', async () => {
     const server = app.getHttpAdapter().getInstance() as App;
     const response = await request(server)

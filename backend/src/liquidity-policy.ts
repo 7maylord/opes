@@ -39,10 +39,13 @@ export interface NetworkCapability {
   chainId: number;
   family: string;
   tier: 'mainnet' | 'testnet';
+  usdc: string;
   cctpDomain: number | null;
   cctpContracts: CctpNetworkContracts | null;
   gatewayContracts: GatewayNetworkContracts | null;
   gateway: boolean;
+  cctpExecutable: boolean;
+  gatewayExecutable: boolean;
 }
 
 const TOKEN_MESSENGER_V2 = '0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d';
@@ -93,7 +96,7 @@ const NETWORKS: NetworkCapability[] = [
   ),
   cctpNetwork(
     'arc-mainnet',
-    5042001,
+    5042,
     'arc',
     'mainnet',
     26,
@@ -109,8 +112,20 @@ const NETWORKS: NetworkCapability[] = [
     '0x3600000000000000000000000000000000000000',
     true,
   ),
-  usdcOnlyNetwork('celo-mainnet', 42220, 'celo', 'mainnet'),
-  usdcOnlyNetwork('celo-sepolia', 11142220, 'celo', 'testnet'),
+  usdcOnlyNetwork(
+    'celo-mainnet',
+    42220,
+    'celo',
+    'mainnet',
+    '0xcebA9300f2b948710d2653dD7B07f33A8B32118C',
+  ),
+  usdcOnlyNetwork(
+    'celo-sepolia',
+    11142220,
+    'celo',
+    'testnet',
+    '0x01C5C0122039549AD1493B8220cABEdD739BC44E',
+  ),
   cctpNetwork(
     'ethereum-mainnet',
     1,
@@ -261,6 +276,13 @@ export function evaluateLiquidityAction(input: {
         reason: 'CCTP is unavailable for one or both chains',
       };
     }
+    if (!source.cctpExecutable || !destination.cctpExecutable) {
+      return {
+        supported: true,
+        executable: false,
+        reason: 'CCTP route is awaiting wallet and live provider evidence',
+      };
+    }
     return {
       supported: true,
       executable: true,
@@ -278,6 +300,13 @@ export function evaluateLiquidityAction(input: {
       supported: false,
       executable: false,
       reason: 'Gateway route is enabled only for Arc to Base USDC liquidity',
+    };
+  }
+  if (!source.gatewayExecutable || !destination.gatewayExecutable) {
+    return {
+      supported: true,
+      executable: false,
+      reason: 'Gateway route is awaiting wallet and live provider evidence',
     };
   }
   if (normalizeAsset(input.destination.assetSymbol) === 'USDT') {
@@ -426,6 +455,7 @@ function cctpNetwork(
     chainId,
     family,
     tier,
+    usdc,
     cctpDomain,
     cctpContracts: {
       usdc,
@@ -438,6 +468,10 @@ function cctpNetwork(
     },
     gatewayContracts,
     gateway,
+    cctpExecutable:
+      tier === 'testnet' && (family === 'arc' || family === 'base'),
+    gatewayExecutable:
+      gateway && tier === 'testnet' && (family === 'arc' || family === 'base'),
   };
 }
 
@@ -446,16 +480,20 @@ function usdcOnlyNetwork(
   chainId: number,
   family: string,
   tier: 'mainnet' | 'testnet',
+  usdc: string,
 ): NetworkCapability {
   return {
     environment,
     chainId,
     family,
     tier,
+    usdc,
     cctpDomain: null,
     cctpContracts: null,
     gatewayContracts: null,
     gateway: false,
+    cctpExecutable: false,
+    gatewayExecutable: false,
   };
 }
 

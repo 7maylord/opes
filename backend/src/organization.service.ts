@@ -115,7 +115,7 @@ export class OrganizationService {
       throw new Error('userId is required');
     }
 
-    const result = await this.database.withDatabase((database) =>
+    const result = await this.database.withUserScope(userId, (database) =>
       database.query<UserOrganizationRow>(
         `
           SELECT

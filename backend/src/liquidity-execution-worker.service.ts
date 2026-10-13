@@ -1710,7 +1710,7 @@ function addressToBytes32(address: string): string {
 function circleBlockchain(chainId: number): string {
   if (chainId === 5042002) return 'ARC-TESTNET';
   if (chainId === 84532) return 'BASE-SEPOLIA';
-  if (chainId === 5042001) return 'ARC';
+  if (chainId === 5042) return 'ARC';
   if (chainId === 8453) return 'BASE';
   throw new Error(
     `Circle wallet blockchain is unsupported for chain ${chainId}`,

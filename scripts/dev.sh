@@ -73,13 +73,19 @@ need_file() {
 
 run_migrations() {
   echo "Running backend migrations..."
-  for file in "$ROOT_DIR"/backend/migrations/*.sql; do
-    docker compose -f "$BACKEND_COMPOSE" exec -T postgres \
-      psql -U opes -d opes -v ON_ERROR_STOP=1 < "$file" >/dev/null
-  done
+  DATABASE_URL="${MIGRATION_DATABASE_URL:-postgresql://opes:opes@localhost:5433/opes}" \
+    pnpm --dir "$ROOT_DIR/backend" db:migrate
+  docker compose -f "$BACKEND_COMPOSE" exec -T postgres \
+    psql -U opes -d opes -v ON_ERROR_STOP=1 \
+    < "$ROOT_DIR/backend/test/prepare-runtime-role.sql" >/dev/null
 }
 
 need_file "$BACKEND_ENV"
+
+set -a
+# shellcheck disable=SC1090
+. "$BACKEND_ENV"
+set +a
 
 if [ "$RUN_DOCKER" = "1" ]; then
   if ! command -v docker >/dev/null 2>&1; then
@@ -92,11 +98,6 @@ if [ "$RUN_DOCKER" = "1" ]; then
 else
   echo "Skipping Docker services and migrations."
 fi
-
-set -a
-# shellcheck disable=SC1090
-. "$BACKEND_ENV"
-set +a
 
 echo "Starting backend API on ${BACKEND_PORT}..."
 PORT="$BACKEND_PORT" OPES_ALLOWED_ORIGINS="$BACKEND_ALLOWED_ORIGINS" \

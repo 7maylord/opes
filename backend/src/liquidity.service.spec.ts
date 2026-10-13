@@ -16,13 +16,13 @@ const request = {
   actionType: 'CCTP_TRANSFER' as const,
   idempotencyKey: 'a'.repeat(64),
   source: {
-    environment: 'arc-mainnet',
-    chainId: 5042001,
+    environment: 'arc-testnet',
+    chainId: 5042002,
     assetSymbol: 'USDC',
   },
   destination: {
-    environment: 'arbitrum-mainnet',
-    chainId: 42161,
+    environment: 'base-sepolia',
+    chainId: 84532,
     assetSymbol: 'USDC',
   },
   amountAtomic: '25000000',
@@ -33,13 +33,13 @@ const gatewayRequest = {
   actionType: 'GATEWAY_TRANSFER' as const,
   idempotencyKey: 'c'.repeat(64),
   source: {
-    environment: 'arc-mainnet',
-    chainId: 5042001,
+    environment: 'arc-testnet',
+    chainId: 5042002,
     assetSymbol: 'USDC',
   },
   destination: {
-    environment: 'base-mainnet',
-    chainId: 8453,
+    environment: 'base-sepolia',
+    chainId: 84532,
     assetSymbol: 'USDC',
   },
   amountAtomic: '25000000',
@@ -63,11 +63,11 @@ function row(overrides: Record<string, unknown> = {}) {
     provider: 'sandbox',
     simulated: true,
     status: 'PLANNED',
-    source_environment: 'arc-mainnet',
-    source_chain_id: 5042001,
+    source_environment: 'arc-testnet',
+    source_chain_id: 5042002,
     source_asset_symbol: 'USDC',
-    destination_environment: 'arbitrum-mainnet',
-    destination_chain_id: 42161,
+    destination_environment: 'base-sepolia',
+    destination_chain_id: 84532,
     destination_asset_symbol: 'USDC',
     amount_atomic: '25000000',
     fee_atomic: '0',
@@ -86,11 +86,11 @@ describe('LiquidityService', () => {
   const originalCircleApiKey = process.env.CIRCLE_API_KEY;
   const originalCircleEntitySecret = process.env.CIRCLE_ENTITY_SECRET;
   const originalGatewayApiUrl = process.env.OPES_GATEWAY_API_URL;
-  const originalBaseUsdt = process.env.OPES_BASE_MAINNET_USDT_ADDRESS;
+  const originalBaseUsdt = process.env.OPES_BASE_SEPOLIA_USDT_ADDRESS;
   const originalBaseSwapProvider =
-    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER;
+    process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_PROVIDER;
   const originalBaseSwapRouter =
-    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER;
+    process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_ROUTER;
 
   afterEach(() => {
     if (originalSandbox === undefined) {
@@ -124,20 +124,20 @@ describe('LiquidityService', () => {
       process.env.OPES_GATEWAY_API_URL = originalGatewayApiUrl;
     }
     if (originalBaseUsdt === undefined) {
-      delete process.env.OPES_BASE_MAINNET_USDT_ADDRESS;
+      delete process.env.OPES_BASE_SEPOLIA_USDT_ADDRESS;
     } else {
-      process.env.OPES_BASE_MAINNET_USDT_ADDRESS = originalBaseUsdt;
+      process.env.OPES_BASE_SEPOLIA_USDT_ADDRESS = originalBaseUsdt;
     }
     if (originalBaseSwapProvider === undefined) {
-      delete process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER;
+      delete process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_PROVIDER;
     } else {
-      process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER =
+      process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_PROVIDER =
         originalBaseSwapProvider;
     }
     if (originalBaseSwapRouter === undefined) {
-      delete process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER;
+      delete process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_ROUTER;
     } else {
-      process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER =
+      process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_ROUTER =
         originalBaseSwapRouter;
     }
   });
@@ -175,8 +175,8 @@ describe('LiquidityService', () => {
       provider: 'sandbox',
       simulated: true,
       status: 'PLANNED',
-      source: { chainId: 5042001 },
-      destination: { chainId: 42161 },
+      source: { chainId: 5042002 },
+      destination: { chainId: 84532 },
       feeAtomic: '0',
     });
     expect(query).toHaveBeenNthCalledWith(
@@ -188,11 +188,11 @@ describe('LiquidityService', () => {
         request.idempotencyKey,
         'sandbox',
         true,
-        'arc-mainnet',
-        5042001,
+        'arc-testnet',
+        5042002,
         'USDC',
-        'arbitrum-mainnet',
-        42161,
+        'base-sepolia',
+        84532,
         'USDC',
         '25000000',
       ]),
@@ -315,7 +315,7 @@ describe('LiquidityService', () => {
     });
     expect(action.providerPayload.provider).toBe('cctp-v2');
     expect(action.providerPayload.source).toMatchObject({
-      messageTransmitterV2: '0x81D40F21F12A8F0E3252Bccb954D722d4c464B64',
+      messageTransmitterV2: '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275',
     });
   });
 
@@ -350,11 +350,11 @@ describe('LiquidityService', () => {
             row({
               action_type: 'GATEWAY_TRANSFER',
               idempotency_key: gatewayRequest.idempotencyKey,
-              source_environment: 'arc-mainnet',
-              source_chain_id: 5042001,
+              source_environment: 'arc-testnet',
+              source_chain_id: 5042002,
               source_asset_symbol: 'USDC',
-              destination_environment: 'base-mainnet',
-              destination_chain_id: 8453,
+              destination_environment: 'base-sepolia',
+              destination_chain_id: 84532,
               destination_asset_symbol: 'USDC',
               provider: values[4],
               simulated: values[5],
@@ -374,16 +374,16 @@ describe('LiquidityService', () => {
       actionType: 'GATEWAY_TRANSFER',
       provider: 'circle-gateway',
       simulated: false,
-      source: { environment: 'arc-mainnet' },
-      destination: { environment: 'base-mainnet', assetSymbol: 'USDC' },
+      source: { environment: 'arc-testnet' },
+      destination: { environment: 'base-sepolia', assetSymbol: 'USDC' },
     });
     expect(action.providerPayload).toMatchObject({
       provider: 'circle-gateway',
       gatewayRequest: {
         action: 'transferUnifiedUsdc',
         gatewayApiUrl: 'https://gateway.example.test/transfer',
-        sourceChainId: 5042001,
-        destinationChainId: 8453,
+        sourceChainId: 5042002,
+        destinationChainId: 84532,
       },
     });
     expect(query).toHaveBeenLastCalledWith(
@@ -401,10 +401,10 @@ describe('LiquidityService', () => {
     process.env.OPES_ALLOWED_ORIGINS = 'https://opes.example';
     process.env.CIRCLE_API_KEY = 'test-key';
     process.env.CIRCLE_ENTITY_SECRET = 'test-secret';
-    process.env.OPES_BASE_MAINNET_USDT_ADDRESS =
+    process.env.OPES_BASE_SEPOLIA_USDT_ADDRESS =
       '0x0000000000000000000000000000000000000003';
-    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_PROVIDER = 'configured';
-    process.env.OPES_BASE_MAINNET_USDC_USDT_SWAP_ROUTER =
+    process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_PROVIDER = 'configured';
+    process.env.OPES_BASE_SEPOLIA_USDC_USDT_SWAP_ROUTER =
       '0x0000000000000000000000000000000000000004';
     const usdtGatewayRequest = {
       ...gatewayRequest,
@@ -436,8 +436,8 @@ describe('LiquidityService', () => {
             row({
               action_type: 'GATEWAY_TRANSFER',
               idempotency_key: usdtGatewayRequest.idempotencyKey,
-              destination_environment: 'base-mainnet',
-              destination_chain_id: 8453,
+              destination_environment: 'base-sepolia',
+              destination_chain_id: 84532,
               destination_asset_symbol: 'USDT',
               provider: values[4],
               simulated: values[5],

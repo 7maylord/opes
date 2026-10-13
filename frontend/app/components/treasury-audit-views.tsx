@@ -59,8 +59,8 @@ export function TreasuryAuditViews({
     return networks.filter((network) => {
       if (network.tier !== "testnet" || network.family === "arc") return false;
       return actionType === "GATEWAY_TRANSFER"
-        ? network.family === "base" && network.gateway
-        : network.cctpContracts !== null;
+        ? network.gatewayExecutable
+        : network.cctpExecutable;
     });
   }, [actionType, position]);
 

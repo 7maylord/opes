@@ -754,10 +754,13 @@ export interface TreasuryPositionResponse {
     chainId: number;
     family: string;
     tier: "mainnet" | "testnet";
+    usdc: string;
     cctpDomain: number | null;
     cctpContracts: Record<string, string> | null;
     gatewayContracts: Record<string, string> | null;
     gateway: boolean;
+    cctpExecutable: boolean;
+    gatewayExecutable: boolean;
   }>;
 }
 

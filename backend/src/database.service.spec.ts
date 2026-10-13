@@ -92,6 +92,37 @@ describe('DatabaseService', () => {
     expect(client.release).toHaveBeenCalledTimes(1);
   });
 
+  it('sets user scope for organization discovery', async () => {
+    const queries: string[] = [];
+    const client = {
+      query: jest.fn((text: string) => {
+        queries.push(text);
+        return Promise.resolve({ rows: [] });
+      }),
+      release: jest.fn(),
+    };
+    const service = new DatabaseService();
+    Reflect.set(service, 'databaseUrl', 'postgresql://unused');
+    Reflect.set(service, 'pool', {
+      connect: jest.fn(() => Promise.resolve(client)),
+      end: jest.fn(),
+    });
+
+    await service.withUserScope(context.userId, async (database) => {
+      await database.query('SELECT 1');
+    });
+
+    expect(queries).toEqual([
+      'BEGIN',
+      "SELECT set_config('opes.user_id', $1, true)",
+      'SELECT 1',
+      'COMMIT',
+    ]);
+    expect(client.query).toHaveBeenNthCalledWith(2, queries[1], [
+      context.userId,
+    ]);
+  });
+
   it('runs global transactions without tenant scope', async () => {
     const queries: string[] = [];
     const client = {

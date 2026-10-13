@@ -21,12 +21,11 @@ describe('OrganizationService', () => {
         ],
       }),
     );
-    const database = {
-      withDatabase: jest.fn(
-        (work: (database: TenantDatabase) => Promise<unknown>) =>
-          work({ query }),
-      ),
-    } as unknown as DatabaseService;
+    const withUserScope = jest.fn(
+      (_userId: string, work: (database: TenantDatabase) => Promise<unknown>) =>
+        work({ query }),
+    );
+    const database = { withUserScope } as unknown as DatabaseService;
     const service = new OrganizationService(database);
 
     await expect(service.listForUser('user-1')).resolves.toEqual([
@@ -45,6 +44,7 @@ describe('OrganizationService', () => {
       expect.stringContaining('membership.user_id = $1'),
       ['user-1'],
     );
+    expect(withUserScope).toHaveBeenCalledWith('user-1', expect.any(Function));
   });
 
   it('requires a user id', async () => {
