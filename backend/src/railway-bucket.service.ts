@@ -27,6 +27,7 @@ export class RailwayBucketService {
           accessKeyId: this.config.accessKeyId,
           secretAccessKey: this.config.secretAccessKey,
         },
+        requestChecksumCalculation: 'WHEN_REQUIRED',
       })
     : null;
 
@@ -49,7 +50,10 @@ export class RailwayBucketService {
           ContentType: contentType,
           Metadata: { sha256: sha256Hex },
         }),
-        { expiresIn: 15 * 60 },
+        {
+          expiresIn: 15 * 60,
+          unhoistableHeaders: new Set(['x-amz-meta-sha256']),
+        },
       ),
       headers: {
         'content-type': contentType,
