@@ -8,6 +8,7 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { MAX_DOCUMENT_BYTES } from './document-content';
 
 export interface StoredObject {
   bytes: Uint8Array;
@@ -68,7 +69,7 @@ export class RailwayBucketService {
       new HeadObjectCommand({ Bucket: bucket, Key: key }),
     );
     const sizeBytes = head.ContentLength ?? -1;
-    if (sizeBytes < 0 || sizeBytes > 10 * 1024 * 1024)
+    if (sizeBytes < 0 || sizeBytes > MAX_DOCUMENT_BYTES)
       return {
         bytes: new Uint8Array(),
         contentType: head.ContentType,

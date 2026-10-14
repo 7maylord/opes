@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -15,7 +16,8 @@ export interface VerifyInvoiceRequest {
   vendorId: string;
   vendorAddressId: string;
   evidenceDocumentId: string;
-  extractionId?: string;
+  extractionId: string;
+  semanticDuplicateResolutionId?: string;
   invoiceNumber: string;
   currency: 'USDC';
   amount: string;
@@ -68,6 +70,7 @@ interface ExtractionRow {
   document_id: string;
   source_sha256_hex: string;
   output: unknown;
+  review_status: string | null;
 }
 
 interface ObligationRow {
@@ -97,10 +100,23 @@ export class InvoiceService {
       input.evidenceDocumentId,
       'evidenceDocumentId',
     );
-    const extractionId =
-      input.extractionId === undefined
+    const extractionId = requireUuid(input.extractionId, 'extractionId');
+    const semanticDuplicateResolutionId =
+      input.semanticDuplicateResolutionId === undefined
         ? null
-        : requireUuid(input.extractionId, 'extractionId');
+        : requireUuid(
+            input.semanticDuplicateResolutionId,
+            'semanticDuplicateResolutionId',
+          );
+    if (
+      semanticDuplicateResolutionId !== null &&
+      context.role !== 'OWNER' &&
+      context.role !== 'ADMIN'
+    ) {
+      throw new ForbiddenException(
+        'Only owners and admins can resolve semantic duplicates',
+      );
+    }
     const invoiceNumber = requireText(input.invoiceNumber, 'invoiceNumber');
     const currency = validateCurrency(input.currency);
     const amountAtomic = parseAtomicAmount(
@@ -158,34 +174,49 @@ export class InvoiceService {
         throw new ConflictException('Invoice evidence is not verified');
       }
 
-      const extraction =
-        extractionId === null
-          ? null
-          : await getExtraction(database, context.organizationId, extractionId);
-      if (extraction !== null) {
-        if (extraction.document_id !== document.id) {
-          throw new BadRequestException(
-            'Extraction does not belong to invoice document',
-          );
-        }
-        if (extraction.source_sha256_hex !== document.sha256_hex) {
-          throw new BadRequestException(
-            'Extraction source hash does not match invoice document',
-          );
-        }
-        validateExtractionClaims(extraction.output, {
-          vendorName: vendor.display_name,
-          invoiceNumber,
-          currency,
-          amount: input.amount,
-          payoutAddress: address.payout_address,
-        });
+      const extraction = await getExtraction(
+        database,
+        context.organizationId,
+        extractionId,
+      );
+      if (extraction.document_id !== document.id) {
+        throw new BadRequestException(
+          'Extraction does not belong to invoice document',
+        );
       }
+      if (extraction.source_sha256_hex !== document.sha256_hex) {
+        throw new BadRequestException(
+          'Extraction source hash does not match invoice document',
+        );
+      }
+      if (extraction.review_status !== 'CONFIRMED') {
+        throw new ConflictException(
+          'Invoice extraction claims require human review',
+        );
+      }
+      validateExtractionClaims(extraction.output, {
+        vendorName: vendor.display_name,
+        invoiceNumber,
+        currency,
+        amount: input.amount,
+        payoutAddress: address.payout_address,
+      });
 
       const obligationKey = hashStable({
         kind: 'invoice',
         vendorId,
         invoiceNumber: invoiceNumber.toUpperCase(),
+      });
+      const semanticFingerprint = hashStable({
+        vendorId,
+        currency,
+        amountAtomic: amountAtomic.toString(),
+        issueDate: extractionClaim(extraction.output, 'issueDate'),
+        dueDate: extractionClaim(extraction.output, 'dueDate'),
+        lineItems: lineItems.map((item) => ({
+          description: item.description.trim().toLowerCase(),
+          amountAtomic: item.amountAtomic.toString(),
+        })),
       });
       const contentHash = hashStable({
         kind: 'invoice-version',
@@ -203,6 +234,29 @@ export class InvoiceService {
       });
 
       try {
+        const semanticDuplicate = await findSemanticDuplicate(
+          database,
+          context.organizationId,
+          semanticFingerprint,
+          obligationKey,
+        );
+        if (
+          semanticDuplicate !== null &&
+          semanticDuplicateResolutionId !== semanticDuplicate.id
+        ) {
+          throw new ConflictException(
+            `Potential semantic duplicate requires resolution: ${semanticDuplicate.id}`,
+          );
+        }
+        if (
+          semanticDuplicateResolutionId !== null &&
+          (semanticDuplicate === null ||
+            semanticDuplicate.id !== semanticDuplicateResolutionId)
+        ) {
+          throw new BadRequestException(
+            'semanticDuplicateResolutionId does not match a detected duplicate',
+          );
+        }
         const obligation = await upsertObligation(database, context, {
           vendorId,
           invoiceNumber,
@@ -219,6 +273,7 @@ export class InvoiceService {
           amountAtomic,
           lineItems,
           contentHash,
+          semanticFingerprint,
         });
         await audit(
           database,
@@ -230,6 +285,7 @@ export class InvoiceService {
             versionId: version.id,
             amountAtomic: amountAtomic.toString(),
             currency,
+            semanticDuplicateResolutionId,
           },
         );
         await projectInvoiceAccrualInDatabase(
@@ -325,10 +381,20 @@ async function getExtraction(
 ): Promise<ExtractionRow> {
   const result = await database.query<ExtractionRow>(
     `
-      SELECT id, document_id, source_sha256_hex, output
-        FROM opes.document_extractions
-       WHERE organization_id = $1
-         AND id = $2
+      SELECT extraction.id, extraction.document_id,
+             extraction.source_sha256_hex, claim.claims AS output,
+             claim.status AS review_status
+        FROM opes.document_extractions AS extraction
+        LEFT JOIN LATERAL (
+          SELECT claims, status
+            FROM opes.document_claim_versions
+           WHERE organization_id = extraction.organization_id
+             AND extraction_id = extraction.id
+             AND status IN ('PENDING_REVIEW', 'CONFIRMED')
+           ORDER BY version DESC LIMIT 1
+        ) AS claim ON true
+       WHERE extraction.organization_id = $1
+         AND extraction.id = $2
        LIMIT 1
     `,
     [organizationId, extractionId],
@@ -370,6 +436,28 @@ async function upsertObligation(
   return requireRow(result.rows[0], 'payable obligation');
 }
 
+async function findSemanticDuplicate(
+  database: TenantDatabase,
+  organizationId: string,
+  semanticFingerprint: string,
+  obligationKey: string,
+): Promise<{ id: string } | null> {
+  const result = await database.query<{ id: string }>(
+    `SELECT version.id
+       FROM opes.payable_obligation_versions AS version
+       JOIN opes.payable_obligations AS obligation
+         ON obligation.organization_id = version.organization_id
+        AND obligation.id = version.obligation_id
+      WHERE version.organization_id = $1
+        AND version.semantic_fingerprint = $2
+        AND obligation.obligation_key <> $3
+        AND version.status = 'ACCEPTED'
+      ORDER BY version.created_at ASC LIMIT 1`,
+    [organizationId, semanticFingerprint, obligationKey],
+  );
+  return result.rows[0] ?? null;
+}
+
 async function insertVersion(
   database: TenantDatabase,
   context: TenantContext,
@@ -384,6 +472,7 @@ async function insertVersion(
     amountAtomic: bigint;
     lineItems: NormalizedLineItem[];
     contentHash: string;
+    semanticFingerprint: string;
   },
 ): Promise<VersionRow> {
   const version = await nextVersion(
@@ -407,9 +496,10 @@ async function insertVersion(
         amount_decimals,
         line_items,
         content_hash,
+        semantic_fingerprint,
         created_by_membership_id
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 6, $11::jsonb, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 6, $11::jsonb, $12, $13, $14)
       RETURNING id, version, status
     `,
     [
@@ -430,6 +520,7 @@ async function insertVersion(
         })),
       ),
       input.contentHash,
+      input.semanticFingerprint,
       context.membershipId,
     ],
   );
@@ -581,6 +672,15 @@ function compareOptionalString(
   if (actual.trim().toLowerCase() !== expected.trim().toLowerCase()) {
     throw new BadRequestException(`Extraction ${name} does not match invoice`);
   }
+}
+
+function extractionClaim(output: unknown, field: string): string | null {
+  if (output === null || typeof output !== 'object' || Array.isArray(output))
+    return null;
+  const value = (output as Record<string, unknown>)[field];
+  return typeof value === 'string' && value.trim() !== ''
+    ? value.trim().toLowerCase()
+    : null;
 }
 
 function requireText(value: string | undefined, name: string): string {

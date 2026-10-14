@@ -29,6 +29,20 @@ describe('InvoiceModelService', () => {
       lineItems: [{ description: 'Service', amount: '1.00' }],
       confidence: 95,
       warnings: [],
+      provenance: Object.fromEntries(
+        [
+          'vendorName',
+          'invoiceNumber',
+          'issueDate',
+          'dueDate',
+          'currency',
+          'amount',
+          'payoutAddress',
+          'purchaseOrderReference',
+          'milestoneReference',
+          'lineItems',
+        ].map((field) => [field, { page: 1, excerpt: field, confidence: 95 }]),
+      ),
     };
     const requests: RequestInit[] = [];
     global.fetch = jest.fn(

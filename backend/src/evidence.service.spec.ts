@@ -125,7 +125,7 @@ describe('EvidenceService', () => {
         documentType: 'INVOICE',
         filename: 'invoice.pdf',
         contentType: 'application/pdf',
-        sizeBytes: 10 * 1024 * 1024 + 1,
+        sizeBytes: 15 * 1024 * 1024 + 1,
         sha256Hex: 'a'.repeat(64),
         storageKey: 'org/documents/invoice.pdf',
       }),
@@ -238,6 +238,67 @@ describe('EvidenceService', () => {
       ),
     ).rejects.toThrow('extraction output cannot contain tool calls');
     expect(withTenant).not.toHaveBeenCalled();
+  });
+
+  it('holds low-confidence extracted claims for human review', async () => {
+    const extraction = {
+      id: '88888888-8888-8888-8888-888888888888',
+      document_id: '55555555-5555-5555-5555-555555555555',
+      schema_name: 'invoice',
+      schema_version: '2',
+      model_provider: 'deepseek',
+      model_name: 'deepseek-flash',
+      source_sha256_hex: 'a'.repeat(64),
+      output: {
+        vendorName: 'Acme',
+        invoiceNumber: 'INV-1',
+        currency: 'USDC',
+        amount: '1.00',
+        provenance: Object.fromEntries(
+          ['vendorName', 'invoiceNumber', 'currency', 'amount'].map((field) => [
+            field,
+            { page: 1, excerpt: field, confidence: 80 },
+          ]),
+        ),
+      },
+      status: 'ACCEPTED',
+    };
+    const query = jest.fn((text: string, values?: readonly unknown[]) => {
+      if (text.includes('INSERT INTO opes.document_extractions'))
+        return Promise.resolve({ rows: [extraction] });
+      if (text.includes('FROM opes.document_claim_versions')) {
+        if (text.includes('MAX(version)'))
+          return Promise.resolve({ rows: [{ next_version: 1 }] });
+        return Promise.resolve({ rows: [] });
+      }
+      if (text.includes('INSERT INTO opes.document_claim_versions'))
+        return Promise.resolve({
+          rows: [
+            {
+              id: '99999999-9999-9999-9999-999999999999',
+              document_id: extraction.document_id,
+              extraction_id: extraction.id,
+              version: 1,
+              claims: extraction.output,
+              provenance: {},
+              status: values?.[7],
+            },
+          ],
+        });
+      return Promise.resolve({ rows: [{ id: extraction.document_id }] });
+    });
+    const { service } = serviceWithQuery(query);
+
+    await expect(
+      service.recordDocumentExtraction(context, extraction.document_id, {
+        schemaName: 'invoice',
+        schemaVersion: '2',
+        modelProvider: 'deepseek',
+        modelName: 'deepseek-flash',
+        sourceSha256Hex: 'a'.repeat(64),
+        output: extraction.output,
+      }),
+    ).resolves.toMatchObject({ reviewStatus: 'PENDING_REVIEW' });
   });
 
   it('holds the vendor when a new payout address replaces an active address', async () => {

@@ -43,7 +43,7 @@ export class AgentDecisionService {
         `SELECT version.invoice_number, version.amount_atomic::text AS amount_atomic,
             version.currency, vendor.status AS vendor_status,
             address.status AS address_status, address.payout_address,
-            document.status AS document_status, extraction.output AS extraction_output
+            document.status AS document_status, claim.claims AS extraction_output
            FROM opes.payable_obligation_versions AS version
            JOIN opes.vendors AS vendor
              ON vendor.organization_id = version.organization_id AND vendor.id = version.vendor_id
@@ -53,6 +53,10 @@ export class AgentDecisionService {
              ON document.organization_id = version.organization_id AND document.id = version.evidence_document_id
            JOIN opes.document_extractions AS extraction
              ON extraction.organization_id = version.organization_id AND extraction.id = version.extraction_id
+           JOIN opes.document_claim_versions AS claim
+             ON claim.organization_id = extraction.organization_id
+            AND claim.extraction_id = extraction.id
+            AND claim.status = 'CONFIRMED'
           WHERE version.organization_id = $1 AND version.id = $2 LIMIT 1`,
         [context.organizationId, input.invoiceVersionId],
       ),

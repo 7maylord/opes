@@ -24,6 +24,10 @@ import type {
 } from './document-storage.service';
 import type { EvidenceDocumentResponse } from './evidence.service';
 import type { DocumentExtractionResponse } from './evidence.service';
+import type {
+  ConfirmDocumentClaimsRequest,
+  DocumentClaimResponse,
+} from './evidence.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
 
@@ -146,6 +150,28 @@ export class EvidenceController {
       correlationId,
     );
     return this.extractions.extractInvoice(context, documentId);
+  }
+
+  @Post('evidence-documents/:documentId/extractions/:extractionId/confirm')
+  async confirmDocumentClaims(
+    @Param('organizationId') organizationId: string,
+    @Param('documentId') documentId: string,
+    @Param('extractionId') extractionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: ConfirmDocumentClaimsRequest,
+  ): Promise<DocumentClaimResponse> {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.evidence.confirmDocumentClaims(
+      context,
+      documentId,
+      extractionId,
+      body,
+    );
   }
 
   private async resolveContext(

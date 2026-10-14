@@ -34,7 +34,7 @@ function serviceWithQuery(query: TenantDatabase['query']): InvoiceService {
   return new InvoiceService({ withTenant } as unknown as DatabaseService);
 }
 
-function queryReturningHappyPath() {
+function queryReturningHappyPath(semanticDuplicateId?: string) {
   return jest
     .fn()
     .mockResolvedValueOnce({
@@ -75,6 +75,7 @@ function queryReturningHappyPath() {
           document_id: validRequest.evidenceDocumentId,
           source_sha256_hex:
             'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          review_status: 'CONFIRMED',
           output: {
             vendorName: 'Atlas Studio',
             invoiceNumber: 'INV-1042',
@@ -84,6 +85,9 @@ function queryReturningHappyPath() {
           },
         },
       ],
+    })
+    .mockResolvedValueOnce({
+      rows: semanticDuplicateId ? [{ id: semanticDuplicateId }] : [],
     })
     .mockResolvedValueOnce({
       rows: [{ id: '99999999-9999-9999-9999-999999999999' }],
@@ -130,7 +134,7 @@ describe('InvoiceService', () => {
       status: 'ACCEPTED',
     });
     expect(query).toHaveBeenNthCalledWith(
-      7,
+      8,
       expect.stringContaining('INSERT INTO opes.payable_obligation_versions'),
       expect.arrayContaining(['12340001']),
     );
@@ -153,6 +157,21 @@ describe('InvoiceService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(withTenant).not.toHaveBeenCalled();
+  });
+
+  it('holds semantic duplicate invoices for explicit resolution', async () => {
+    const duplicateId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    const query = queryReturningHappyPath(duplicateId);
+    const service = serviceWithQuery(query);
+
+    await expect(service.verifyInvoice(context, validRequest)).rejects.toThrow(
+      `Potential semantic duplicate requires resolution: ${duplicateId}`,
+    );
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('INSERT INTO opes.payable_obligations'),
+      ),
+    ).toBe(false);
   });
 
   it('rejects invoices whose line items do not sum to the total', async () => {
@@ -212,6 +231,7 @@ describe('InvoiceService', () => {
             document_id: validRequest.evidenceDocumentId,
             source_sha256_hex:
               'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            review_status: 'CONFIRMED',
             output: {
               payoutAddress: '0x0000000000000000000000000000000000000009',
             },
@@ -296,10 +316,12 @@ describe('InvoiceService', () => {
             document_id: validRequest.evidenceDocumentId,
             source_sha256_hex:
               'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            review_status: 'CONFIRMED',
             output: {},
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [{ id: '99999999-9999-9999-9999-999999999999' }],
       })

@@ -150,4 +150,30 @@ describe('DocumentStorageService', () => {
     expect(finalize).not.toHaveBeenCalled();
     expect(query).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects executable bytes declared as an invoice PDF', async () => {
+    const pdfDocument = {
+      ...document(),
+      content_type: 'application/pdf',
+      size_bytes: 4,
+      sha256_hex: createHash('sha256').update('MZ!!').digest('hex'),
+    };
+    const finalize = jest.fn();
+    const service = createService(
+      jest.fn().mockResolvedValueOnce({ rows: [pdfDocument] }),
+      {
+        read: jest.fn().mockResolvedValue({
+          bytes: new TextEncoder().encode('MZ!!'),
+          contentType: 'application/pdf',
+          sizeBytes: 4,
+        }),
+        finalize,
+      },
+    );
+
+    await expect(service.finalizeUpload(context, documentId)).rejects.toThrow(
+      'Document bytes do not match content type',
+    );
+    expect(finalize).not.toHaveBeenCalled();
+  });
 });

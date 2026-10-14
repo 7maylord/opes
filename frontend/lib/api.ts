@@ -274,6 +274,18 @@ export interface DocumentExtractionResponse {
   sourceSha256Hex: string;
   output: unknown;
   status: string;
+  claimVersionId: string;
+  reviewStatus: string;
+}
+
+export interface DocumentClaimResponse {
+  id: string;
+  documentId: string;
+  extractionId: string;
+  version: number;
+  claims: unknown;
+  provenance: unknown;
+  status: string;
 }
 
 export interface PayableObligationResponse {
@@ -461,6 +473,20 @@ export async function extractInvoiceDocument(
   );
 }
 
+export async function confirmDocumentClaims(
+  token: string,
+  organizationId: string,
+  documentId: string,
+  extractionId: string,
+  claims: unknown,
+) {
+  return request<DocumentClaimResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/evidence-documents/${encodeURIComponent(documentId)}/extractions/${encodeURIComponent(extractionId)}/confirm`,
+    token,
+    { method: "POST", body: JSON.stringify({ claims }) },
+  );
+}
+
 export async function verifyInvoice(
   token: string,
   organizationId: string,
@@ -468,7 +494,7 @@ export async function verifyInvoice(
     vendorId: string;
     vendorAddressId: string;
     evidenceDocumentId: string;
-    extractionId?: string;
+    extractionId: string;
     invoiceNumber: string;
     currency: "USDC";
     amount: string;

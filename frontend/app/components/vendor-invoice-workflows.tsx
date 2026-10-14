@@ -13,6 +13,7 @@ import {
   verifyInvoice,
   verifyVendorAddress,
   confirmLifecycleAction,
+  confirmDocumentClaims,
   type DecisionApprovalResponse,
   type DocumentExtractionResponse,
   type EvidenceDocumentResponse,
@@ -116,8 +117,8 @@ export function VendorInvoiceWorkflows({
   }
 
   async function submitInvoiceVerification() {
-    if (vendor === null || vendorAddress === null || document === null) {
-      return setError("Vendor, address and evidence are required.");
+    if (vendor === null || vendorAddress === null || document === null || extraction === null) {
+      return setError("Vendor, address and reviewed extraction are required.");
     }
     await run("Invoice verified", async () => {
       setObligation(
@@ -125,13 +126,35 @@ export function VendorInvoiceWorkflows({
           vendorId: vendor.id,
           vendorAddressId: vendorAddress.id,
           evidenceDocumentId: document.id,
-          extractionId: extraction?.id,
+          extractionId: extraction.id,
           invoiceNumber,
           currency: "USDC",
           amount: invoiceAmount,
           lineItems: [{ description: "Invoice total", amount: invoiceAmount }],
         }),
       );
+    });
+  }
+
+  async function submitClaimConfirmation() {
+    if (document === null || extraction === null)
+      return setError("Extract an invoice first.");
+    await run("Invoice claims confirmed", async () => {
+      const output = extraction.output as Record<string, unknown>;
+      await confirmDocumentClaims(
+        token,
+        organizationId,
+        document.id,
+        extraction.id,
+        {
+          ...output,
+          invoiceNumber,
+          amount: invoiceAmount,
+          payoutAddress,
+          currency: "USDC",
+        },
+      );
+      setExtraction({ ...extraction, reviewStatus: "CONFIRMED" });
     });
   }
 
@@ -231,7 +254,10 @@ export function VendorInvoiceWorkflows({
         <div className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">4. Verify, decide, approve</h4>
           <label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label>
-          <button disabled={pending} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>
+          <button disabled={pending || extraction === null || extraction.reviewStatus !== "CONFIRMED"} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>
+          {extraction?.reviewStatus === "PENDING_REVIEW" ? (
+            <button disabled={pending} onClick={submitClaimConfirmation} className="btn-secondary">Confirm extracted claims</button>
+          ) : null}
           <button disabled={pending || obligation === null} onClick={submitDecision} className="btn-secondary">Generate agent decision</button>
           <button disabled={pending || decision === null} onClick={submitApproval} className="btn-secondary">Approve</button>
           <button disabled={pending || approval === null} onClick={submitExecution} className="btn-secondary">Request execution</button>

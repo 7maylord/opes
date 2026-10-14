@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { assertDocumentContentType } from './document-content';
 import {
   EvidenceDocumentResponse,
   EvidenceService,
@@ -99,6 +100,7 @@ export class DocumentStorageService {
       throw new BadRequestException(
         'Uploaded document content type does not match',
       );
+    assertDocumentContentType(stored.bytes, document.content_type);
     const actualHash = createHash('sha256').update(stored.bytes).digest('hex');
     if (actualHash !== document.sha256_hex)
       throw new BadRequestException('Uploaded document hash does not match');

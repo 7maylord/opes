@@ -7,9 +7,9 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { MAX_DOCUMENT_BYTES } from './document-content';
 import { TenantContext } from './tenant-context';
 
-const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const ALLOWED_CONTENT_TYPES = new Set([
   'application/pdf',
   'application/json',
@@ -104,6 +104,22 @@ export interface DocumentExtractionResponse {
   sourceSha256Hex: string;
   output: unknown;
   status: string;
+  claimVersionId: string;
+  reviewStatus: string;
+}
+
+export interface ConfirmDocumentClaimsRequest {
+  claims: unknown;
+}
+
+export interface DocumentClaimResponse {
+  id: string;
+  documentId: string;
+  extractionId: string;
+  version: number;
+  claims: unknown;
+  provenance: unknown;
+  status: string;
 }
 
 interface VendorRow {
@@ -155,6 +171,16 @@ interface DocumentExtractionRow {
   model_name: string;
   source_sha256_hex: string;
   output: unknown;
+  status: string;
+}
+
+interface DocumentClaimRow {
+  id: string;
+  document_id: string;
+  extraction_id: string;
+  version: number;
+  claims: unknown;
+  provenance: unknown;
   status: string;
 }
 
@@ -589,14 +615,21 @@ export class EvidenceService {
         ? null
         : validateSha256(input.requestHash, 'requestHash');
 
-    const result = await this.database.withTenant(context, async (database) => {
-      await requireDocument(
-        database,
-        context.organizationId,
-        evidenceDocumentId,
-      );
-      return database.query<DocumentExtractionRow>(
-        `
+    const recorded = await this.database.withTenant(
+      context,
+      async (database) => {
+        await requireDocument(
+          database,
+          context.organizationId,
+          evidenceDocumentId,
+        );
+        await database.query(
+          `SELECT id FROM opes.evidence_documents
+          WHERE organization_id = $1 AND id = $2 FOR UPDATE`,
+          [context.organizationId, evidenceDocumentId],
+        );
+        const result = await database.query<DocumentExtractionRow>(
+          `
           INSERT INTO opes.document_extractions (
             organization_id,
             document_id,
@@ -627,24 +660,146 @@ export class EvidenceService {
             output,
             status
         `,
+          [
+            context.organizationId,
+            evidenceDocumentId,
+            schemaName,
+            schemaVersion,
+            modelProvider,
+            modelName,
+            sourceSha256Hex,
+            JSON.stringify(input.output),
+            providerResponseId,
+            promptVersion,
+            requestHash,
+            context.membershipId,
+          ],
+        );
+        const extraction = requireRow(result.rows[0], 'document extraction');
+        const existingClaim = await database.query<DocumentClaimRow>(
+          `SELECT id, document_id, extraction_id, version, claims, provenance, status
+           FROM opes.document_claim_versions
+          WHERE organization_id = $1 AND extraction_id = $2
+          ORDER BY version DESC LIMIT 1`,
+          [context.organizationId, extraction.id],
+        );
+        let claim = existingClaim.rows[0];
+        if (claim === undefined) {
+          const payload = buildClaimPayload(extraction.output, modelName);
+          await database.query(
+            `UPDATE opes.document_claim_versions SET status = 'SUPERSEDED'
+            WHERE organization_id = $1 AND document_id = $2
+              AND status IN ('PENDING_REVIEW', 'CONFIRMED')`,
+            [context.organizationId, evidenceDocumentId],
+          );
+          const versionResult = await database.query<{ next_version: number }>(
+            `SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+             FROM opes.document_claim_versions
+            WHERE organization_id = $1 AND document_id = $2`,
+            [context.organizationId, evidenceDocumentId],
+          );
+          const version = requireRow(
+            versionResult.rows[0],
+            'document claim version',
+          ).next_version;
+          const insertedClaim = await database.query<DocumentClaimRow>(
+            `INSERT INTO opes.document_claim_versions (
+             organization_id, document_id, extraction_id, version, schema_name,
+             claims, provenance, status, confirmed_at, created_by_membership_id
+           ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8,
+             CASE WHEN $8 = 'CONFIRMED' THEN now() ELSE NULL END, $9)
+           RETURNING id, document_id, extraction_id, version, claims, provenance, status`,
+            [
+              context.organizationId,
+              evidenceDocumentId,
+              extraction.id,
+              version,
+              schemaName,
+              JSON.stringify(payload.claims),
+              JSON.stringify(payload.provenance),
+              payload.status,
+              context.membershipId,
+            ],
+          );
+          claim = requireRow(insertedClaim.rows[0], 'document claim');
+        }
+        return { extraction, claim };
+      },
+    );
+
+    return mapExtraction(recorded.extraction, recorded.claim);
+  }
+
+  async confirmDocumentClaims(
+    context: TenantContext,
+    documentId: string,
+    extractionId: string,
+    input: ConfirmDocumentClaimsRequest,
+  ): Promise<DocumentClaimResponse> {
+    requireVerifierRole(context);
+    const targetDocumentId = requireUuid(documentId, 'documentId');
+    const targetExtractionId = requireUuid(extractionId, 'extractionId');
+    validateExtractionOutput(input.claims);
+    if (!plainObject(input.claims))
+      throw new BadRequestException('claims must be an object');
+    validateConfirmedInvoiceClaims(input.claims);
+
+    return this.database.withTenant(context, async (database) => {
+      const extraction = await database.query<{ id: string }>(
+        `SELECT id FROM opes.document_extractions
+          WHERE organization_id = $1 AND id = $2 AND document_id = $3
+          FOR UPDATE`,
+        [context.organizationId, targetExtractionId, targetDocumentId],
+      );
+      requireRow(extraction.rows[0], 'document extraction');
+      await database.query(
+        `UPDATE opes.document_claim_versions SET status = 'SUPERSEDED'
+          WHERE organization_id = $1 AND document_id = $2
+            AND status IN ('PENDING_REVIEW', 'CONFIRMED')`,
+        [context.organizationId, targetDocumentId],
+      );
+      const versionResult = await database.query<{ next_version: number }>(
+        `SELECT COALESCE(MAX(version), 0) + 1 AS next_version
+           FROM opes.document_claim_versions
+          WHERE organization_id = $1 AND document_id = $2`,
+        [context.organizationId, targetDocumentId],
+      );
+      const version = requireRow(
+        versionResult.rows[0],
+        'document claim version',
+      ).next_version;
+      const inserted = await database.query<DocumentClaimRow>(
+        `INSERT INTO opes.document_claim_versions (
+           organization_id, document_id, extraction_id, version, schema_name,
+           claims, provenance, status, confirmed_by_membership_id,
+           confirmed_at, created_by_membership_id
+         ) VALUES ($1, $2, $3, $4, 'invoice', $5::jsonb, $6::jsonb,
+           'CONFIRMED', $7, now(), $7)
+         RETURNING id, document_id, extraction_id, version, claims, provenance, status`,
         [
           context.organizationId,
-          evidenceDocumentId,
-          schemaName,
-          schemaVersion,
-          modelProvider,
-          modelName,
-          sourceSha256Hex,
-          JSON.stringify(input.output),
-          providerResponseId,
-          promptVersion,
-          requestHash,
+          targetDocumentId,
+          targetExtractionId,
+          version,
+          JSON.stringify(input.claims),
+          JSON.stringify({
+            method: 'HUMAN_CONFIRMATION',
+            confirmedByMembershipId: context.membershipId,
+          }),
           context.membershipId,
         ],
       );
+      const claim = requireRow(inserted.rows[0], 'document claim');
+      await audit(
+        database,
+        context,
+        'evidence.claims_confirmed',
+        'evidence_document',
+        targetDocumentId,
+        { claimVersionId: claim.id, extractionId: targetExtractionId, version },
+      );
+      return mapClaim(claim);
     });
-
-    return mapExtraction(requireRow(result.rows[0], 'document extraction'));
   }
 }
 
@@ -801,7 +956,7 @@ function requirePositiveInteger(value: number, name: string): number {
 
 function requireDocumentSize(value: number): number {
   if (!Number.isInteger(value) || value <= 0 || value > MAX_DOCUMENT_BYTES) {
-    throw new BadRequestException('sizeBytes must be between 1 and 10485760');
+    throw new BadRequestException('sizeBytes must be between 1 and 15728640');
   }
   return value;
 }
@@ -858,6 +1013,47 @@ function validateExtractionOutput(value: unknown): void {
   }
 }
 
+function plainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function buildClaimPayload(
+  output: unknown,
+  modelName: string,
+): { claims: Record<string, unknown>; provenance: unknown; status: string } {
+  if (!plainObject(output))
+    throw new BadRequestException('Extraction output is malformed');
+  const claims = { ...output };
+  delete claims.provenance;
+  const provenance = plainObject(output.provenance) ? output.provenance : {};
+  const required = ['vendorName', 'invoiceNumber', 'currency', 'amount'];
+  const ready = required.every((field) => {
+    const value = claims[field];
+    const source = provenance[field];
+    return (
+      typeof value === 'string' &&
+      value.trim() !== '' &&
+      plainObject(source) &&
+      Number.isInteger(source.confidence) &&
+      Number(source.confidence) >= 85
+    );
+  });
+  return {
+    claims,
+    provenance: { modelName, fields: provenance },
+    status: ready ? 'CONFIRMED' : 'PENDING_REVIEW',
+  };
+}
+
+function validateConfirmedInvoiceClaims(claims: Record<string, unknown>): void {
+  for (const field of ['vendorName', 'invoiceNumber', 'currency', 'amount']) {
+    if (typeof claims[field] !== 'string' || claims[field].trim() === '')
+      throw new BadRequestException(`claims.${field} is required`);
+  }
+  if (claims.currency !== 'USDC')
+    throw new BadRequestException('claims.currency must be USDC');
+}
+
 function containsMutatingToolRequest(value: unknown): boolean {
   if (value === null || typeof value !== 'object') {
     return false;
@@ -910,7 +1106,10 @@ function mapDocument(row: EvidenceDocumentRow): EvidenceDocumentResponse {
   };
 }
 
-function mapExtraction(row: DocumentExtractionRow): DocumentExtractionResponse {
+function mapExtraction(
+  row: DocumentExtractionRow,
+  claim: DocumentClaimRow,
+): DocumentExtractionResponse {
   return {
     id: row.id,
     documentId: row.document_id,
@@ -920,6 +1119,20 @@ function mapExtraction(row: DocumentExtractionRow): DocumentExtractionResponse {
     modelName: row.model_name,
     sourceSha256Hex: row.source_sha256_hex,
     output: row.output,
+    status: row.status,
+    claimVersionId: claim.id,
+    reviewStatus: claim.status,
+  };
+}
+
+function mapClaim(row: DocumentClaimRow): DocumentClaimResponse {
+  return {
+    id: row.id,
+    documentId: row.document_id,
+    extractionId: row.extraction_id,
+    version: row.version,
+    claims: row.claims,
+    provenance: row.provenance,
     status: row.status,
   };
 }

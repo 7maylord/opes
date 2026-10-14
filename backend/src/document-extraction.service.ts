@@ -37,7 +37,7 @@ export class DocumentExtractionService {
     });
     return this.evidence.recordDocumentExtraction(context, documentId, {
       schemaName: 'invoice',
-      schemaVersion: '1',
+      schemaVersion: '2',
       modelProvider: result.provider,
       modelName: result.model,
       sourceSha256Hex: document.sha256Hex,
@@ -65,16 +65,23 @@ export class DocumentExtractionService {
         source_sha256_hex: string;
         output: unknown;
         status: string;
+        claim_version_id: string;
+        review_status: string;
       }>(
         `SELECT extraction.id, extraction.document_id, extraction.schema_name,
             extraction.schema_version, extraction.model_provider, extraction.model_name,
-            extraction.source_sha256_hex, extraction.output, extraction.status
+            extraction.source_sha256_hex, extraction.output, extraction.status,
+            claim.id AS claim_version_id, claim.status AS review_status
            FROM opes.document_extractions AS extraction
            JOIN opes.evidence_documents AS document
              ON document.organization_id = extraction.organization_id
             AND document.id = extraction.document_id
+           JOIN opes.document_claim_versions AS claim
+             ON claim.organization_id = extraction.organization_id
+            AND claim.extraction_id = extraction.id
+            AND claim.status IN ('PENDING_REVIEW', 'CONFIRMED')
           WHERE extraction.organization_id = $1 AND extraction.document_id = $2
-            AND extraction.schema_name = 'invoice' AND extraction.schema_version = '1'
+            AND extraction.schema_name = 'invoice' AND extraction.schema_version = '2'
             AND extraction.model_provider = 'deepseek'
             AND extraction.model_name = $3
             AND extraction.source_sha256_hex = document.sha256_hex
@@ -94,6 +101,8 @@ export class DocumentExtractionService {
           sourceSha256Hex: row.source_sha256_hex,
           output: row.output,
           status: row.status,
+          claimVersionId: row.claim_version_id,
+          reviewStatus: row.review_status,
         }
       : null;
   }
