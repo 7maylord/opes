@@ -3,7 +3,7 @@ import {
   ConflictException,
   Injectable,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { SessionUser } from './session.service';
 
@@ -85,7 +85,15 @@ export class OnboardingService {
     }
     const ownerWalletAddress = user.ownerWalletAddress;
 
+    const organizationId = randomUUID();
     return this.database.withTransaction(async (database) => {
+      await database.query("SELECT set_config('opes.user_id', $1, true)", [
+        user.id,
+      ]);
+      await database.query(
+        "SELECT set_config('opes.organization_id', $1, true)",
+        [organizationId],
+      );
       await reserveGlobalIdempotency(
         database,
         'POST /onboarding',
@@ -94,8 +102,13 @@ export class OnboardingService {
       );
       const organization = await getOrCreateOrganization(
         database,
+        organizationId,
         organizationSlug,
         organizationName,
+      );
+      await database.query(
+        "SELECT set_config('opes.organization_id', $1, true)",
+        [organization.id],
       );
       const membership = await getOrCreateOwnerMembership(
         database,
@@ -212,17 +225,18 @@ async function completeGlobalIdempotency(
 
 async function getOrCreateOrganization(
   database: TenantDatabase,
+  organizationId: string,
   slug: string,
   displayName: string,
 ): Promise<OrganizationRow> {
   const inserted = await database.query<OrganizationRow>(
     `
-      INSERT INTO opes.organizations (slug, display_name, lifecycle_status)
-      VALUES ($1, $2, 'PROVISIONING')
+      INSERT INTO opes.organizations (id, slug, display_name, lifecycle_status)
+      VALUES ($1, $2, $3, 'PROVISIONING')
       ON CONFLICT (slug) DO NOTHING
       RETURNING id, slug, display_name, lifecycle_status
     `,
-    [slug, displayName],
+    [organizationId, slug, displayName],
   );
 
   if (inserted.rows[0] !== undefined) {
@@ -237,8 +251,10 @@ async function getOrCreateOrganization(
     `,
     [slug],
   );
-
-  return requireRow(existing.rows[0], 'organization');
+  const organization = existing.rows[0];
+  if (!organization)
+    throw new ConflictException('Organization slug is already in use');
+  return organization;
 }
 
 async function getOrCreateOwnerMembership(

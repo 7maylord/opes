@@ -13,6 +13,8 @@ describe('OnboardingService', () => {
   it('creates an organization for the authenticated user without minting a session', async () => {
     const query = jest
       .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -23,6 +25,7 @@ describe('OnboardingService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
@@ -59,6 +62,8 @@ describe('OnboardingService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -69,6 +74,7 @@ describe('OnboardingService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] });
     const database = {
@@ -86,6 +92,8 @@ describe('OnboardingService', () => {
   it('binds idempotency to the authenticated user', async () => {
     const query = jest
       .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rowCount: 0, rows: [] })
       .mockResolvedValueOnce({
         rows: [{ request_hash: 'different-request', status: 'COMPLETED' }],
