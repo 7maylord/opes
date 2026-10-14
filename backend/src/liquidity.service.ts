@@ -389,6 +389,7 @@ export class LiquidityService {
           context.membershipId,
         ],
       );
+      await assertNoSigningExecution(database, context.organizationId);
       await database.query(
         `INSERT INTO opes.payment_policy_versions (
            organization_id,version,autonomous_limit_atomic,
@@ -504,6 +505,7 @@ export class LiquidityService {
       );
       if (locked.rows[0] === undefined)
         throw new ConflictException('Configure treasury settings first');
+      await assertNoSigningExecution(database, context.organizationId);
       const version = await database.query<{ version: number }>(
         `SELECT COALESCE(MAX(version),0)+1 AS version
          FROM opes.payment_policy_versions WHERE organization_id=$1`,
@@ -600,6 +602,27 @@ async function invalidateOldPolicyAuthorizations(
        AND decision.policy_version_id IS DISTINCT FROM $2`,
     [organizationId, activePolicyId],
   );
+}
+
+async function assertNoSigningExecution(
+  database: TenantDatabase,
+  organizationId: string,
+): Promise<void> {
+  const result = await database.query<{ exists: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM opes.payment_executions execution
+       JOIN opes.payment_execution_preflights preflight
+         ON preflight.organization_id=execution.organization_id
+        AND preflight.execution_id=execution.id AND preflight.status='PASS'
+       WHERE execution.organization_id=$1
+         AND execution.status IN ('PENDING','PROCESSING')
+     ) AS exists`,
+    [organizationId],
+  );
+  if (result.rows[0]?.exists)
+    throw new ConflictException(
+      'Payment policy cannot change while an execution is signing',
+    );
 }
 
 function validatePolicyRoutes(

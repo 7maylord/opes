@@ -146,6 +146,7 @@ describe('LiquidityService', () => {
     const query = jest
       .fn()
       .mockResolvedValueOnce({ rows: [{ max_snapshot_age_seconds: 300 }] })
+      .mockResolvedValueOnce({ rows: [{ exists: false }] })
       .mockResolvedValueOnce({ rows: [{ version: 2 }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
@@ -182,15 +183,44 @@ describe('LiquidityService', () => {
       }),
     ).resolves.toMatchObject({ version: 2, status: 'ACTIVE' });
     expect(query).toHaveBeenNthCalledWith(
-      6,
+      7,
       expect.stringContaining("status='REVOKED'"),
       [context.organizationId, '55555555-5555-5555-5555-555555555555'],
     );
     expect(query).toHaveBeenNthCalledWith(
-      7,
+      8,
       expect.stringContaining("status='RELEASED'"),
       [context.organizationId, '55555555-5555-5555-5555-555555555555'],
     );
+  });
+
+  it('blocks policy edits while a passed preflight is signing', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ max_snapshot_age_seconds: 300 }] })
+      .mockResolvedValueOnce({ rows: [{ exists: true }] });
+    const service = serviceWithQuery(query);
+    await expect(
+      service.configurePaymentPolicy(context, {
+        autonomousLimitAtomic: '1',
+        singlePaymentLimitAtomic: '1',
+        vendorDailyLimitAtomic: '1',
+        organizationDailyLimitAtomic: '1',
+        operatingBufferAtomic: '0',
+        allowedRoutes: [
+          {
+            liquidityRoute: 'OPERATING',
+            environment: 'arc-testnet',
+            chainId: 5042002,
+            assetSymbol: 'USDC',
+          },
+        ],
+        allowedAssets: ['USDC'],
+      }),
+    ).rejects.toThrow(
+      'Payment policy cannot change while an execution is signing',
+    );
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it('plans a deterministic sandbox CCTP liquidity action once', async () => {

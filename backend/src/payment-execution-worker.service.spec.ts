@@ -46,6 +46,10 @@ function workRow(overrides: Record<string, unknown> = {}) {
     expires_at: new Date('2030-01-01T00:00:00.000Z'),
     wallet_id: 'circle-wallet-1',
     wallet_address: '0x0000000000000000000000000000000000000004',
+    execution_mode: 'DIRECT_VAULT',
+    token_address: null,
+    liquidity_action_id: null,
+    max_source_debit_atomic: null,
     ...overrides,
   };
 }
@@ -65,6 +69,7 @@ function recordingQuery(
   work: Record<string, unknown> | null,
   attempt?: {
     id: string;
+    status?: string;
     provider_transaction_id: string | null;
     call_data: string;
   },
@@ -90,8 +95,40 @@ function recordingQuery(
       text.includes('FROM opes.payment_execution_attempts') &&
       text.includes('ORDER BY')
     ) {
-      return queryResult(attempt ? [attempt] : []);
+      return queryResult(attempt ? [{ status: 'SUBMITTED', ...attempt }] : []);
     }
+    if (text.includes('AS vendor_daily_committed_atomic'))
+      return queryResult([
+        {
+          derived_action: 'PAY',
+          decision_expires_at: new Date('2030-01-01T00:00:00.000Z'),
+          policy_status: work?.preflight_policy_status ?? 'ACTIVE',
+          organization_status: 'ACTIVE',
+          agent_status: 'ACTIVE',
+          vendor_status: 'VERIFIED',
+          vendor_version: 1,
+          bound_vendor_version: 1,
+          address_status: 'VERIFIED_ACTIVE',
+          address_version: work?.preflight_address_version ?? 1,
+          bound_address_version: 1,
+          payout_address: work?.destination_address,
+          source_status: 'ACCEPTED',
+          obligation_status: 'ACCEPTED',
+          has_evidence_match: true,
+          reservation_status: 'CONSUMED',
+          has_active_approval: false,
+          single_payment_limit_atomic: '1000000000',
+          vendor_daily_limit_atomic: '1000000000',
+          organization_daily_limit_atomic: '1000000000',
+          monthly_budget_atomic: '1000000000',
+          operating_buffer_atomic: '1000',
+          vendor_daily_committed_atomic: work?.amount_atomic,
+          organization_daily_committed_atomic: work?.amount_atomic,
+          monthly_committed_atomic: work?.amount_atomic,
+          duplicate_execution: false,
+          max_source_debit_atomic: work?.max_source_debit_atomic ?? null,
+        },
+      ]);
     if (text.includes('SELECT id FROM opes.payment_executions'))
       return queryResult([{ id: 'execution-1' }]);
     if (text.includes('INSERT INTO opes.payment_execution_attempts'))
@@ -120,6 +157,27 @@ function recordingQuery(
 
 function eventTopic(signature: string): string {
   return `0x${Buffer.from(keccak_256(new TextEncoder().encode(signature))).toString('hex')}`;
+}
+function mockPreflightRpc(balance = '0x3b9aca00', paused = '0x0') {
+  process.env.OPES_RPC_ARC_TESTNET = 'https://arc-rpc.example.test';
+  global.fetch = jest
+    .fn()
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ result: '0x64' }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ result: balance }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ result: '0x1' }),
+    })
+    .mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ result: paused }),
+    });
 }
 function addressTopic(address: string): string {
   return `0x${address.slice(2).toLowerCase().padStart(64, '0')}`;
@@ -157,6 +215,7 @@ describe('PaymentExecutionWorkerService', () => {
   });
 
   it('submits exact calldata through the bound Circle wallet and requeues reconciliation', async () => {
+    mockPreflightRpc();
     const row = workRow();
     const createDirectPaymentTransaction = jest
       .fn()
@@ -202,6 +261,7 @@ describe('PaymentExecutionWorkerService', () => {
   });
 
   it('fails a provider-rejected request instead of retrying forever', async () => {
+    mockPreflightRpc();
     const error = Object.assign(new Error('API parameter invalid'), {
       status: 400,
     });
@@ -223,6 +283,83 @@ describe('PaymentExecutionWorkerService', () => {
         item.text.includes("available_at = now() + interval '5 seconds'"),
       ),
     ).toBe(false);
+  });
+
+  it.each([
+    [
+      'changed policy',
+      { preflight_policy_status: 'SUPERSEDED' },
+      '0x3b9aca00',
+      '0x0',
+    ],
+    ['changed address', { preflight_address_version: 2 }, '0x3b9aca00', '0x0'],
+    ['changed balance', {}, '0x1', '0x0'],
+    ['paused vault', {}, '0x3b9aca00', '0x1'],
+  ])('blocks signing after %s', async (_name, overrides, balance, paused) => {
+    mockPreflightRpc(balance, paused);
+    const createDirectPaymentTransaction = jest.fn();
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const { service } = serviceWithWorker(
+      recordingQuery(queries, workRow(overrides)),
+      { createDirectPaymentTransaction },
+    );
+
+    await expect(service.processDuePaymentExecutions(1)).resolves.toBe(1);
+    expect(createDirectPaymentTransaction).not.toHaveBeenCalled();
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes('payment_execution_preflights') &&
+          item.values?.includes('BLOCK'),
+      ),
+    ).toBe(true);
+  });
+
+  it('marks an ambiguous source submission unknown and never submits it again', async () => {
+    mockPreflightRpc();
+    const createDirectPaymentTransaction = jest
+      .fn()
+      .mockRejectedValue(new TypeError('request timed out'));
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const { service } = serviceWithWorker(recordingQuery(queries, workRow()), {
+      createDirectPaymentTransaction,
+    });
+    await service.processDuePaymentExecutions(1);
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes("status='UNKNOWN'") &&
+          item.values?.includes('request timed out'),
+      ),
+    ).toBe(true);
+    expect(
+      queries.some((item) =>
+        item.text.includes("available_at = now() + interval '5 seconds'"),
+      ),
+    ).toBe(false);
+
+    const secondQueries: Array<{ text: string; values?: readonly unknown[] }> =
+      [];
+    const replay = workRow();
+    const { service: second } = serviceWithWorker(
+      recordingQuery(secondQueries, replay, {
+        id: 'attempt-1',
+        status: 'UNKNOWN',
+        provider_transaction_id: null,
+        call_data: buildExecuteDirectPaymentCalldata({
+          decisionHash: replay.decision_hash,
+          obligationKey: replay.idempotency_key,
+          contextHash: replay.context_hash,
+          idempotencyKey: replay.idempotency_key,
+          vendor: replay.destination_address,
+          amount: replay.amount_atomic,
+          expiresAt: replay.expires_at.toISOString(),
+        }),
+      }),
+      { createDirectPaymentTransaction },
+    );
+    await second.processDuePaymentExecutions(1);
+    expect(createDirectPaymentTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('retries when Circle has not indexed a submitted transaction yet', async () => {

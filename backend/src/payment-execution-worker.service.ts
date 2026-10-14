@@ -35,6 +35,7 @@ interface ExecutionWorkRow {
   wallet_id: string | null;
   wallet_address: string | null;
   attempt_id: string | null;
+  attempt_status: string | null;
   provider_transaction_id: string | null;
   call_data: string | null;
 }
@@ -73,6 +74,35 @@ interface SignerRequest {
   value: '0';
   idempotencyKey: string;
   executionId: string;
+}
+interface PreflightStateRow {
+  derived_action: string;
+  decision_expires_at: Date;
+  policy_status: string;
+  organization_status: string;
+  agent_status: string;
+  vendor_status: string;
+  vendor_version: number;
+  bound_vendor_version: number;
+  address_status: string;
+  address_version: number;
+  bound_address_version: number;
+  payout_address: string;
+  source_status: string;
+  obligation_status: string;
+  has_evidence_match: boolean;
+  reservation_status: string | null;
+  has_active_approval: boolean;
+  single_payment_limit_atomic: string;
+  vendor_daily_limit_atomic: string;
+  organization_daily_limit_atomic: string;
+  monthly_budget_atomic: string | null;
+  operating_buffer_atomic: string;
+  vendor_daily_committed_atomic: string;
+  organization_daily_committed_atomic: string;
+  monthly_committed_atomic: string;
+  duplicate_execution: boolean;
+  max_source_debit_atomic: string | null;
 }
 
 const TERMINAL_CIRCLE_FAILURES = new Set(['FAILED', 'DENIED', 'CANCELLED']);
@@ -188,6 +218,20 @@ export class PaymentExecutionWorkerService {
       );
       return;
     }
+    if (
+      execution.provider_transaction_id === null &&
+      execution.attempt_status === 'UNKNOWN'
+    ) {
+      await this.stopUnknown(event);
+      return;
+    }
+    if (execution.provider_transaction_id === null) {
+      const blocked = await this.preflight(execution);
+      if (blocked !== null) {
+        await this.fail(event, execution.attempt_id, blocked);
+        return;
+      }
+    }
     const request: SignerRequest = {
       provider: 'circle',
       chainId: execution.route_chain_id,
@@ -233,7 +277,7 @@ export class PaymentExecutionWorkerService {
             ? error.message
             : 'Circle payment submission failed';
         if (submissionMayHaveSucceeded(error))
-          await this.retry(event, attemptId, reason);
+          await this.markSubmissionUnknown(event, attemptId, reason);
         else await this.fail(event, attemptId, reason);
         return;
       }
@@ -312,7 +356,10 @@ export class PaymentExecutionWorkerService {
       const result = await database.query<
         Omit<
           ExecutionWorkRow,
-          'attempt_id' | 'provider_transaction_id' | 'call_data'
+          | 'attempt_id'
+          | 'attempt_status'
+          | 'provider_transaction_id'
+          | 'call_data'
         >
       >(
         `UPDATE opes.payment_executions AS execution
@@ -360,6 +407,7 @@ export class PaymentExecutionWorkerService {
             wallet_id: null,
             wallet_address: null,
             attempt_id: null,
+            attempt_status: null,
             provider_transaction_id: null,
             call_data: null,
           };
@@ -369,20 +417,222 @@ export class PaymentExecutionWorkerService {
       }
       const attempt = await database.query<{
         id: string;
+        status: string;
         provider_transaction_id: string | null;
         call_data: string;
       }>(
-        `SELECT id, provider_transaction_id, call_data FROM opes.payment_execution_attempts
+        `SELECT id, status, provider_transaction_id, call_data FROM opes.payment_execution_attempts
           WHERE organization_id = $1 AND execution_id = $2 ORDER BY attempt_number DESC LIMIT 1`,
         [event.organization_id, event.aggregate_id],
       );
       return {
         ...row,
         attempt_id: attempt.rows[0]?.id ?? null,
+        attempt_status: attempt.rows[0]?.status ?? null,
         provider_transaction_id:
           attempt.rows[0]?.provider_transaction_id ?? null,
         call_data: attempt.rows[0]?.call_data ?? null,
       };
+    });
+  }
+
+  private async preflight(execution: ExecutionWorkRow): Promise<string | null> {
+    return this.database.withWorker(async (database) => {
+      await database.query(
+        "SELECT set_config('opes.organization_id',$1,true)",
+        [execution.organization_id],
+      );
+      await database.query(
+        `SELECT organization_id FROM opes.treasury_settings
+         WHERE organization_id=$1 FOR UPDATE`,
+        [execution.organization_id],
+      );
+      const state = (
+        await database.query<PreflightStateRow>(
+          `SELECT decision.derived_action,decision.expires_at AS decision_expires_at,
+             policy.status AS policy_status,organization.lifecycle_status AS organization_status,
+             agent.lifecycle_status AS agent_status,vendor.status AS vendor_status,
+             vendor.version AS vendor_version,decision.bound_vendor_version,
+             address.status AS address_status,address.version AS address_version,
+             decision.bound_address_version,address.payout_address,
+             source.status AS source_status,obligation.status AS obligation_status,
+             EXISTS(SELECT 1 FROM opes.payable_evidence_matches match
+               WHERE match.organization_id=decision.organization_id
+                 AND match.invoice_version_id=decision.source_version_id
+                 AND match.status='PASS') AS has_evidence_match,
+             reservation.status AS reservation_status,
+             EXISTS(SELECT 1 FROM opes.payment_decision_approvals approval
+               WHERE approval.organization_id=decision.organization_id
+                 AND approval.decision_id=decision.id AND approval.status='ACTIVE'
+                 AND approval.expires_at>now()) AS has_active_approval,
+             policy.single_payment_limit_atomic::text,
+             policy.vendor_daily_limit_atomic::text,
+             policy.organization_daily_limit_atomic::text,
+             policy.monthly_budget_atomic::text,policy.operating_buffer_atomic::text,
+             COALESCE((SELECT sum(other.amount_atomic) FROM opes.payment_executions other
+               JOIN opes.payment_decisions other_decision
+                 ON other_decision.organization_id=other.organization_id
+                AND other_decision.id=other.decision_id
+               WHERE other.organization_id=execution.organization_id
+                 AND other_decision.vendor_id=decision.vendor_id
+                 AND other.status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN','CONFIRMED')
+                 AND other.requested_at>=date_trunc('day',now())),0)::text AS vendor_daily_committed_atomic,
+             COALESCE((SELECT sum(other.amount_atomic) FROM opes.payment_executions other
+               WHERE other.organization_id=execution.organization_id
+                 AND other.status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN','CONFIRMED')
+                 AND other.requested_at>=date_trunc('day',now())),0)::text AS organization_daily_committed_atomic,
+             COALESCE((SELECT sum(other.amount_atomic) FROM opes.payment_executions other
+               WHERE other.organization_id=execution.organization_id
+                 AND other.status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN','CONFIRMED')
+                 AND other.requested_at>=date_trunc('month',now())),0)::text AS monthly_committed_atomic,
+             EXISTS(SELECT 1 FROM opes.payment_executions other
+               WHERE other.organization_id=execution.organization_id
+                 AND other.source_version_id=execution.source_version_id
+                 AND other.id<>execution.id
+                 AND other.status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN','CONFIRMED')) AS duplicate_execution,
+             execution.max_source_debit_atomic::text
+           FROM opes.payment_executions execution
+           JOIN opes.payment_decisions decision
+             ON decision.organization_id=execution.organization_id AND decision.id=execution.decision_id
+           JOIN opes.payment_policy_versions policy
+             ON policy.organization_id=decision.organization_id AND policy.id=decision.policy_version_id
+           JOIN opes.organizations organization ON organization.id=execution.organization_id
+           JOIN opes.business_agents agent ON agent.organization_id=execution.organization_id AND agent.is_primary
+           JOIN opes.vendors vendor ON vendor.organization_id=decision.organization_id AND vendor.id=decision.vendor_id
+           JOIN opes.vendor_payout_addresses address ON address.organization_id=decision.organization_id AND address.id=decision.vendor_address_id
+           JOIN opes.payable_obligation_versions source ON source.organization_id=decision.organization_id AND source.id=decision.source_version_id
+           JOIN opes.payable_obligations obligation ON obligation.organization_id=decision.organization_id AND obligation.id=decision.source_id
+           LEFT JOIN opes.treasury_reservations reservation ON reservation.organization_id=decision.organization_id AND reservation.decision_id=decision.id
+           WHERE execution.organization_id=$1 AND execution.id=$2 FOR UPDATE OF execution`,
+          [execution.organization_id, execution.id],
+        )
+      ).rows[0];
+      if (!state) return 'Execution preflight state is missing';
+
+      const token =
+        execution.execution_mode === 'DIRECT_VAULT'
+          ? this.factoryManifests.getArcTestnetFactory().tokenAddress
+          : execution.token_address;
+      const sourceAddress =
+        execution.execution_mode === 'DIRECT_VAULT'
+          ? execution.vault_address
+          : execution.wallet_address;
+      if (!token || !sourceAddress || !execution.wallet_address)
+        return 'Execution preflight binding is missing';
+      const blockHex = await rpc<string>(
+        execution.route_environment,
+        'eth_blockNumber',
+        [],
+      );
+      const [balanceHex, nonceHex, pausedHex] = await Promise.all([
+        rpc<string>(execution.route_environment, 'eth_call', [
+          { to: token, data: balanceOfCalldata(sourceAddress) },
+          blockHex,
+        ]),
+        rpc<string>(execution.route_environment, 'eth_getTransactionCount', [
+          execution.wallet_address,
+          'pending',
+        ]),
+        execution.execution_mode === 'DIRECT_VAULT'
+          ? rpc<string>(execution.route_environment, 'eth_call', [
+              { to: execution.vault_address, data: '0x5c975abb' },
+              blockHex,
+            ])
+          : Promise.resolve('0x0'),
+      ]);
+      const balance = BigInt(balanceHex);
+      const required = BigInt(
+        state.max_source_debit_atomic ?? execution.amount_atomic,
+      );
+      const checks = [
+        preflightCheck('policy_current', state.policy_status === 'ACTIVE'),
+        preflightCheck(
+          'organization_active',
+          state.organization_status === 'ACTIVE' &&
+            state.agent_status === 'ACTIVE',
+        ),
+        preflightCheck(
+          'vendor_current',
+          state.vendor_status === 'VERIFIED' &&
+            state.vendor_version === state.bound_vendor_version,
+        ),
+        preflightCheck(
+          'address_current',
+          state.address_status === 'VERIFIED_ACTIVE' &&
+            state.address_version === state.bound_address_version &&
+            state.payout_address.toLowerCase() ===
+              execution.destination_address.toLowerCase(),
+        ),
+        preflightCheck(
+          'evidence_current',
+          state.source_status === 'ACCEPTED' &&
+            state.obligation_status === 'ACCEPTED' &&
+            state.has_evidence_match,
+        ),
+        preflightCheck(
+          'reservation_consumed',
+          state.reservation_status === 'CONSUMED',
+        ),
+        preflightCheck(
+          'approval_current',
+          state.derived_action === 'PAY' || state.has_active_approval,
+        ),
+        preflightCheck(
+          'decision_unexpired',
+          state.decision_expires_at.getTime() > Date.now(),
+        ),
+        preflightCheck(
+          'single_limit',
+          BigInt(execution.amount_atomic) <=
+            BigInt(state.single_payment_limit_atomic),
+        ),
+        preflightCheck(
+          'vendor_daily_limit',
+          BigInt(state.vendor_daily_committed_atomic) <=
+            BigInt(state.vendor_daily_limit_atomic),
+        ),
+        preflightCheck(
+          'organization_daily_limit',
+          BigInt(state.organization_daily_committed_atomic) <=
+            BigInt(state.organization_daily_limit_atomic),
+        ),
+        preflightCheck(
+          'monthly_budget',
+          state.monthly_budget_atomic === null ||
+            BigInt(state.monthly_committed_atomic) <=
+              BigInt(state.monthly_budget_atomic),
+        ),
+        preflightCheck(
+          'live_balance_and_buffer',
+          balance >= required + BigInt(state.operating_buffer_atomic),
+        ),
+        preflightCheck('vault_unpaused', BigInt(pausedHex) === 0n),
+        preflightCheck('idempotency_clear', !state.duplicate_execution),
+        preflightCheck('pending_nonce_observed', BigInt(nonceHex) >= 0n),
+      ];
+      const status = checks.some((check) => check.status === 'BLOCK')
+        ? 'BLOCK'
+        : 'PASS';
+      await database.query(
+        `INSERT INTO opes.payment_execution_preflights
+          (organization_id,execution_id,status,checks,observed_block_number,
+           observed_balance_atomic,observed_pending_nonce)
+         VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
+         ON CONFLICT(organization_id,execution_id) DO NOTHING`,
+        [
+          execution.organization_id,
+          execution.id,
+          status,
+          JSON.stringify(checks),
+          BigInt(blockHex).toString(),
+          balance.toString(),
+          BigInt(nonceHex).toString(),
+        ],
+      );
+      const firstBlock = checks.find((check) => check.status === 'BLOCK');
+      return firstBlock
+        ? `Execution preflight blocked: ${firstBlock.code}`
+        : null;
     });
   }
 
@@ -461,6 +711,34 @@ export class PaymentExecutionWorkerService {
     });
   }
 
+  private async markSubmissionUnknown(
+    event: OutboxEventRow,
+    attemptId: string,
+    reason: string,
+  ): Promise<void> {
+    await this.database.withWorker(async (database) => {
+      await database.query(
+        `UPDATE opes.payment_execution_attempts
+         SET status='UNKNOWN',failure_reason=$3,updated_at=now()
+         WHERE organization_id=$1 AND id=$2`,
+        [event.organization_id, attemptId, reason],
+      );
+      await database.query(
+        `UPDATE opes.payment_executions
+         SET status='UNKNOWN',failure_reason=$3,last_reconciled_at=now(),updated_at=now()
+         WHERE organization_id=$1 AND id=$2`,
+        [event.organization_id, event.aggregate_id, reason],
+      );
+      await markOutboxProcessed(database, event.id);
+    });
+  }
+
+  private async stopUnknown(event: OutboxEventRow): Promise<void> {
+    await this.database.withWorker((database) =>
+      markOutboxProcessed(database, event.id),
+    );
+  }
+
   private async confirm(
     event: OutboxEventRow,
     attemptId: string,
@@ -512,6 +790,14 @@ export class PaymentExecutionWorkerService {
     });
     this.logger.warn(`payment execution job ${event.id} failed: ${reason}`);
   }
+}
+
+function preflightCheck(code: string, passes: boolean) {
+  return { code, status: passes ? ('PASS' as const) : ('BLOCK' as const) };
+}
+
+function balanceOfCalldata(address: string): string {
+  return `0x70a08231${address.slice(2).toLowerCase().padStart(64, '0')}`;
 }
 
 function assertSignerRequest(

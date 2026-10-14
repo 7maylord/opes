@@ -15,6 +15,7 @@ import type { PaymentExecutionResponse } from './payment-execution.service';
 import { PaymentExecutionService } from './payment-execution.service';
 import type {
   EvaluateInvoiceDecisionRequest,
+  PlanInvoicePaymentRequest,
   PaymentDecisionResponse,
 } from './decision.service';
 import { SessionService } from './session.service';
@@ -115,6 +116,29 @@ export class DecisionController {
     });
 
     return this.decisions.evaluateInvoicePayment(context, body);
+  }
+
+  @Post('invoice-payment/plan')
+  async planInvoicePayment(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: PlanInvoicePaymentRequest,
+  ) {
+    const token = parseBearerToken(authorization);
+    if (token === undefined)
+      throw new UnauthorizedException('Bearer session token is required');
+    const user = await this.sessions.resolveUser(token);
+    if (user === null)
+      throw new UnauthorizedException('Session is invalid or expired');
+    return this.decisions.planInvoicePayment(
+      await this.tenantContexts.resolve({
+        organizationId,
+        userId: user.id,
+        requestId: resolveCorrelationId(correlationId),
+      }),
+      body,
+    );
   }
 
   @Post('invoice-payment/agent')

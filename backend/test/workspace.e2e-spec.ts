@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { CircleWalletService } from '../src/circle-wallet.service';
 import { DatabaseService } from '../src/database.service';
+import { PaymentExecutionWorkerService } from '../src/payment-execution-worker.service';
 import { SessionService } from '../src/session.service';
 import { workspaceKinds, WorkspaceService } from '../src/workspace.service';
 
@@ -38,7 +40,10 @@ describe('Workspace read models (e2e)', () => {
   beforeAll(async () => {
     const module = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(CircleWalletService)
+      .useValue({ isConfigured: () => false })
+      .compile();
     app = module.createNestApplication();
     await app.init();
     database = app.get(DatabaseService);
@@ -362,6 +367,92 @@ describe('Workspace read models (e2e)', () => {
     );
     expect(reservations.rows[0]).toEqual({ count: '1', amount: '1000000' });
 
+    const payableDecision = decisions.find(
+      (response) =>
+        (response.body as { derivedAction: string }).derivedAction === 'PAY',
+    );
+    expect(payableDecision).toBeDefined();
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.tenant_resource_bindings
+          (organization_id,environment,chain_id,provider,resource_type,resource_id,address,status)
+         VALUES ($1,'arc-testnet',5042002,'circle','operator_wallet',$2,$3,'ACTIVE')`,
+        [
+          organizationId,
+          `wallet-${organizationId}`,
+          '0x5000000000000000000000000000000000000005',
+        ],
+      ),
+    );
+    const execution = await request(server)
+      .post(
+        `/organizations/${organizationId}/decisions/${(payableDecision?.body as { id: string }).id}/execute`,
+      )
+      .set('Authorization', authorization)
+      .expect(201);
+    const originalFetch = global.fetch;
+    const originalRpc = process.env.OPES_RPC_ARC_TESTNET;
+    process.env.OPES_RPC_ARC_TESTNET = 'https://rpc.test.invalid';
+    global.fetch = jest
+      .fn()
+      .mockImplementation(
+        (
+          _input: Parameters<typeof fetch>[0],
+          init?: Parameters<typeof fetch>[1],
+        ) => {
+          if (typeof init?.body !== 'string')
+            throw new Error('RPC body missing');
+          const body = init.body;
+          const method = (JSON.parse(body) as { method: string }).method;
+          const result =
+            method === 'eth_blockNumber'
+              ? '0x64'
+              : method === 'eth_getTransactionCount'
+                ? '0x1'
+                : method === 'eth_call' && body.includes('5c975abb')
+                  ? '0x0'
+                  : '0x989680';
+          return { ok: true, json: () => Promise.resolve({ result }) };
+        },
+      ) as typeof fetch;
+    try {
+      await expect(
+        app.get(PaymentExecutionWorkerService).processDuePaymentExecutions(20),
+      ).resolves.toBeGreaterThan(0);
+    } finally {
+      global.fetch = originalFetch;
+      if (originalRpc === undefined) delete process.env.OPES_RPC_ARC_TESTNET;
+      else process.env.OPES_RPC_ARC_TESTNET = originalRpc;
+    }
+    const preflight = await database.withOrganizationScope(
+      organizationId,
+      (sql) =>
+        sql.query<{ status: string }>(
+          `SELECT status FROM opes.payment_execution_preflights
+           WHERE organization_id=$1 AND execution_id=$2`,
+          [organizationId, (execution.body as { id: string }).id],
+        ),
+    );
+    const executionState = await database.withOrganizationScope(
+      organizationId,
+      (sql) =>
+        sql.query<{ status: string; failure_reason: string | null }>(
+          `SELECT status,failure_reason FROM opes.payment_executions
+           WHERE organization_id=$1 AND id=$2`,
+          [organizationId, (execution.body as { id: string }).id],
+        ),
+    );
+    expect({
+      preflight: preflight.rows[0]?.status,
+      execution: executionState.rows[0],
+    }).toEqual({
+      preflight: 'PASS',
+      execution: {
+        status: 'FAILED',
+        failure_reason: 'Circle wallets are not configured',
+      },
+    });
+
     await request(server)
       .put(`/organizations/${organizationId}/treasury/policy`)
       .set('Authorization', authorization)
@@ -465,6 +556,22 @@ describe('Workspace read models (e2e)', () => {
         );
         await sql.query(
           'DELETE FROM opes.treasury_balance_snapshots WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.payment_execution_preflights WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.payment_execution_attempts WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.payment_executions WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.outbox_events WHERE organization_id = $1',
           [id],
         );
         await sql.query(
@@ -668,11 +775,12 @@ describe('Workspace read models (e2e)', () => {
              model_action, derived_action, liquidity_route, route_environment, route_chain_id, route_asset_symbol,
              amount_atomic, destination_address, vendor_id, vendor_address_id, evidence_bundle_hash,
              policy_snapshot_hash, context_hash, decision_hash, checks, model_name, model_rationale,
-             prompt_version, evidence_check_version, policy_version_id, expires_at, created_by_membership_id)
+             prompt_version, evidence_check_version, policy_version_id,bound_vendor_version,
+             bound_address_version,expires_at, created_by_membership_id)
            VALUES ($1, $2, 'INVOICE', $3, $4, $5, 'DIRECT', 'PAY', 'PAY', 'OPERATING', 'arc-testnet',
              5042002, 'USDC', 1000000, $6, $7, $8, $9, $10, $11, $12, '[]', 'fixture', 'fixture',
              '1', '1', (SELECT id FROM opes.payment_policy_versions WHERE organization_id=$2 AND status='ACTIVE'),
-             now() + interval '1 hour', $13)`,
+             1,1,now() + interval '1 hour', $13)`,
           [
             decisionId,
             organizationId,

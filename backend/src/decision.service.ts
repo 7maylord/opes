@@ -19,6 +19,7 @@ import {
   TreasuryAvailability,
 } from './liquidity.service';
 import { TenantContext } from './tenant-context';
+import { PaymentRouteQuote, planPayment } from './payment-planner';
 
 type DecisionAction = 'PAY' | 'DELAY' | 'ESCALATE' | 'REJECT';
 type CheckStatus = 'PASS' | 'BLOCK' | 'REQUIRES_APPROVAL';
@@ -38,6 +39,14 @@ export interface EvaluateInvoiceDecisionRequest {
     assetSymbol: string;
   };
   expiresAt: string;
+  proposedExecutionAt?: string | null;
+}
+
+export interface PlanInvoicePaymentRequest {
+  invoiceVersionId: string;
+  routeQuotes?: PaymentRouteQuote[];
+  verifiedDiscountAtomic?: string;
+  verifiedDiscountDeadline?: string;
 }
 
 export interface DecisionCheckResponse {
@@ -80,6 +89,7 @@ export interface PaymentDecisionResponse {
   contextHash: string;
   decisionHash: string | null;
   checks: DecisionCheckResponse[];
+  proposedExecutionAt: string | null;
   expiresAt: string;
 }
 
@@ -165,6 +175,7 @@ interface DecisionRow {
   context_hash: string;
   decision_hash: string | null;
   checks: DecisionCheckResponse[];
+  proposed_execution_at: Date | null;
   policy_version_id: string | null;
   policy_is_active: boolean;
   expires_at: Date;
@@ -173,6 +184,62 @@ interface DecisionRow {
 @Injectable()
 export class DecisionService {
   constructor(private readonly database: DatabaseService) {}
+
+  async planInvoicePayment(
+    context: TenantContext,
+    input: PlanInvoicePaymentRequest,
+  ) {
+    const invoiceVersionId = requireUuid(
+      input.invoiceVersionId,
+      'invoiceVersionId',
+    );
+    return this.database.withTenant(context, async (database) => {
+      const invoice = await database.query<{
+        amount_atomic: string;
+        due_at: Date | null;
+      }>(
+        `SELECT amount_atomic::text,due_at
+         FROM opes.payable_obligation_versions
+         WHERE organization_id=$1 AND id=$2 AND status='ACCEPTED'`,
+        [context.organizationId, invoiceVersionId],
+      );
+      const row = requireRow(invoice.rows[0], 'accepted invoice version');
+      const treasury = await readTreasuryAvailability(
+        database,
+        context.organizationId,
+        false,
+      );
+      const deadline = input.verifiedDiscountDeadline
+        ? new Date(input.verifiedDiscountDeadline)
+        : null;
+      if (deadline && Number.isNaN(deadline.getTime()))
+        throw new BadRequestException(
+          'verifiedDiscountDeadline must be an ISO timestamp',
+        );
+      if (input.routeQuotes !== undefined && !Array.isArray(input.routeQuotes))
+        throw new BadRequestException('routeQuotes must be an array');
+      return planPayment({
+        amountAtomic: row.amount_atomic,
+        dueAt: row.due_at,
+        now: new Date(),
+        discountAtomic: input.verifiedDiscountAtomic,
+        discountDeadline: deadline,
+        quotes: [
+          {
+            liquidityRoute: 'OPERATING',
+            environment: 'arc-testnet',
+            chainId: 5042002,
+            assetSymbol: 'USDC',
+            feeAtomic: '0',
+            availableAtomic: treasury.availableAtomic.toString(),
+            finalitySeconds: 12,
+            providerAvailable: treasury.ready,
+          },
+          ...(input.routeQuotes ?? []),
+        ],
+      });
+    });
+  }
 
   async approveDecision(
     context: TenantContext,
@@ -294,6 +361,10 @@ export class DecisionService {
     const promptVersion = requireText(input.promptVersion, 'promptVersion');
     const route = validateRoute(input.route);
     const expiresAt = validateFutureTimestamp(input.expiresAt);
+    const proposedExecutionAt = validateOptionalTimestamp(
+      input.proposedExecutionAt,
+      'proposedExecutionAt',
+    );
 
     return this.database.withTenant(context, async (database) => {
       const invoice = await getInvoiceVersion(
@@ -415,13 +486,16 @@ export class DecisionService {
             prompt_version,
             evidence_check_version,
             policy_version_id,
+            bound_vendor_version,
+            bound_address_version,
+            proposed_execution_at,
             expires_at,
             created_by_membership_id
           )
           VALUES (
             $1, 'INVOICE', $2, $3, $4, 'DIRECT', $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20, $21,
-            $22, 'f6-versioned-v1', $23, $24, $25
+            $22, 'f6-versioned-v1', $23, $24, $25, $26, $27, $28
           )
           RETURNING
             id,
@@ -443,6 +517,7 @@ export class DecisionService {
             context_hash,
             decision_hash,
             checks,
+            proposed_execution_at,
             expires_at
         `,
         [
@@ -469,6 +544,9 @@ export class DecisionService {
           modelRationale,
           promptVersion,
           policy.id,
+          invoice.vendor_version,
+          invoice.address_version,
+          proposedExecutionAt,
           expiresAt,
           context.membershipId,
         ],
@@ -527,6 +605,7 @@ async function getDecision(
             AND policy.id=payment_decisions.policy_version_id
             AND policy.status='ACTIVE'
         ) AS policy_is_active,
+        proposed_execution_at,
         expires_at
       FROM opes.payment_decisions
       WHERE organization_id = $1
@@ -1029,6 +1108,17 @@ function validateFutureTimestamp(value: string): string {
   return new Date(time).toISOString();
 }
 
+function validateOptionalTimestamp(
+  value: string | null | undefined,
+  name: string,
+): string | null {
+  if (value === null || value === undefined) return null;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time))
+    throw new BadRequestException(`${name} must be an ISO timestamp`);
+  return new Date(time).toISOString();
+}
+
 function requireText(value: string | undefined, name: string): string {
   const text = value?.trim();
   if (text === undefined || text === '') {
@@ -1101,6 +1191,7 @@ function mapDecision(row: DecisionRow): PaymentDecisionResponse {
     contextHash: row.context_hash,
     decisionHash: row.decision_hash,
     checks: row.checks,
+    proposedExecutionAt: row.proposed_execution_at?.toISOString() ?? null,
     expiresAt: row.expires_at.toISOString(),
   };
 }
