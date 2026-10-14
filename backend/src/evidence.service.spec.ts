@@ -28,22 +28,52 @@ function serviceWithQuery(query: TenantDatabase['query']): {
 
 describe('EvidenceService', () => {
   it('records immutable evidence document metadata with normalized hashes', async () => {
-    const query = jest.fn().mockResolvedValueOnce({
-      rows: [
-        {
-          id: 'document-1',
-          document_type: 'INVOICE',
-          filename: 'invoice.pdf',
-          content_type: 'application/pdf',
-          size_bytes: 1200,
-          sha256_hex:
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-          storage_key: 'org/documents/invoice.pdf',
-          status: 'STAGING',
-          metadata: { source: 'upload' },
-        },
-      ],
-    });
+    const row = {
+      id: 'document-1',
+      document_type: 'INVOICE',
+      filename: 'invoice.pdf',
+      content_type: 'application/pdf',
+      size_bytes: 1200,
+      sha256_hex:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      storage_key: 'org/documents/invoice.pdf',
+      status: 'STAGING',
+      metadata: { source: 'upload' },
+    };
+    let intakeHash = '';
+    const query = jest.fn(
+      (
+        text: string,
+        values?: readonly unknown[],
+      ): Promise<{ rows: unknown[] }> => {
+        if (text.includes('INSERT INTO opes.intake_envelopes')) {
+          intakeHash = String(values?.[2]);
+          return Promise.resolve({ rows: [] });
+        }
+        if (text.includes('FROM opes.intake_envelopes')) {
+          return Promise.resolve({
+            rows: [
+              {
+                id: 'envelope-1',
+                payload_hash: intakeHash,
+                document_id: null,
+                status: 'RECEIVED',
+              },
+            ],
+          });
+        }
+        if (
+          text.includes('FROM opes.evidence_documents') &&
+          text.includes('sha256_hex')
+        ) {
+          return Promise.resolve({ rows: [] });
+        }
+        if (text.includes('INSERT INTO opes.evidence_documents')) {
+          return Promise.resolve({ rows: [row] });
+        }
+        return Promise.resolve({ rows: [] });
+      },
+    );
     const { service, withTenant } = serviceWithQuery(query);
 
     await expect(
@@ -101,6 +131,90 @@ describe('EvidenceService', () => {
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(withTenant).not.toHaveBeenCalled();
+  });
+
+  it('returns the original document when an intake event is replayed', async () => {
+    const row = {
+      id: 'document-1',
+      document_type: 'INVOICE',
+      filename: 'invoice.pdf',
+      content_type: 'application/pdf',
+      size_bytes: 1200,
+      sha256_hex: 'a'.repeat(64),
+      storage_key: 'org/documents/invoice.pdf',
+      status: 'STAGING',
+      metadata: {},
+    };
+    let intakeHash = '';
+    const query = jest.fn((text: string, values?: readonly unknown[]) => {
+      if (text.includes('INSERT INTO opes.intake_envelopes')) {
+        intakeHash = String(values?.[2]);
+        return Promise.resolve({ rows: [] });
+      }
+      if (text.includes('FROM opes.intake_envelopes')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'envelope-1',
+              payload_hash: intakeHash,
+              document_id: row.id,
+              status: 'STAGED',
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ rows: [row] });
+    });
+    const { service } = serviceWithQuery(query);
+
+    await expect(
+      service.recordEvidenceDocument(context, {
+        documentType: 'INVOICE',
+        filename: 'invoice.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1200,
+        sha256Hex: 'a'.repeat(64),
+        storageKey: 'ignored-new-staging-key',
+      }),
+    ).resolves.toMatchObject({ id: row.id, storageKey: row.storage_key });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('INSERT INTO opes.evidence_documents'),
+      ),
+    ).toBe(false);
+  });
+
+  it('quarantines a replay whose immutable payload changed', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'envelope-1',
+            payload_hash: 'b'.repeat(64),
+            document_id: null,
+            status: 'STAGED',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+    const { service } = serviceWithQuery(query);
+
+    await expect(
+      service.recordEvidenceDocument(context, {
+        documentType: 'INVOICE',
+        filename: 'invoice.pdf',
+        contentType: 'application/pdf',
+        sizeBytes: 1200,
+        sha256Hex: 'a'.repeat(64),
+        storageKey: 'staging/key',
+      }),
+    ).rejects.toThrow('Intake event was quarantined');
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining("status = 'QUARANTINED'"),
+      [context.organizationId, 'envelope-1'],
+    );
   });
 
   it('rejects extraction output that tries to invoke tools', async () => {

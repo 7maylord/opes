@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { TenantContext } from './tenant-context';
 
@@ -65,6 +66,7 @@ export interface RecordEvidenceDocumentRequest {
   sizeBytes: number;
   sha256Hex: string;
   storageKey: string;
+  sourceEventId?: string;
   metadata?: unknown;
 }
 
@@ -135,6 +137,13 @@ interface EvidenceDocumentRow {
   storage_key: string;
   status: string;
   metadata: unknown;
+}
+
+interface IntakeEnvelopeRow {
+  id: string;
+  payload_hash: string;
+  document_id: string | null;
+  status: string;
 }
 
 interface DocumentExtractionRow {
@@ -401,33 +410,105 @@ export class EvidenceService {
     const sha256Hex = validateSha256(input.sha256Hex, 'sha256Hex');
     const storageKey = validateStorageKey(input.storageKey);
 
-    try {
-      const result = await this.database.withTenant(context, (database) =>
-        database.query<EvidenceDocumentRow>(
-          `
-            INSERT INTO opes.evidence_documents (
-              organization_id,
-              document_type,
-              filename,
-              content_type,
-              size_bytes,
-              sha256_hex,
-              storage_key,
-              metadata,
-              created_by_membership_id
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
-            RETURNING
-              id,
-              document_type,
-              filename,
-              content_type,
-              size_bytes,
-              sha256_hex,
-              storage_key,
-              status,
-              metadata
-          `,
+    const payloadHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          documentType,
+          filename,
+          contentType,
+          sizeBytes,
+          sha256Hex,
+          metadata: input.metadata ?? {},
+        }),
+      )
+      .digest('hex');
+    const sourceEventId = requireText(
+      input.sourceEventId ?? context.requestId,
+      'sourceEventId',
+    );
+    if (sourceEventId.length > 200) {
+      throw new BadRequestException('sourceEventId is too long');
+    }
+
+    const recorded = await this.database.withTenant(
+      context,
+      async (database) => {
+        await database.query(
+          `INSERT INTO opes.intake_envelopes (
+             organization_id, source_type, source_event_id, payload_hash,
+             raw_metadata, created_by_membership_id
+           ) VALUES ($1, 'MANUAL_UPLOAD', $2, $3, $4::jsonb, $5)
+           ON CONFLICT (organization_id, source_type, source_event_id) DO NOTHING`,
+          [
+            context.organizationId,
+            `manual:${sourceEventId}`,
+            payloadHash,
+            JSON.stringify({ documentType, filename, contentType, sizeBytes }),
+            context.membershipId,
+          ],
+        );
+        const envelopeResult = await database.query<IntakeEnvelopeRow>(
+          `SELECT id, payload_hash, document_id, status
+             FROM opes.intake_envelopes
+            WHERE organization_id = $1 AND source_type = 'MANUAL_UPLOAD'
+              AND source_event_id = $2
+            FOR UPDATE`,
+          [context.organizationId, `manual:${sourceEventId}`],
+        );
+        const envelope = requireRow(envelopeResult.rows[0], 'intake envelope');
+        if (envelope.payload_hash !== payloadHash) {
+          await database.query(
+            `UPDATE opes.intake_envelopes
+                SET status = 'QUARANTINED',
+                    quarantine_reason = 'SOURCE_EVENT_PAYLOAD_MISMATCH',
+                    updated_at = now()
+              WHERE organization_id = $1 AND id = $2`,
+            [context.organizationId, envelope.id],
+          );
+          return { conflict: true as const, document: null };
+        }
+
+        if (envelope.document_id !== null) {
+          const existing = await selectEvidenceDocument(
+            database,
+            context.organizationId,
+            envelope.document_id,
+          );
+          return {
+            conflict: false as const,
+            document: requireRow(existing, 'evidence document'),
+          };
+        }
+
+        const duplicate = await database.query<EvidenceDocumentRow>(
+          `SELECT id, document_type, filename, content_type, size_bytes,
+                  sha256_hex, storage_key, status, metadata
+             FROM opes.evidence_documents
+            WHERE organization_id = $1 AND sha256_hex = $2
+            LIMIT 1`,
+          [context.organizationId, sha256Hex],
+        );
+        const duplicateDocument = duplicate.rows[0];
+        if (duplicateDocument !== undefined) {
+          await database.query(
+            `UPDATE opes.intake_envelopes
+                SET document_id = $3, status = 'QUARANTINED',
+                    quarantine_reason = 'EXACT_DOCUMENT_DUPLICATE',
+                    updated_at = now()
+              WHERE organization_id = $1 AND id = $2`,
+            [context.organizationId, envelope.id, duplicateDocument.id],
+          );
+          return { conflict: true as const, document: null };
+        }
+        const inserted = await database.query<EvidenceDocumentRow>(
+          `INSERT INTO opes.evidence_documents (
+               organization_id, document_type, filename, content_type,
+               size_bytes, sha256_hex, storage_key, metadata,
+               created_by_membership_id
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+             ON CONFLICT (organization_id, sha256_hex) DO NOTHING
+             RETURNING id, document_type, filename, content_type, size_bytes,
+                       sha256_hex, storage_key, status, metadata`,
           [
             context.organizationId,
             documentType,
@@ -439,16 +520,51 @@ export class EvidenceService {
             JSON.stringify(input.metadata ?? {}),
             context.membershipId,
           ],
-        ),
-      );
+        );
+        const document = inserted.rows[0];
+        if (document === undefined) {
+          const concurrentDuplicate = requireRow(
+            await selectEvidenceDocumentByHash(
+              database,
+              context.organizationId,
+              sha256Hex,
+            ),
+            'concurrent evidence document',
+          );
+          await database.query(
+            `UPDATE opes.intake_envelopes
+                SET document_id = $3, status = 'QUARANTINED',
+                    quarantine_reason = 'EXACT_DOCUMENT_DUPLICATE',
+                    updated_at = now()
+              WHERE organization_id = $1 AND id = $2`,
+            [context.organizationId, envelope.id, concurrentDuplicate.id],
+          );
+          return { conflict: true as const, document: null };
+        }
+        await database.query(
+          `UPDATE opes.intake_envelopes
+              SET document_id = $3,
+                  status = CASE WHEN $4 = 'VERIFIED' THEN 'VERIFIED' ELSE 'STAGED' END,
+                  updated_at = now()
+            WHERE organization_id = $1 AND id = $2`,
+          [context.organizationId, envelope.id, document.id, document.status],
+        );
+        await audit(
+          database,
+          context,
+          'evidence.intake_recorded',
+          'evidence_document',
+          document.id,
+          { envelopeId: envelope.id, sourceType: 'MANUAL_UPLOAD' },
+        );
+        return { conflict: false as const, document };
+      },
+    );
 
-      return mapDocument(requireRow(result.rows[0], 'evidence document'));
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        throw new ConflictException('Evidence document hash already exists');
-      }
-      throw error;
+    if (recorded.conflict) {
+      throw new ConflictException('Intake event was quarantined');
     }
+    return mapDocument(recorded.document);
   }
 
   async recordDocumentExtraction(
@@ -570,6 +686,38 @@ async function requireDocument(
   if (result.rows[0] === undefined) {
     throw new NotFoundException('Evidence document not found');
   }
+}
+
+async function selectEvidenceDocument(
+  database: TenantDatabase,
+  organizationId: string,
+  documentId: string,
+): Promise<EvidenceDocumentRow | undefined> {
+  const result = await database.query<EvidenceDocumentRow>(
+    `SELECT id, document_type, filename, content_type, size_bytes,
+            sha256_hex, storage_key, status, metadata
+       FROM opes.evidence_documents
+      WHERE organization_id = $1 AND id = $2
+      LIMIT 1`,
+    [organizationId, documentId],
+  );
+  return result.rows[0];
+}
+
+async function selectEvidenceDocumentByHash(
+  database: TenantDatabase,
+  organizationId: string,
+  sha256Hex: string,
+): Promise<EvidenceDocumentRow | undefined> {
+  const result = await database.query<EvidenceDocumentRow>(
+    `SELECT id, document_type, filename, content_type, size_bytes,
+            sha256_hex, storage_key, status, metadata
+       FROM opes.evidence_documents
+      WHERE organization_id = $1 AND sha256_hex = $2
+      LIMIT 1`,
+    [organizationId, sha256Hex],
+  );
+  return result.rows[0];
 }
 
 async function audit(
@@ -720,15 +868,6 @@ function containsMutatingToolRequest(value: unknown): boolean {
   return Object.entries(value as Record<string, unknown>).some(
     ([key, child]) =>
       MUTATING_EXTRACTION_KEYS.has(key) || containsMutatingToolRequest(child),
-  );
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    error.code === '23505'
   );
 }
 

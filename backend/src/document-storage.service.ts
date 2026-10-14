@@ -20,6 +20,7 @@ export interface InitiateDocumentUploadRequest {
   contentType: string;
   sizeBytes: number;
   sha256Hex: string;
+  sourceEventId?: string;
   metadata?: unknown;
 }
 
@@ -57,15 +58,23 @@ export class DocumentStorageService {
     if (!this.bucket.isConfigured())
       throw new ConflictException('Railway Bucket is not configured');
     const stagingKey = `staging/${context.organizationId}/${randomUUID()}`;
-    const upload = await this.bucket.createUploadUrl(
-      stagingKey,
-      input.contentType.toLowerCase(),
-      input.sha256Hex.toLowerCase(),
-    );
     const document = await this.evidence.recordEvidenceDocument(context, {
       ...input,
       storageKey: stagingKey,
     });
+    if (document.status === 'VERIFIED') {
+      return {
+        document,
+        uploadUrl: '',
+        uploadHeaders: {},
+        expiresAt: new Date().toISOString(),
+      };
+    }
+    const upload = await this.bucket.createUploadUrl(
+      document.storageKey,
+      document.contentType,
+      document.sha256Hex,
+    );
     return {
       document,
       uploadUrl: upload.url,
@@ -96,15 +105,25 @@ export class DocumentStorageService {
 
     const finalKey = `documents/${context.organizationId}/${document.id}/${document.sha256_hex}`;
     await this.bucket.finalize(document.storage_key, finalKey);
-    const finalized = await this.database.withTenant(context, (database) =>
-      database.query<DocumentRow>(
-        `UPDATE opes.evidence_documents
+    const finalized = await this.database.withTenant(
+      context,
+      async (database) => {
+        const result = await database.query<DocumentRow>(
+          `UPDATE opes.evidence_documents
             SET storage_key = $3, status = 'VERIFIED', finalized_at = now(), updated_at = now()
           WHERE organization_id = $1 AND id = $2 AND status = 'STAGING'
           RETURNING id, document_type, filename, content_type, size_bytes,
             sha256_hex, storage_key, status, metadata`,
-        [context.organizationId, document.id, finalKey],
-      ),
+          [context.organizationId, document.id, finalKey],
+        );
+        await database.query(
+          `UPDATE opes.intake_envelopes
+            SET status = 'VERIFIED', updated_at = now()
+          WHERE organization_id = $1 AND document_id = $2`,
+          [context.organizationId, document.id],
+        );
+        return result;
+      },
     );
     const row = finalized.rows[0];
     if (!row)

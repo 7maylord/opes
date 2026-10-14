@@ -430,10 +430,12 @@ export async function uploadEvidenceDocument(
         contentType: input.file.type,
         sizeBytes: input.file.size,
         sha256Hex,
+        sourceEventId: sha256Hex,
         metadata: input.metadata,
       }),
     },
   );
+  if (initiated.document.status === "VERIFIED") return initiated.document;
   const uploaded = await fetch(initiated.uploadUrl, {
     method: "PUT",
     headers: initiated.uploadHeaders,
