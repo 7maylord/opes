@@ -10,7 +10,7 @@ import { TenantContext } from './tenant-context';
 export interface PaymentExecutionResponse {
   id: string;
   decisionId: string;
-  approvalId: string;
+  approvalId: string | null;
   sourceVersionId: string;
   decisionHash: string;
   idempotencyKey: string;
@@ -33,7 +33,7 @@ export interface PaymentExecutionResponse {
 
 interface ExecutionCandidateRow {
   decision_id: string;
-  approval_id: string;
+  approval_id: string | null;
   source_version_id: string;
   derived_action: string;
   route_environment: string;
@@ -42,9 +42,9 @@ interface ExecutionCandidateRow {
   amount_atomic: string;
   destination_address: string;
   decision_context_hash: string;
-  approval_context_hash: string;
-  approval_amount_atomic: string;
-  approval_destination_address: string;
+  approval_context_hash: string | null;
+  approval_amount_atomic: string | null;
+  approval_destination_address: string | null;
   decision_hash: string | null;
   obligation_key: string;
   obligation_status: string;
@@ -53,7 +53,8 @@ interface ExecutionCandidateRow {
   reservation_status: string;
   checks: Array<{ status: string }>;
   decision_expires_at: Date;
-  approval_expires_at: Date;
+  approval_expires_at: Date | null;
+  policy_is_active: boolean;
   vault_address: string | null;
   destination_wallet_id: string | null;
   destination_wallet_address: string | null;
@@ -64,7 +65,7 @@ interface ExecutionCandidateRow {
 interface ExecutionRow {
   id: string;
   decision_id: string;
-  approval_id: string;
+  approval_id: string | null;
   source_version_id: string;
   decision_hash: string;
   idempotency_key: string;
@@ -96,6 +97,11 @@ export class PaymentExecutionService {
     requireExecutionRole(context);
 
     return this.database.withTenant(context, async (database) => {
+      await database.query(
+        `SELECT organization_id FROM opes.treasury_settings
+         WHERE organization_id=$1 FOR UPDATE`,
+        [context.organizationId],
+      );
       const candidate = await getExecutionCandidate(
         database,
         context.organizationId,
@@ -156,16 +162,20 @@ async function getExecutionCandidate(
         reservation.status AS reservation_status,
         decision.expires_at AS decision_expires_at,
         approval.expires_at AS approval_expires_at,
+        policy.status='ACTIVE' AS policy_is_active,
         vault.address AS vault_address
         , wallet.resource_id AS destination_wallet_id
         , wallet.address AS destination_wallet_address
         , liquidity.id AS liquidity_action_id
         , liquidity.max_source_debit_atomic
       FROM opes.payment_decisions AS decision
-      JOIN opes.payment_decision_approvals AS approval
+      LEFT JOIN opes.payment_decision_approvals AS approval
         ON approval.organization_id = decision.organization_id
        AND approval.decision_id = decision.id
        AND approval.status = 'ACTIVE'
+      JOIN opes.payment_policy_versions AS policy
+        ON policy.organization_id=decision.organization_id
+       AND policy.id=decision.policy_version_id
       JOIN opes.payable_obligations AS obligation
         ON obligation.organization_id = decision.organization_id
        AND obligation.id = decision.source_id
@@ -216,7 +226,7 @@ async function getExecutionCandidate(
 
   const row = result.rows[0];
   if (row === undefined) {
-    throw new NotFoundException('Approved payment decision not found');
+    throw new NotFoundException('Executable payment decision not found');
   }
   return row;
 }
@@ -231,13 +241,22 @@ function assertExecutable(candidate: ExecutionCandidateRow): void {
   }
   if (candidate.reservation_status !== 'ACTIVE')
     throw new ConflictException('Treasury reservation is not active');
-  if (candidate.derived_action !== 'PAY') {
-    throw new ConflictException('Only payable decisions can be executed');
-  }
+  if (!candidate.policy_is_active)
+    throw new ConflictException('Decision policy is no longer active');
+  const requiresApproval = candidate.derived_action === 'ESCALATE';
+  if (candidate.derived_action !== 'PAY' && !requiresApproval)
+    throw new ConflictException(
+      'Only authorized payment decisions can be executed',
+    );
+  if (requiresApproval && candidate.approval_id === null)
+    throw new ConflictException('Payment decision requires human approval');
   if (candidate.decision_expires_at.getTime() <= Date.now()) {
     throw new ConflictException('Payment decision is expired');
   }
-  if (candidate.approval_expires_at.getTime() <= Date.now()) {
+  if (
+    candidate.approval_expires_at !== null &&
+    candidate.approval_expires_at.getTime() <= Date.now()
+  ) {
     throw new ConflictException('Payment approval is expired');
   }
   if (candidate.checks.some((item) => item.status === 'BLOCK')) {
@@ -256,10 +275,11 @@ function assertExecutable(candidate: ExecutionCandidateRow): void {
     throw new ConflictException('Payment route is not executable');
   }
   if (
-    candidate.approval_context_hash !== candidate.decision_context_hash ||
-    candidate.approval_amount_atomic !== candidate.amount_atomic ||
-    candidate.approval_destination_address.toLowerCase() !==
-      candidate.destination_address.toLowerCase()
+    candidate.approval_id !== null &&
+    (candidate.approval_context_hash !== candidate.decision_context_hash ||
+      candidate.approval_amount_atomic !== candidate.amount_atomic ||
+      candidate.approval_destination_address?.toLowerCase() !==
+        candidate.destination_address.toLowerCase())
   ) {
     throw new ConflictException('Payment approval no longer matches decision');
   }

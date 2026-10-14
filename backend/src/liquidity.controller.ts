@@ -17,6 +17,8 @@ import type {
   LiquidityActionResponse,
   TreasuryPositionResponse,
   TreasurySettingsRequest,
+  PaymentPolicyRequest,
+  PaymentPolicyResponse,
 } from './liquidity.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
@@ -87,6 +89,21 @@ export class LiquidityController {
       correlationId,
     );
     return this.liquidity.configureTreasury(context, body);
+  }
+
+  @Put('treasury/policy')
+  async configurePaymentPolicy(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: PaymentPolicyRequest,
+  ): Promise<PaymentPolicyResponse> {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.liquidity.configurePaymentPolicy(context, body);
   }
 
   private async resolveContext(

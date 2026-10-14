@@ -13,6 +13,7 @@ import {
   ChainRoutePoint,
   baseUsdcToUsdtSwapRouteDetails,
   cctpRouteDetails,
+  evaluatePaymentRoute,
   evaluateLiquidityAction,
   gatewayRouteDetails,
   supportedNetworks,
@@ -81,9 +82,34 @@ export interface TreasurySettingsRequest {
   maxSnapshotAgeSeconds?: number;
 }
 
+export interface PaymentPolicyRequest {
+  autonomousLimitAtomic: string;
+  singlePaymentLimitAtomic: string;
+  vendorDailyLimitAtomic: string;
+  organizationDailyLimitAtomic: string;
+  monthlyBudgetAtomic?: string | null;
+  operatingBufferAtomic: string;
+  allowedRoutes: Array<{
+    liquidityRoute: 'OPERATING' | 'GATEWAY' | 'CCTP';
+    environment: string;
+    chainId: number;
+    assetSymbol: string;
+  }>;
+  allowedAssets: string[];
+}
+
+export interface PaymentPolicyResponse extends PaymentPolicyRequest {
+  id: string;
+  version: number;
+  status: 'ACTIVE';
+}
+
 export interface TreasuryAvailability {
   ready: boolean;
   availableAtomic: bigint;
+  operatingAvailableAtomic: bigint;
+  monthlyBudgetRemainingAtomic: bigint | null;
+  operatingBufferAtomic: bigint;
   snapshotStatus: TreasuryPositionResponse['snapshotStatus'];
 }
 
@@ -328,9 +354,9 @@ export class LiquidityService {
     context: TenantContext,
     input: TreasurySettingsRequest,
   ): Promise<TreasuryPositionResponse> {
-    if (context.role !== 'OWNER' && context.role !== 'ADMIN')
+    if (context.role !== 'OWNER')
       throw new ForbiddenException(
-        'Only owners and admins can configure treasury controls',
+        'Only owners can configure treasury controls',
       );
     const buffer = requireAtomic(input.operatingBufferAtomic, true);
     const budget =
@@ -363,11 +389,245 @@ export class LiquidityService {
           context.membershipId,
         ],
       );
+      await database.query(
+        `INSERT INTO opes.payment_policy_versions (
+           organization_id,version,autonomous_limit_atomic,
+           single_payment_limit_atomic,vendor_daily_limit_atomic,
+           organization_daily_limit_atomic,monthly_budget_atomic,
+           operating_buffer_atomic,allowed_routes,allowed_assets,
+           created_by_membership_id
+         )
+         SELECT $1,1,1000000000,10000000000,25000000000,100000000000,
+                $2,$3,
+                '["OPERATING:arc-testnet:5042002:USDC","CCTP:base-sepolia:84532:USDC","GATEWAY:base-sepolia:84532:USDC"]'::jsonb,
+                '["USDC"]'::jsonb,$4
+         WHERE NOT EXISTS (
+           SELECT 1 FROM opes.payment_policy_versions
+           WHERE organization_id=$1
+         )`,
+        [
+          context.organizationId,
+          budget?.toString() ?? null,
+          buffer.toString(),
+          context.membershipId,
+        ],
+      );
+      const currentPolicy = await database.query<{
+        id: string;
+        monthly_budget_atomic: string | null;
+        operating_buffer_atomic: string;
+      }>(
+        `SELECT id,monthly_budget_atomic::text,operating_buffer_atomic::text
+         FROM opes.payment_policy_versions
+         WHERE organization_id=$1 AND status='ACTIVE'`,
+        [context.organizationId],
+      );
+      const current = requireRow(
+        currentPolicy.rows[0],
+        'active payment policy',
+      );
+      if (
+        current.monthly_budget_atomic !== (budget?.toString() ?? null) ||
+        current.operating_buffer_atomic !== buffer.toString()
+      ) {
+        await database.query(
+          `UPDATE opes.payment_policy_versions SET status='SUPERSEDED'
+           WHERE organization_id=$1 AND status='ACTIVE'`,
+          [context.organizationId],
+        );
+        const replacement = await database.query<{ id: string }>(
+          `INSERT INTO opes.payment_policy_versions (
+             organization_id,version,autonomous_limit_atomic,
+             single_payment_limit_atomic,vendor_daily_limit_atomic,
+             organization_daily_limit_atomic,monthly_budget_atomic,
+             operating_buffer_atomic,allowed_routes,allowed_assets,
+             created_by_membership_id
+           )
+           SELECT organization_id,
+                  (SELECT max(version)+1 FROM opes.payment_policy_versions WHERE organization_id=$1),
+                  autonomous_limit_atomic,single_payment_limit_atomic,
+                  vendor_daily_limit_atomic,organization_daily_limit_atomic,
+                  $2,$3,allowed_routes,allowed_assets,$4
+           FROM opes.payment_policy_versions WHERE id=$5
+           RETURNING id`,
+          [
+            context.organizationId,
+            budget?.toString() ?? null,
+            buffer.toString(),
+            context.membershipId,
+            current.id,
+          ],
+        );
+        await invalidateOldPolicyAuthorizations(
+          database,
+          context.organizationId,
+          requireRow(replacement.rows[0], 'replacement payment policy').id,
+        );
+      }
       return mapTreasuryPosition(
         await readTreasuryPosition(database, context.organizationId, false),
       );
     });
   }
+
+  async configurePaymentPolicy(
+    context: TenantContext,
+    input: PaymentPolicyRequest,
+  ): Promise<PaymentPolicyResponse> {
+    if (context.role !== 'OWNER')
+      throw new ForbiddenException('Only owners can configure payment policy');
+    const autonomous = requireAtomic(input.autonomousLimitAtomic, false);
+    const single = requireAtomic(input.singlePaymentLimitAtomic, false);
+    if (autonomous > single)
+      throw new BadRequestException(
+        'autonomousLimitAtomic cannot exceed singlePaymentLimitAtomic',
+      );
+    const vendorDaily = requireAtomic(input.vendorDailyLimitAtomic, false);
+    const organizationDaily = requireAtomic(
+      input.organizationDailyLimitAtomic,
+      false,
+    );
+    const budget =
+      input.monthlyBudgetAtomic === null ||
+      input.monthlyBudgetAtomic === undefined
+        ? null
+        : requireAtomic(input.monthlyBudgetAtomic, false);
+    const buffer = requireAtomic(input.operatingBufferAtomic, true);
+    const routes = validatePolicyRoutes(input.allowedRoutes);
+    const assets = validatePolicyAssets(input.allowedAssets);
+
+    return this.database.withTenant(context, async (database) => {
+      const locked = await database.query<{ max_snapshot_age_seconds: number }>(
+        `SELECT max_snapshot_age_seconds FROM opes.treasury_settings
+         WHERE organization_id=$1 FOR UPDATE`,
+        [context.organizationId],
+      );
+      if (locked.rows[0] === undefined)
+        throw new ConflictException('Configure treasury settings first');
+      const version = await database.query<{ version: number }>(
+        `SELECT COALESCE(MAX(version),0)+1 AS version
+         FROM opes.payment_policy_versions WHERE organization_id=$1`,
+        [context.organizationId],
+      );
+      await database.query(
+        `UPDATE opes.payment_policy_versions SET status='SUPERSEDED'
+         WHERE organization_id=$1 AND status='ACTIVE'`,
+        [context.organizationId],
+      );
+      const inserted = await database.query<{
+        id: string;
+        version: number;
+        status: 'ACTIVE';
+      }>(
+        `INSERT INTO opes.payment_policy_versions (
+           organization_id,version,autonomous_limit_atomic,
+           single_payment_limit_atomic,vendor_daily_limit_atomic,
+           organization_daily_limit_atomic,monthly_budget_atomic,
+           operating_buffer_atomic,allowed_routes,allowed_assets,
+           created_by_membership_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11)
+         RETURNING id,version,status`,
+        [
+          context.organizationId,
+          version.rows[0]?.version ?? 1,
+          autonomous.toString(),
+          single.toString(),
+          vendorDaily.toString(),
+          organizationDaily.toString(),
+          budget?.toString() ?? null,
+          buffer.toString(),
+          JSON.stringify(routes),
+          JSON.stringify(assets),
+          context.membershipId,
+        ],
+      );
+      await database.query(
+        `UPDATE opes.treasury_settings SET
+           operating_buffer_atomic=$2,monthly_budget_atomic=$3,
+           updated_by_membership_id=$4,updated_at=now()
+         WHERE organization_id=$1`,
+        [
+          context.organizationId,
+          buffer.toString(),
+          budget?.toString() ?? null,
+          context.membershipId,
+        ],
+      );
+      const row = requireRow(inserted.rows[0], 'payment policy');
+      await invalidateOldPolicyAuthorizations(
+        database,
+        context.organizationId,
+        row.id,
+      );
+      return {
+        id: row.id,
+        version: row.version,
+        status: row.status,
+        autonomousLimitAtomic: autonomous.toString(),
+        singlePaymentLimitAtomic: single.toString(),
+        vendorDailyLimitAtomic: vendorDaily.toString(),
+        organizationDailyLimitAtomic: organizationDaily.toString(),
+        monthlyBudgetAtomic: budget?.toString() ?? null,
+        operatingBufferAtomic: buffer.toString(),
+        allowedRoutes: input.allowedRoutes,
+        allowedAssets: assets,
+      };
+    });
+  }
+}
+
+async function invalidateOldPolicyAuthorizations(
+  database: TenantDatabase,
+  organizationId: string,
+  activePolicyId: string,
+): Promise<void> {
+  await database.query(
+    `UPDATE opes.payment_decision_approvals approval SET status='REVOKED'
+     FROM opes.payment_decisions decision
+     WHERE approval.organization_id=$1 AND approval.status='ACTIVE'
+       AND decision.organization_id=approval.organization_id
+       AND decision.id=approval.decision_id
+       AND decision.policy_version_id IS DISTINCT FROM $2`,
+    [organizationId, activePolicyId],
+  );
+  await database.query(
+    `UPDATE opes.treasury_reservations reservation
+     SET status='RELEASED',updated_at=now()
+     FROM opes.payment_decisions decision
+     WHERE reservation.organization_id=$1 AND reservation.status='ACTIVE'
+       AND decision.organization_id=reservation.organization_id
+       AND decision.id=reservation.decision_id
+       AND decision.policy_version_id IS DISTINCT FROM $2`,
+    [organizationId, activePolicyId],
+  );
+}
+
+function validatePolicyRoutes(
+  routes: PaymentPolicyRequest['allowedRoutes'],
+): string[] {
+  if (!Array.isArray(routes) || routes.length === 0)
+    throw new BadRequestException('allowedRoutes must not be empty');
+  return [
+    ...new Set(
+      routes.map((route) => {
+        if (!evaluatePaymentRoute(route).executable)
+          throw new BadRequestException(
+            'allowedRoutes contains an unsupported route',
+          );
+        return `${route.liquidityRoute}:${route.environment}:${route.chainId}:${route.assetSymbol.toUpperCase()}`;
+      }),
+    ),
+  ];
+}
+
+function validatePolicyAssets(assets: string[]): string[] {
+  if (!Array.isArray(assets) || assets.length === 0)
+    throw new BadRequestException('allowedAssets must not be empty');
+  return [
+    ...new Set(
+      assets.map((asset) => requireText(asset, 'allowedAssets').toUpperCase()),
+    ),
+  ];
 }
 
 async function buildProviderPayload(
@@ -782,6 +1042,16 @@ export async function readTreasuryAvailability(
   return {
     ready: position.authorizationReady,
     availableAtomic: BigInt(position.availableLiquidityAtomic),
+    operatingAvailableAtomic:
+      BigInt(position.operatingBalanceAtomic) -
+      BigInt(position.reservedAtomic) -
+      BigInt(position.approvedUnsettledPaymentAtomic) -
+      BigInt(position.operatingBufferAtomic),
+    monthlyBudgetRemainingAtomic:
+      position.monthlyBudgetRemainingAtomic === null
+        ? null
+        : BigInt(position.monthlyBudgetRemainingAtomic),
+    operatingBufferAtomic: BigInt(position.operatingBufferAtomic),
     snapshotStatus: position.snapshotStatus,
   };
 }

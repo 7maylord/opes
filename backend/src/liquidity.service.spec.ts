@@ -142,6 +142,57 @@ describe('LiquidityService', () => {
     }
   });
 
+  it('versions policy and invalidates authorizations bound to older policy', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [{ max_snapshot_age_seconds: 300 }] })
+      .mockResolvedValueOnce({ rows: [{ version: 2 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: '55555555-5555-5555-5555-555555555555',
+            version: 2,
+            status: 'ACTIVE',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const service = serviceWithQuery(query);
+
+    await expect(
+      service.configurePaymentPolicy(context, {
+        autonomousLimitAtomic: '1000000000',
+        singlePaymentLimitAtomic: '10000000000',
+        vendorDailyLimitAtomic: '25000000000',
+        organizationDailyLimitAtomic: '100000000000',
+        monthlyBudgetAtomic: '5000000000',
+        operatingBufferAtomic: '100000000',
+        allowedRoutes: [
+          {
+            liquidityRoute: 'OPERATING',
+            environment: 'arc-testnet',
+            chainId: 5042002,
+            assetSymbol: 'USDC',
+          },
+        ],
+        allowedAssets: ['USDC'],
+      }),
+    ).resolves.toMatchObject({ version: 2, status: 'ACTIVE' });
+    expect(query).toHaveBeenNthCalledWith(
+      6,
+      expect.stringContaining("status='REVOKED'"),
+      [context.organizationId, '55555555-5555-5555-5555-555555555555'],
+    );
+    expect(query).toHaveBeenNthCalledWith(
+      7,
+      expect.stringContaining("status='RELEASED'"),
+      [context.organizationId, '55555555-5555-5555-5555-555555555555'],
+    );
+  });
+
   it('plans a deterministic sandbox CCTP liquidity action once', async () => {
     process.env.NODE_ENV = 'test';
     process.env.OPES_LIQUIDITY_SANDBOX = 'true';

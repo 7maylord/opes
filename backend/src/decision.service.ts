@@ -23,8 +23,6 @@ import { TenantContext } from './tenant-context';
 type DecisionAction = 'PAY' | 'DELAY' | 'ESCALATE' | 'REJECT';
 type CheckStatus = 'PASS' | 'BLOCK' | 'REQUIRES_APPROVAL';
 
-const MAX_AUTONOMOUS_USDC_ATOMIC = 1_000_000_000n;
-const ROUTE_POLICY_VERSION = 'b9-route-policy-v1';
 const ARC_TESTNET_USDC = factoryManifest.token;
 
 export interface EvaluateInvoiceDecisionRequest {
@@ -46,6 +44,7 @@ export interface DecisionCheckResponse {
   code: string;
   status: CheckStatus;
   message: string;
+  evidence: Record<string, string | number | boolean | null>;
 }
 
 export interface DecisionApprovalResponse {
@@ -102,6 +101,28 @@ interface InvoiceVersionRow {
   address_status: string;
   payout_address: string;
   address_version: number;
+  evidence_match_id: string;
+  governing_evidence_version_id: string;
+  delivery_evidence_version_id: string;
+  governing_total_atomic: string;
+  governing_used_atomic: string;
+}
+
+interface PolicyRow {
+  id: string;
+  version: number;
+  autonomous_limit_atomic: string;
+  single_payment_limit_atomic: string;
+  vendor_daily_limit_atomic: string;
+  organization_daily_limit_atomic: string;
+  monthly_budget_atomic: string | null;
+  operating_buffer_atomic: string;
+  allowed_routes: string[];
+  allowed_assets: string[];
+  organization_status: string;
+  agent_status: string;
+  vendor_daily_committed_atomic: string;
+  organization_daily_committed_atomic: string;
 }
 
 interface BindingRow {
@@ -144,6 +165,8 @@ interface DecisionRow {
   context_hash: string;
   decision_hash: string | null;
   checks: DecisionCheckResponse[];
+  policy_version_id: string | null;
+  policy_is_active: boolean;
   expires_at: Date;
 }
 
@@ -159,6 +182,11 @@ export class DecisionService {
     const targetDecisionId = requireUuid(decisionId, 'decisionId');
 
     return this.database.withTenant(context, async (database) => {
+      await database.query(
+        `SELECT organization_id FROM opes.treasury_settings
+         WHERE organization_id=$1 FOR UPDATE`,
+        [context.organizationId],
+      );
       const decision = await getDecision(
         database,
         context.organizationId,
@@ -173,6 +201,21 @@ export class DecisionService {
       if (decision.checks.some((item) => item.status === 'BLOCK')) {
         throw new ConflictException('Blocked decisions cannot be approved');
       }
+      if (!decision.policy_is_active)
+        throw new ConflictException('Decision policy is no longer active');
+
+      const treasury = await readTreasuryAvailability(
+        database,
+        context.organizationId,
+        false,
+      );
+      if (
+        !treasury.ready ||
+        BigInt(decision.amount_atomic) > treasury.availableAtomic
+      )
+        throw new ConflictException(
+          'Available liquidity no longer covers the payment',
+        );
 
       const inserted = await database.query<ApprovalRow>(
         `
@@ -217,6 +260,22 @@ export class DecisionService {
         ],
       );
 
+      await database.query(
+        `INSERT INTO opes.treasury_reservations
+          (organization_id,decision_id,source_version_id,amount_atomic,expires_at)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (organization_id,decision_id) DO UPDATE SET
+           status='ACTIVE',expires_at=EXCLUDED.expires_at,updated_at=now()
+         WHERE opes.treasury_reservations.status IN ('RELEASED','EXPIRED')`,
+        [
+          context.organizationId,
+          decision.id,
+          decision.source_version_id,
+          decision.amount_atomic,
+          decision.expires_at.toISOString(),
+        ],
+      );
+
       return mapApproval(requireRow(inserted.rows[0], 'decision approval'));
     });
   }
@@ -256,12 +315,18 @@ export class DecisionService {
         context.organizationId,
         true,
       );
+      const policy = await getActivePolicy(
+        database,
+        context.organizationId,
+        invoice.vendor_id,
+      );
       const checks = buildChecks(
         invoice,
         vaultBinding,
         route,
         modelAction,
         treasury,
+        policy,
       );
       const derivedAction = deriveAction(modelAction, checks);
       const evidenceBundleHash = hashStable({
@@ -270,11 +335,7 @@ export class DecisionService {
         evidenceDocumentId: invoice.evidence_document_id,
         extractionId: invoice.extraction_id,
       });
-      const policySnapshot = {
-        policyVersion: 'b6-static-v1',
-        maxAutonomousUsdcAtomic: MAX_AUTONOMOUS_USDC_ATOMIC.toString(),
-        routePolicyVersion: ROUTE_POLICY_VERSION,
-      };
+      const policySnapshot = policySnapshotOf(policy);
       const policySnapshotHash = hashStable(policySnapshot);
       const decisionVersion = await nextDecisionVersion(
         database,
@@ -353,13 +414,14 @@ export class DecisionService {
             model_rationale,
             prompt_version,
             evidence_check_version,
+            policy_version_id,
             expires_at,
             created_by_membership_id
           )
           VALUES (
             $1, 'INVOICE', $2, $3, $4, 'DIRECT', $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19::jsonb, $20, $21,
-            $22, 'b6-static-v1', $23, $24
+            $22, 'f6-versioned-v1', $23, $24, $25
           )
           RETURNING
             id,
@@ -406,6 +468,7 @@ export class DecisionService {
           modelName,
           modelRationale,
           promptVersion,
+          policy.id,
           expiresAt,
           context.membershipId,
         ],
@@ -457,6 +520,13 @@ async function getDecision(
         context_hash,
         decision_hash,
         checks,
+        policy_version_id,
+        EXISTS (
+          SELECT 1 FROM opes.payment_policy_versions policy
+          WHERE policy.organization_id=payment_decisions.organization_id
+            AND policy.id=payment_decisions.policy_version_id
+            AND policy.status='ACTIVE'
+        ) AS policy_is_active,
         expires_at
       FROM opes.payment_decisions
       WHERE organization_id = $1
@@ -466,6 +536,76 @@ async function getDecision(
     [organizationId, decisionId],
   );
   return requireRow(result.rows[0], 'payment decision');
+}
+
+async function getActivePolicy(
+  database: TenantDatabase,
+  organizationId: string,
+  vendorId: string,
+): Promise<PolicyRow> {
+  const result = await database.query<PolicyRow>(
+    `SELECT policy.id,policy.version,
+            policy.autonomous_limit_atomic::text,
+            policy.single_payment_limit_atomic::text,
+            policy.vendor_daily_limit_atomic::text,
+            policy.organization_daily_limit_atomic::text,
+            policy.monthly_budget_atomic::text,
+            policy.operating_buffer_atomic::text,
+            policy.allowed_routes,policy.allowed_assets,
+            organization.lifecycle_status AS organization_status,
+            agent.lifecycle_status AS agent_status,
+            (COALESCE((SELECT sum(execution.amount_atomic)
+               FROM opes.payment_executions execution
+               JOIN opes.payment_decisions decision
+                 ON decision.organization_id=execution.organization_id
+                AND decision.id=execution.decision_id
+              WHERE execution.organization_id=$1
+                AND decision.vendor_id=$2
+                AND execution.status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN','CONFIRMED')
+                AND execution.requested_at>=date_trunc('day',now())),0)
+             + COALESCE((SELECT sum(reservation.amount_atomic)
+               FROM opes.treasury_reservations reservation
+               JOIN opes.payment_decisions decision
+                 ON decision.organization_id=reservation.organization_id
+                AND decision.id=reservation.decision_id
+              WHERE reservation.organization_id=$1
+                AND decision.vendor_id=$2 AND reservation.status='ACTIVE'
+                AND reservation.expires_at>now()),0))::text
+              AS vendor_daily_committed_atomic,
+            (COALESCE((SELECT sum(amount_atomic)
+               FROM opes.payment_executions
+              WHERE organization_id=$1
+                AND status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN','CONFIRMED')
+                AND requested_at>=date_trunc('day',now())),0)
+             + COALESCE((SELECT sum(amount_atomic)
+               FROM opes.treasury_reservations
+              WHERE organization_id=$1 AND status='ACTIVE'
+                AND expires_at>now()),0))::text
+              AS organization_daily_committed_atomic
+       FROM opes.payment_policy_versions policy
+       JOIN opes.organizations organization ON organization.id=policy.organization_id
+       JOIN opes.business_agents agent
+         ON agent.organization_id=policy.organization_id AND agent.is_primary
+      WHERE policy.organization_id=$1 AND policy.status='ACTIVE'
+      LIMIT 1`,
+    [organizationId, vendorId],
+  );
+  return requireRow(result.rows[0], 'active payment policy');
+}
+
+function policySnapshotOf(policy: PolicyRow) {
+  return {
+    id: policy.id,
+    version: policy.version,
+    autonomousLimitAtomic: policy.autonomous_limit_atomic,
+    singlePaymentLimitAtomic: policy.single_payment_limit_atomic,
+    vendorDailyLimitAtomic: policy.vendor_daily_limit_atomic,
+    organizationDailyLimitAtomic: policy.organization_daily_limit_atomic,
+    monthlyBudgetAtomic: policy.monthly_budget_atomic,
+    operatingBufferAtomic: policy.operating_buffer_atomic,
+    allowedRoutes: policy.allowed_routes,
+    allowedAssets: policy.allowed_assets,
+  };
 }
 
 async function getInvoiceVersion(
@@ -493,6 +633,11 @@ async function getInvoiceVersion(
         address.status AS address_status,
         address.payout_address,
         address.version AS address_version
+        , evidence_match.id AS evidence_match_id
+        , evidence_match.governing_evidence_version_id
+        , evidence_match.delivery_evidence_version_id
+        , COALESCE(governing.total_amount_atomic,0)::text AS governing_total_atomic
+        , COALESCE(evidence_match.calculation_snapshot->>'governingUsedAtomic','0') AS governing_used_atomic
       FROM opes.payable_obligation_versions AS version
       JOIN opes.payable_obligations AS obligation
         ON obligation.organization_id = version.organization_id
@@ -503,16 +648,17 @@ async function getInvoiceVersion(
       JOIN opes.vendor_payout_addresses AS address
         ON address.organization_id = version.organization_id
        AND address.id = version.vendor_address_id
+      JOIN opes.payable_evidence_matches evidence_match
+        ON evidence_match.organization_id=version.organization_id
+       AND evidence_match.invoice_version_id=version.id
+       AND evidence_match.status='PASS'
+      JOIN opes.procurement_evidence_versions governing
+        ON governing.organization_id=evidence_match.organization_id
+       AND governing.id=evidence_match.governing_evidence_version_id
       WHERE version.organization_id = $1
         AND version.id = $2
         AND version.status = 'ACCEPTED'
         AND obligation.status = 'ACCEPTED'
-        AND EXISTS (
-          SELECT 1 FROM opes.payable_evidence_matches evidence_match
-          WHERE evidence_match.organization_id = version.organization_id
-            AND evidence_match.invoice_version_id = version.id
-            AND evidence_match.status = 'PASS'
-        )
       LIMIT 1
     `,
     [organizationId, invoiceVersionId],
@@ -596,12 +742,53 @@ function buildChecks(
   route: EvaluateInvoiceDecisionRequest['route'],
   modelAction: DecisionAction,
   treasury: TreasuryAvailability,
+  policy: PolicyRow,
 ): DecisionCheckResponse[] {
+  const amount = BigInt(invoice.amount_atomic);
+  const routeKey = `${route.liquidityRoute}:${route.environment}:${route.chainId}:${route.assetSymbol}`;
+  const poRemaining =
+    BigInt(invoice.governing_total_atomic) -
+    BigInt(invoice.governing_used_atomic) -
+    amount;
   return [
     check(
       'model_advisory_only',
       'PASS',
       `model proposed ${modelAction}; deterministic checks derive executable action`,
+      { modelAction },
+    ),
+    check(
+      'organization_and_agent_active',
+      policy.organization_status === 'ACTIVE' &&
+        policy.agent_status === 'ACTIVE'
+        ? 'PASS'
+        : 'BLOCK',
+      policy.organization_status === 'ACTIVE' &&
+        policy.agent_status === 'ACTIVE'
+        ? 'organization and agent are active'
+        : 'organization or agent is paused or inactive',
+      {
+        organizationStatus: policy.organization_status,
+        agentStatus: policy.agent_status,
+      },
+    ),
+    check(
+      'approved_arrangement',
+      'PASS',
+      'invoice is bound to an approved purchase arrangement and delivery record',
+      {
+        evidenceMatchId: invoice.evidence_match_id,
+        governingEvidenceVersionId: invoice.governing_evidence_version_id,
+        deliveryEvidenceVersionId: invoice.delivery_evidence_version_id,
+      },
+    ),
+    check(
+      'purchase_order_remaining',
+      poRemaining >= 0n ? 'PASS' : 'BLOCK',
+      poRemaining >= 0n
+        ? 'purchase order remaining value covers the invoice'
+        : 'invoice exceeds purchase order remaining value',
+      { remainingAfterPaymentAtomic: poRemaining.toString() },
     ),
     check(
       'vendor_verified',
@@ -609,6 +796,10 @@ function buildChecks(
       invoice.vendor_status === 'VERIFIED'
         ? 'vendor is verified'
         : 'vendor is not verified',
+      {
+        vendorStatus: invoice.vendor_status,
+        vendorVersion: invoice.vendor_version,
+      },
     ),
     check(
       'payout_address_active',
@@ -620,11 +811,32 @@ function buildChecks(
         isEvmAddress(invoice.payout_address)
         ? 'payout address is active'
         : 'payout address is not active or invalid',
+      {
+        addressStatus: invoice.address_status,
+        addressVersion: invoice.address_version,
+      },
     ),
     check(
       'route_supported',
       routeSupported(route) ? 'PASS' : 'BLOCK',
       evaluatePaymentRoute(route).reason,
+      { routeKey },
+    ),
+    check(
+      'policy_route_allowed',
+      policy.allowed_routes.includes(routeKey) ? 'PASS' : 'BLOCK',
+      policy.allowed_routes.includes(routeKey)
+        ? 'route is allowed by tenant policy'
+        : 'route is not allowed by tenant policy',
+      { routeKey, policyVersion: policy.version },
+    ),
+    check(
+      'policy_token_allowed',
+      policy.allowed_assets.includes(route.assetSymbol) ? 'PASS' : 'BLOCK',
+      policy.allowed_assets.includes(route.assetSymbol)
+        ? 'token is allowed by tenant policy'
+        : 'token is not allowed by tenant policy',
+      { assetSymbol: route.assetSymbol, policyVersion: policy.version },
     ),
     check(
       'vault_binding_active',
@@ -632,6 +844,7 @@ function buildChecks(
       isEvmAddress(vaultBinding?.address)
         ? 'verified vault binding is active'
         : 'verified vault binding is missing or invalid',
+      { vaultBindingId: vaultBinding?.id ?? null },
     ),
     check(
       'treasury_snapshot_fresh',
@@ -639,6 +852,7 @@ function buildChecks(
       treasury.ready
         ? 'treasury balance snapshot is fresh'
         : `treasury authorization is blocked: ${treasury.snapshotStatus.toLowerCase()} balance snapshot`,
+      { snapshotStatus: treasury.snapshotStatus },
     ),
     check(
       'available_liquidity',
@@ -650,25 +864,89 @@ function buildChecks(
         BigInt(invoice.amount_atomic) <= treasury.availableAtomic
         ? 'available liquidity covers the payment and reservation'
         : 'available liquidity does not cover the payment',
+      {
+        amountAtomic: invoice.amount_atomic,
+        availableAtomic: treasury.availableAtomic.toString(),
+      },
     ),
     check(
-      'autonomous_amount_limit',
-      BigInt(invoice.amount_atomic) <= MAX_AUTONOMOUS_USDC_ATOMIC
+      'operating_buffer',
+      treasury.ready && amount <= treasury.operatingAvailableAtomic
         ? 'PASS'
-        : 'REQUIRES_APPROVAL',
-      BigInt(invoice.amount_atomic) <= MAX_AUTONOMOUS_USDC_ATOMIC
-        ? 'amount is within autonomous limit'
-        : 'amount requires human approval',
+        : 'BLOCK',
+      treasury.ready && amount <= treasury.operatingAvailableAtomic
+        ? 'operating buffer remains protected'
+        : 'payment would breach the operating buffer',
+      {
+        operatingAvailableAtomic: treasury.operatingAvailableAtomic.toString(),
+        operatingBufferAtomic: treasury.operatingBufferAtomic.toString(),
+      },
+    ),
+    limitCheck(
+      'single_payment_limit',
+      amount,
+      0n,
+      BigInt(policy.single_payment_limit_atomic),
+      'BLOCK',
+    ),
+    limitCheck(
+      'vendor_daily_limit',
+      amount,
+      BigInt(policy.vendor_daily_committed_atomic),
+      BigInt(policy.vendor_daily_limit_atomic),
+      'BLOCK',
+    ),
+    limitCheck(
+      'organization_daily_limit',
+      amount,
+      BigInt(policy.organization_daily_committed_atomic),
+      BigInt(policy.organization_daily_limit_atomic),
+      'BLOCK',
+    ),
+    limitCheck(
+      'monthly_budget',
+      amount,
+      0n,
+      treasury.monthlyBudgetRemainingAtomic,
+      'BLOCK',
+    ),
+    limitCheck(
+      'human_approval',
+      amount,
+      0n,
+      BigInt(policy.autonomous_limit_atomic),
+      'REQUIRES_APPROVAL',
     ),
   ];
+}
+
+function limitCheck(
+  code: string,
+  amount: bigint,
+  committed: bigint,
+  limit: bigint | null,
+  exceeded: CheckStatus,
+): DecisionCheckResponse {
+  const passes = limit === null || amount + committed <= limit;
+  return check(
+    code,
+    passes ? 'PASS' : exceeded,
+    passes ? `${code} permits the payment` : `${code} is exceeded`,
+    {
+      amountAtomic: amount.toString(),
+      committedAtomic: committed.toString(),
+      limitAtomic: limit?.toString() ?? null,
+    },
+  );
 }
 
 function check(
   code: string,
   status: CheckStatus,
   message: string,
+  evidence: Record<string, string | number | boolean | null>,
 ): DecisionCheckResponse {
-  return { code, status, message };
+  return { code, status, message, evidence };
 }
 
 function deriveAction(

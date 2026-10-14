@@ -362,6 +362,51 @@ describe('Workspace read models (e2e)', () => {
     );
     expect(reservations.rows[0]).toEqual({ count: '1', amount: '1000000' });
 
+    await request(server)
+      .put(`/organizations/${organizationId}/treasury/policy`)
+      .set('Authorization', authorization)
+      .send({
+        autonomousLimitAtomic: '1000000000',
+        singlePaymentLimitAtomic: '10000000000',
+        vendorDailyLimitAtomic: '25000000000',
+        organizationDailyLimitAtomic: '100000000000',
+        monthlyBudgetAtomic: '5000000',
+        operatingBufferAtomic: '100000',
+        allowedRoutes: [
+          {
+            liquidityRoute: 'OPERATING',
+            environment: 'arc-testnet',
+            chainId: 5042002,
+            assetSymbol: 'USDC',
+          },
+        ],
+        allowedAssets: ['USDC'],
+      })
+      .expect(200)
+      .expect(({ body }: { body: unknown }) =>
+        expect(body).toMatchObject({ status: 'ACTIVE' }),
+      );
+    const invalidated = await database.withOrganizationScope(
+      organizationId,
+      (sql) =>
+        sql.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM opes.treasury_reservations
+           WHERE organization_id=$1 AND status='ACTIVE'`,
+          [organizationId],
+        ),
+    );
+    expect(invalidated.rows[0]?.count).toBe('0');
+    await expect(
+      database.withOrganizationScope(organizationId, (sql) =>
+        sql.query(
+          `UPDATE opes.payment_policy_versions
+           SET autonomous_limit_atomic=autonomous_limit_atomic+1
+           WHERE organization_id=$1 AND status='ACTIVE'`,
+          [organizationId],
+        ),
+      ),
+    ).rejects.toThrow('payment policy versions are immutable');
+
     await database.withOrganizationScope(organizationId, (sql) =>
       sql.query(
         `INSERT INTO opes.treasury_balance_reads
@@ -431,6 +476,10 @@ describe('Workspace read models (e2e)', () => {
           [id],
         );
         await sql.query(
+          'DELETE FROM opes.payment_policy_versions WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
           'DELETE FROM opes.payable_obligation_versions WHERE organization_id = $1',
           [id],
         );
@@ -476,7 +525,7 @@ describe('Workspace read models (e2e)', () => {
   async function seedOrganization(id: string, withMembership: boolean) {
     await database.withOrganizationScope(id, async (sql) => {
       await sql.query(
-        `INSERT INTO opes.organizations (id, slug, display_name) VALUES ($1, $2, $3)`,
+        `INSERT INTO opes.organizations (id, slug, display_name, lifecycle_status) VALUES ($1, $2, $3, 'ACTIVE')`,
         [
           id,
           `workspace-${id}`,
@@ -484,13 +533,23 @@ describe('Workspace read models (e2e)', () => {
         ],
       );
       await sql.query(
-        `INSERT INTO opes.business_agents (id, organization_id) VALUES ($1, $2)`,
+        `INSERT INTO opes.business_agents (id, organization_id, lifecycle_status) VALUES ($1, $2, 'ACTIVE')`,
         [withMembership ? agentId : randomUUID(), id],
       );
       if (withMembership) {
         await sql.query(
           `INSERT INTO opes.organization_memberships (id, organization_id, user_id, role) VALUES ($1, $2, $3, 'OWNER')`,
           [membershipId, id, userId],
+        );
+        await sql.query(
+          `INSERT INTO opes.payment_policy_versions (
+             organization_id,version,autonomous_limit_atomic,single_payment_limit_atomic,
+             vendor_daily_limit_atomic,organization_daily_limit_atomic,
+             monthly_budget_atomic,operating_buffer_atomic,allowed_routes,allowed_assets,
+             created_by_membership_id
+           ) VALUES ($1,1,1000000000,10000000000,25000000000,100000000000,
+             NULL,0,'["OPERATING:arc-testnet:5042002:USDC"]','["USDC"]',$2)`,
+          [id, membershipId],
         );
         await sql.query(
           `INSERT INTO opes.vendors (id, organization_id, display_name, status, created_by_membership_id) VALUES ($1, $2, 'Fixture Vendor', 'VERIFIED', $3)`,
@@ -609,10 +668,11 @@ describe('Workspace read models (e2e)', () => {
              model_action, derived_action, liquidity_route, route_environment, route_chain_id, route_asset_symbol,
              amount_atomic, destination_address, vendor_id, vendor_address_id, evidence_bundle_hash,
              policy_snapshot_hash, context_hash, decision_hash, checks, model_name, model_rationale,
-             prompt_version, evidence_check_version, expires_at, created_by_membership_id)
+             prompt_version, evidence_check_version, policy_version_id, expires_at, created_by_membership_id)
            VALUES ($1, $2, 'INVOICE', $3, $4, $5, 'DIRECT', 'PAY', 'PAY', 'OPERATING', 'arc-testnet',
              5042002, 'USDC', 1000000, $6, $7, $8, $9, $10, $11, $12, '[]', 'fixture', 'fixture',
-             '1', '1', now() + interval '1 hour', $13)`,
+             '1', '1', (SELECT id FROM opes.payment_policy_versions WHERE organization_id=$2 AND status='ACTIVE'),
+             now() + interval '1 hour', $13)`,
           [
             decisionId,
             organizationId,

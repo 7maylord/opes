@@ -48,22 +48,33 @@ function candidate(overrides: Record<string, unknown> = {}) {
     checks: [{ status: 'PASS' }],
     decision_expires_at: new Date(Date.now() + 86_400_000),
     approval_expires_at: new Date(Date.now() + 86_400_000),
+    policy_is_active: true,
     vault_address: '0x0000000000000000000000000000000000000003',
     ...overrides,
   };
 }
 
 describe('PaymentExecutionService', () => {
-  it('reserves an approved direct payment once and enqueues execution', async () => {
+  it('executes an in-policy direct payment without human approval', async () => {
+    const autonomous = candidate({
+      approval_id: null,
+      approval_context_hash: null,
+      approval_amount_atomic: null,
+      approval_destination_address: null,
+      approval_expires_at: null,
+    });
     const query = jest
       .fn()
-      .mockResolvedValueOnce({ rows: [candidate()] })
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
+      .mockResolvedValueOnce({ rows: [autonomous] })
       .mockResolvedValueOnce({
         rows: [
           {
             id: 'execution-1',
             decision_id: '55555555-5555-5555-5555-555555555555',
-            approval_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            approval_id: null,
             source_version_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
             decision_hash: `0x${'d'.repeat(64)}`,
             idempotency_key: 'e'.repeat(64),
@@ -95,12 +106,12 @@ describe('PaymentExecutionService', () => {
       status: 'PENDING',
     });
     expect(query).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.stringContaining('INSERT INTO opes.payment_executions'),
       expect.arrayContaining([
         context.organizationId,
         '55555555-5555-5555-5555-555555555555',
-        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        null,
         'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         `0x${'d'.repeat(64)}`,
         'e'.repeat(64),
@@ -116,7 +127,7 @@ describe('PaymentExecutionService', () => {
       ]),
     );
     expect(query).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.stringContaining('SELECT $1, $3'),
       [
         context.organizationId,
@@ -127,9 +138,14 @@ describe('PaymentExecutionService', () => {
   });
 
   it('refuses mismatched approvals before reserving execution', async () => {
-    const query = jest.fn().mockResolvedValueOnce({
-      rows: [candidate({ approval_amount_atomic: '12340002' })],
-    });
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
+      .mockResolvedValueOnce({
+        rows: [candidate({ approval_amount_atomic: '12340002' })],
+      });
     const service = serviceWithQuery(query);
 
     await expect(
@@ -138,7 +154,7 @@ describe('PaymentExecutionService', () => {
         '55555555-5555-5555-5555-555555555555',
       ),
     ).rejects.toThrow(ConflictException);
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it('reserves confirmed Base liquidity once for an approved payout', async () => {
@@ -154,6 +170,9 @@ describe('PaymentExecutionService', () => {
     });
     const query = jest
       .fn()
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
       .mockResolvedValueOnce({ rows: [crosschain] })
       .mockResolvedValueOnce({
         rows: [
@@ -193,7 +212,7 @@ describe('PaymentExecutionService', () => {
       maxSourceDebitAtomic: '25000000',
     });
     expect(query).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.any(String),
       expect.arrayContaining([
         'CROSSCHAIN_WALLET',
@@ -202,7 +221,7 @@ describe('PaymentExecutionService', () => {
         '25000000',
       ]),
     );
-    expect(query).toHaveBeenNthCalledWith(4, expect.any(String), [
+    expect(query).toHaveBeenNthCalledWith(5, expect.any(String), [
       context.organizationId,
       'execution-2',
       'payment.execute.crosschain',

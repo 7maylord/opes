@@ -54,7 +54,34 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
     address_status: 'VERIFIED_ACTIVE',
     payout_address: '0x0000000000000000000000000000000000000002',
     address_version: 1,
+    evidence_match_id: '12121212-1212-1212-1212-121212121212',
+    governing_evidence_version_id: '13131313-1313-1313-1313-131313131313',
+    delivery_evidence_version_id: '14141414-1414-1414-1414-141414141414',
+    governing_total_atomic: '100000000000',
+    governing_used_atomic: '0',
     ...overrides,
+  };
+}
+
+function policyRow() {
+  return {
+    id: '15151515-1515-1515-1515-151515151515',
+    version: 1,
+    autonomous_limit_atomic: '1000000000',
+    single_payment_limit_atomic: '10000000000',
+    vendor_daily_limit_atomic: '25000000000',
+    organization_daily_limit_atomic: '100000000000',
+    monthly_budget_atomic: '5000000000',
+    operating_buffer_atomic: '1000000',
+    allowed_routes: [
+      'OPERATING:arc-testnet:5042002:USDC',
+      'CCTP:base-sepolia:84532:USDC',
+    ],
+    allowed_assets: ['USDC'],
+    organization_status: 'ACTIVE',
+    agent_status: 'ACTIVE',
+    vendor_daily_committed_atomic: '0',
+    organization_daily_committed_atomic: '0',
   };
 }
 
@@ -103,6 +130,7 @@ describe('DecisionService', () => {
         rows: [{ organization_id: context.organizationId }],
       })
       .mockResolvedValueOnce({ rows: [treasuryRow()] })
+      .mockResolvedValueOnce({ rows: [policyRow()] })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -147,7 +175,7 @@ describe('DecisionService', () => {
     expect(decision.decisionVersion).toBe(1);
     expect(decision.decisionHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(query).toHaveBeenNthCalledWith(
-      7,
+      8,
       expect.stringContaining('INSERT INTO opes.payment_decisions'),
       expect.arrayContaining([
         'PAY',
@@ -174,6 +202,7 @@ describe('DecisionService', () => {
         rows: [{ organization_id: context.organizationId }],
       })
       .mockResolvedValueOnce({ rows: [treasuryRow()] })
+      .mockResolvedValueOnce({ rows: [policyRow()] })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -216,7 +245,20 @@ describe('DecisionService', () => {
     expect(decision.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: 'route_supported', status: 'BLOCK' }),
+        expect.objectContaining({ code: 'approved_arrangement' }),
+        expect.objectContaining({ code: 'purchase_order_remaining' }),
+        expect.objectContaining({ code: 'single_payment_limit' }),
+        expect.objectContaining({ code: 'vendor_daily_limit' }),
+        expect.objectContaining({ code: 'organization_daily_limit' }),
+        expect.objectContaining({ code: 'monthly_budget' }),
+        expect.objectContaining({ code: 'operating_buffer' }),
+        expect.objectContaining({ code: 'policy_route_allowed' }),
+        expect.objectContaining({ code: 'policy_token_allowed' }),
+        expect.objectContaining({ code: 'organization_and_agent_active' }),
       ]),
+    );
+    expect(decision.checks.every((item) => item.evidence !== undefined)).toBe(
+      true,
     );
   });
 
@@ -241,6 +283,7 @@ describe('DecisionService', () => {
         rows: [{ organization_id: context.organizationId }],
       })
       .mockResolvedValueOnce({ rows: [treasuryRow()] })
+      .mockResolvedValueOnce({ rows: [policyRow()] })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -280,7 +323,7 @@ describe('DecisionService', () => {
     expect(decision.checks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          code: 'autonomous_amount_limit',
+          code: 'human_approval',
           status: 'REQUIRES_APPROVAL',
         }),
       ]),
@@ -293,6 +336,9 @@ describe('DecisionService approvals', () => {
     const expiresAt = new Date(Date.now() + 86_400_000);
     const query = jest
       .fn()
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -321,10 +367,12 @@ describe('DecisionService approvals', () => {
                 message: 'amount requires approval',
               },
             ],
+            policy_is_active: true,
             expires_at: expiresAt,
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [treasuryRow()] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -352,7 +400,7 @@ describe('DecisionService approvals', () => {
       status: 'ACTIVE',
     });
     expect(query).toHaveBeenNthCalledWith(
-      2,
+      4,
       expect.stringContaining('INSERT INTO opes.payment_decision_approvals'),
       expect.arrayContaining([
         '55555555-5555-5555-5555-555555555555',
@@ -367,43 +415,49 @@ describe('DecisionService approvals', () => {
   });
 
   it('does not approve blocked decisions', async () => {
-    const query = jest.fn().mockResolvedValueOnce({
-      rows: [
-        {
-          id: '55555555-5555-5555-5555-555555555555',
-          source_type: 'INVOICE',
-          source_id: '66666666-6666-6666-6666-666666666666',
-          source_version_id: request.invoiceVersionId,
-          decision_version: 1,
-          payment_mode: 'DIRECT',
-          model_action: 'PAY',
-          derived_action: 'REJECT',
-          liquidity_route: 'CCTP',
-          route_environment: 'base-mainnet',
-          route_chain_id: 8453,
-          route_asset_symbol: 'USDC',
-          amount_atomic: '12340001',
-          destination_address: '0x0000000000000000000000000000000000000002',
-          evidence_bundle_hash: 'c'.repeat(64),
-          policy_snapshot_hash: 'd'.repeat(64),
-          context_hash: 'e'.repeat(64),
-          decision_hash: null,
-          checks: [
-            {
-              code: 'route_supported',
-              status: 'BLOCK',
-              message: 'route unsupported',
-            },
-          ],
-          expires_at: new Date(Date.now() + 86_400_000),
-        },
-      ],
-    });
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: '55555555-5555-5555-5555-555555555555',
+            source_type: 'INVOICE',
+            source_id: '66666666-6666-6666-6666-666666666666',
+            source_version_id: request.invoiceVersionId,
+            decision_version: 1,
+            payment_mode: 'DIRECT',
+            model_action: 'PAY',
+            derived_action: 'REJECT',
+            liquidity_route: 'CCTP',
+            route_environment: 'base-mainnet',
+            route_chain_id: 8453,
+            route_asset_symbol: 'USDC',
+            amount_atomic: '12340001',
+            destination_address: '0x0000000000000000000000000000000000000002',
+            evidence_bundle_hash: 'c'.repeat(64),
+            policy_snapshot_hash: 'd'.repeat(64),
+            context_hash: 'e'.repeat(64),
+            decision_hash: null,
+            checks: [
+              {
+                code: 'route_supported',
+                status: 'BLOCK',
+                message: 'route unsupported',
+              },
+            ],
+            policy_is_active: true,
+            expires_at: new Date(Date.now() + 86_400_000),
+          },
+        ],
+      });
     const service = serviceWithQuery(query);
 
     await expect(
       service.approveDecision(context, '55555555-5555-5555-5555-555555555555'),
     ).rejects.toThrow('Rejected decisions cannot be approved');
-    expect(query).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 });
