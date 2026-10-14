@@ -41,7 +41,7 @@ The frontend is a separate Vercel project rooted at `frontend/`. Set `NEXT_PUBLI
 - Worker: runtime database URL, Circle credentials, RPC/provider/signer credentials, storage credentials when extraction jobs consume them
 - PostgreSQL: no application or provider secrets
 
-Generate independent high-entropy values for the runtime database password, operations token, signer token, and webhook secret. Rotate one credential at a time, redeploy the consuming service, verify `/ready` and `/operations/outbox`, then revoke the old value. Circle entity-secret recovery material stays outside Railway and the repository.
+Generate independent high-entropy values for the runtime database password, operations token, and optional swap-signer token. Rotate one credential at a time, redeploy the consuming service, verify `/ready` and `/operations/outbox`, then revoke the old value. Circle entity-secret recovery material stays outside Railway and the repository.
 
 ## Worker queues and dead letters
 
@@ -109,5 +109,5 @@ CCTP/Gateway delivery or Base swaps are not vendor payment by themselves. A paya
 
 - `Payment signer adapter is not configured`: set `OPES_PAYMENT_SIGNER_URL` and token if required.
 - `OPES_RPC_<ENVIRONMENT> is not configured`: add the chain RPC URL used for receipt reconciliation.
-- `Base USDC to USDT swap route is not configured`: set the Base token/router/provider variables and minimum-output bps.
-- Gateway jobs stay pending: verify the external signer implements Circle Gateway intent submission and status lookup.
+- `Base USDC to USDT swap route is not configured`: set the optional Base Sepolia token/router/provider and signer variables.
+- Gateway jobs stay pending: verify Circle credentials, Arc/Base RPC access, and Gateway balance/authorization.

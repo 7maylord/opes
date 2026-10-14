@@ -47,7 +47,7 @@ Contract checks run from `contracts/` with `forge fmt --check`, `forge build --s
 - Railway API project root: `backend`; use `railway.api.json` and expose the generated domain.
 - Railway worker project root: `backend`; use `railway.worker.json` without a public domain.
 - Attach Railway PostgreSQL to both backend services. Attach one private Railway Storage Bucket and its S3-compatible variables to the API and worker only where document processing needs them.
-- Put Circle, DeepSeek, Privy secret, RPC, signer, webhook, and operations credentials only on backend services that consume them. Set `OPES_ALLOWED_ORIGINS` to the exact Vercel production and preview origins.
+- Put Circle, DeepSeek, Privy secret, Arc/Base RPC, operations, and optional swap-signer credentials only on backend services that consume them. Set `OPES_ALLOWED_ORIGINS` to the exact Vercel production and preview origins.
 
 The API configuration runs migrations once before deployment and checks `/ready`. Operational recovery and alert procedures are in [backend/RUNBOOK.md](backend/RUNBOOK.md). The release evidence and remaining external gates are in [RELEASE.md](RELEASE.md).
 
