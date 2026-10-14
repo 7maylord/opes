@@ -15,6 +15,14 @@ import { CircleWalletService } from './circle-wallet.service';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { organizationDomain } from './evm-decision-hash';
 import { FactoryManifestService } from './factory-manifest.service';
+import {
+  CircleLifecycleTransaction,
+  LifecycleExecutionEvidence,
+  LifecycleRpcReceipt,
+  LifecycleRpcTransaction,
+  TERMINAL_CIRCLE_STATES,
+  verifyLifecycleExecution,
+} from './lifecycle-chain-evidence';
 import { addPeriod, dueAtUtc } from './lifecycle.service';
 import { TenantContext } from './tenant-context';
 
@@ -427,11 +435,12 @@ export class RecurringExecutionService {
 
   private async execute(action: ActionRow): Promise<void> {
     try {
+      const evidence = await this.recurringEvidence(action);
       let providerId = action.provider_transaction_id;
       if (!providerId) {
         const submitted = await this.circle.createCallDataTransaction({
-          walletId: String(action.payload.walletId),
-          contractAddress: action.contract_address,
+          walletId: evidence.walletId,
+          contractAddress: evidence.contractAddress,
           callData: action.call_data,
           idempotencyKey: action.idempotency_key,
         });
@@ -443,36 +452,41 @@ export class RecurringExecutionService {
           ),
         );
       }
-      const transaction = await this.circle.getTransaction(providerId);
+      const transaction = (await this.circle.getTransaction(
+        providerId,
+      )) as CircleLifecycleTransaction;
+      if (TERMINAL_CIRCLE_STATES.has(transaction.state))
+        throw new Error(
+          transaction.errorDetails ??
+            transaction.errorReason ??
+            `Circle transaction ${transaction.state}`,
+        );
       if (!transaction.txHash) return;
       const [chainTransaction, receipt] = await Promise.all([
-        rpc<{
-          to: string;
-          input: string;
-        } | null>('eth_getTransactionByHash', [transaction.txHash]),
-        rpc<{
-          status: string;
-          transactionHash: string;
-        } | null>('eth_getTransactionReceipt', [transaction.txHash]),
+        rpc<LifecycleRpcTransaction | null>('eth_getTransactionByHash', [
+          transaction.txHash,
+        ]),
+        rpc<LifecycleRpcReceipt | null>('eth_getTransactionReceipt', [
+          transaction.txHash,
+        ]),
       ]);
       if (!receipt || !chainTransaction) return;
-      if (
-        receipt.status !== '0x1' ||
-        chainTransaction.to.toLowerCase() !==
-          action.contract_address.toLowerCase() ||
-        chainTransaction.input.toLowerCase() !== action.call_data.toLowerCase()
-      )
-        throw new Error('Recurring transaction evidence mismatch');
+      const transactionHash = verifyLifecycleExecution(
+        evidence,
+        transaction,
+        chainTransaction,
+        receipt,
+      );
       await this.database.withWorker(async (db) => {
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status = 'CONFIRMED', transaction_hash = $2, confirmed_at = now(), updated_at = now() WHERE id = $1`,
-          [action.id, transaction.txHash],
+          [action.id, transactionHash],
         );
         await db.query(
           `UPDATE opes.subscription_cycles SET status = 'PAID', transaction_hash = $3, failure_reason = NULL WHERE organization_id = $1 AND id = $2`,
-          [action.organization_id, action.target_id, transaction.txHash],
+          [action.organization_id, action.target_id, transactionHash],
         );
-        await insertRecurringLedger(db, action, transaction.txHash!);
+        await insertRecurringLedger(db, action, transactionHash);
       });
     } catch (error) {
       const reason =
@@ -488,6 +502,55 @@ export class RecurringExecutionService {
         );
       });
     }
+  }
+
+  private async recurringEvidence(
+    action: ActionRow,
+  ): Promise<LifecycleExecutionEvidence> {
+    const result = await this.database.withWorker((db) =>
+      db.query<{
+        amount_atomic: string;
+        cycle_index: number;
+        subscription_id: string;
+        mandate_id: string;
+        payout_address: string;
+        vault_address: string;
+        wallet_id: string;
+        wallet_address: string;
+      }>(
+        `SELECT cycle.amount_atomic::text AS amount_atomic, cycle.cycle_index, cycle.subscription_id,
+                subscription.mandate_id, address.payout_address,
+                vault.address AS vault_address, wallet.resource_id AS wallet_id,
+                wallet.address AS wallet_address
+           FROM opes.subscription_cycles cycle
+           JOIN opes.subscriptions subscription ON subscription.organization_id=cycle.organization_id AND subscription.id=cycle.subscription_id
+           JOIN opes.vendor_payout_addresses address ON address.organization_id=subscription.organization_id AND address.id=subscription.vendor_address_id
+           JOIN opes.tenant_resource_bindings vault ON vault.organization_id=cycle.organization_id AND vault.environment='arc-testnet' AND vault.resource_type='business_policy_vault_contract' AND vault.status='ACTIVE'
+           JOIN opes.tenant_resource_bindings wallet ON wallet.organization_id=cycle.organization_id AND wallet.environment='arc-testnet' AND wallet.resource_type='operator_wallet' AND wallet.status='ACTIVE'
+          WHERE cycle.organization_id=$1 AND cycle.id=$2 LIMIT 1`,
+        [action.organization_id, action.target_id],
+      ),
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('Recurring execution bindings are missing');
+    const obligationKey = keccak256(
+      stringToHex(
+        `opes:subscription-cycle:${row.subscription_id}:${row.cycle_index}`,
+      ),
+    );
+    return {
+      walletId: row.wallet_id,
+      walletAddress: row.wallet_address,
+      contractAddress: row.vault_address,
+      callData: action.call_data,
+      tokenAddress: this.manifests.getArcTestnetFactory().tokenAddress,
+      transferFrom: row.vault_address,
+      transferTo: row.payout_address,
+      amountAtomic: row.amount_atomic,
+      eventAddress: row.vault_address,
+      eventSignature: 'RecurringPaymentExecuted(bytes32,bytes32,uint256)',
+      eventTopics: [row.mandate_id, obligationKey],
+    };
   }
 }
 

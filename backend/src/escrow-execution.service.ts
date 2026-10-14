@@ -14,6 +14,16 @@ import vaultJson from './abi/BusinessPolicyVault.json';
 import { DatabaseService } from './database.service';
 import { CircleWalletService } from './circle-wallet.service';
 import { FactoryManifestService } from './factory-manifest.service';
+import {
+  addressTopic,
+  CircleLifecycleTransaction,
+  LifecycleExecutionEvidence,
+  LifecycleRpcReceipt,
+  LifecycleRpcTransaction,
+  TERMINAL_CIRCLE_STATES,
+  uintTopic,
+  verifyLifecycleExecution,
+} from './lifecycle-chain-evidence';
 import { organizationDomain } from './evm-decision-hash';
 import { TenantContext } from './tenant-context';
 import {
@@ -450,11 +460,12 @@ export class EscrowExecutionService {
 
   private async execute(action: ActionRow) {
     try {
+      const evidence = await this.escrowEvidence(action);
       let provider = action.provider_transaction_id;
       if (!provider) {
         const submitted = await this.circle.createCallDataTransaction({
-          walletId: String(action.payload.walletId),
-          contractAddress: action.contract_address,
+          walletId: evidence.walletId,
+          contractAddress: evidence.contractAddress,
           callData: action.call_data,
           idempotencyKey: action.idempotency_key,
         });
@@ -466,37 +477,45 @@ export class EscrowExecutionService {
           ),
         );
       }
-      const transaction = await this.circle.getTransaction(provider);
+      const transaction = (await this.circle.getTransaction(
+        provider,
+      )) as CircleLifecycleTransaction;
+      if (TERMINAL_CIRCLE_STATES.has(transaction.state))
+        throw new Error(
+          transaction.errorDetails ??
+            transaction.errorReason ??
+            `Circle transaction ${transaction.state}`,
+        );
       if (!transaction.txHash) return;
       const [tx, receipt] = await Promise.all([
-        rpc<{ to: string; input: string } | null>('eth_getTransactionByHash', [
+        rpc<LifecycleRpcTransaction | null>('eth_getTransactionByHash', [
           transaction.txHash,
         ]),
-        rpc<{ status: string } | null>('eth_getTransactionReceipt', [
+        rpc<LifecycleRpcReceipt | null>('eth_getTransactionReceipt', [
           transaction.txHash,
         ]),
       ]);
       if (!tx || !receipt) return;
-      if (
-        receipt.status !== '0x1' ||
-        tx.to.toLowerCase() !== action.contract_address.toLowerCase() ||
-        tx.input.toLowerCase() !== action.call_data.toLowerCase()
-      )
-        throw new Error('Escrow transaction evidence mismatch');
+      const transactionHash = verifyLifecycleExecution(
+        evidence,
+        transaction,
+        tx,
+        receipt,
+      );
       await this.database.withWorker(async (db) => {
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status='CONFIRMED',transaction_hash=$2,confirmed_at=now(),updated_at=now() WHERE id=$1`,
-          [action.id, transaction.txHash],
+          [action.id, transactionHash],
         );
         if (action.action_type === 'FUND_ESCROW')
           await db.query(
             `UPDATE opes.escrow_agreements SET status='FUNDED',transaction_hash=$3,updated_at=now() WHERE organization_id=$1 AND id=$2`,
-            [action.organization_id, action.target_id, transaction.txHash],
+            [action.organization_id, action.target_id, transactionHash],
           );
         if (action.action_type === 'RELEASE_ESCROW_MILESTONE')
           await db.query(
             `UPDATE opes.escrow_milestones SET status='RELEASED',transaction_hash=$3,updated_at=now() WHERE organization_id=$1 AND id=$2`,
-            [action.organization_id, action.target_id, transaction.txHash],
+            [action.organization_id, action.target_id, transactionHash],
           );
         if (action.action_type === 'RELEASE_ESCROW_MILESTONE')
           await db.query(
@@ -505,11 +524,16 @@ export class EscrowExecutionService {
           );
         if (action.action_type === 'REFUND_ESCROW') {
           await db.query(
-            `UPDATE opes.escrow_milestones SET status='REFUNDED',transaction_hash=$3,updated_at=now() WHERE organization_id=$1 AND agreement_id=$2 AND status NOT IN ('RELEASED','REFUNDED')`,
-            [action.organization_id, action.target_id, transaction.txHash],
+            `UPDATE opes.escrow_milestones SET status='REFUNDED',transaction_hash=$3,updated_at=now() WHERE organization_id=$1 AND agreement_id=$2 AND status NOT IN ('DISPUTED','RELEASED','REFUNDED')`,
+            [action.organization_id, action.target_id, transactionHash],
           );
         }
-        await insertEscrowLedger(db, action, transaction.txHash!);
+        await insertEscrowLedger(
+          db,
+          action,
+          transactionHash,
+          evidence.amountAtomic,
+        );
       });
     } catch (error) {
       await this.database.withWorker((db) =>
@@ -522,6 +546,100 @@ export class EscrowExecutionService {
         ),
       );
     }
+  }
+
+  private async escrowEvidence(
+    action: ActionRow,
+  ): Promise<LifecycleExecutionEvidence> {
+    type EvidenceRow = {
+      chain_agreement_id: string;
+      amount_atomic: string;
+      vault_address: string;
+      escrow_address: string;
+      wallet_id: string;
+      wallet_address: string;
+      payout_address?: string;
+      milestone_index?: number;
+    };
+    const base = {
+      tokenAddress: this.manifests.getArcTestnetFactory().tokenAddress,
+      callData: action.call_data,
+    };
+    if (action.action_type === 'RELEASE_ESCROW_MILESTONE') {
+      const result = await this.database.withWorker((db) =>
+        db.query<EvidenceRow>(
+          `SELECT agreement.chain_agreement_id, milestone.amount_atomic::text AS amount_atomic,
+                  milestone.milestone_index, address.payout_address,
+                  vault.address AS vault_address, escrow.address AS escrow_address,
+                  wallet.resource_id AS wallet_id, wallet.address AS wallet_address
+             FROM opes.escrow_milestones milestone
+             JOIN opes.escrow_agreements agreement ON agreement.organization_id=milestone.organization_id AND agreement.id=milestone.agreement_id
+             JOIN opes.vendor_payout_addresses address ON address.organization_id=agreement.organization_id AND address.id=agreement.vendor_address_id
+             JOIN opes.tenant_resource_bindings vault ON vault.organization_id=agreement.organization_id AND vault.environment='arc-testnet' AND vault.resource_type='business_policy_vault_contract' AND vault.status='ACTIVE'
+             JOIN opes.tenant_resource_bindings escrow ON escrow.organization_id=agreement.organization_id AND escrow.environment='arc-testnet' AND escrow.resource_type='milestone_escrow_contract' AND escrow.status='ACTIVE'
+             JOIN opes.tenant_resource_bindings wallet ON wallet.organization_id=agreement.organization_id AND wallet.environment='arc-testnet' AND wallet.resource_type='operator_wallet' AND wallet.status='ACTIVE'
+            WHERE milestone.organization_id=$1 AND milestone.id=$2 LIMIT 1`,
+          [action.organization_id, action.target_id],
+        ),
+      );
+      const row = result.rows[0];
+      if (!row || row.milestone_index === undefined || !row.payout_address)
+        throw new Error('Escrow release bindings are missing');
+      return {
+        ...base,
+        walletId: row.wallet_id,
+        walletAddress: row.wallet_address,
+        contractAddress: row.escrow_address,
+        transferFrom: row.escrow_address,
+        transferTo: row.payout_address,
+        amountAtomic: row.amount_atomic,
+        eventAddress: row.escrow_address,
+        eventSignature: 'MilestoneReleased(bytes32,uint32,address,uint256)',
+        eventTopics: [
+          row.chain_agreement_id,
+          uintTopic(row.milestone_index),
+          addressTopic(row.payout_address),
+        ],
+      };
+    }
+
+    const result = await this.database.withWorker((db) =>
+      db.query<EvidenceRow>(
+        `SELECT agreement.chain_agreement_id,
+                CASE WHEN $3='FUND_ESCROW' THEN agreement.total_amount_atomic
+                     ELSE COALESCE(sum(milestone.amount_atomic) FILTER (WHERE milestone.status NOT IN ('DISPUTED','RELEASED','REFUNDED')),0) END::text AS amount_atomic,
+                vault.address AS vault_address, escrow.address AS escrow_address,
+                wallet.resource_id AS wallet_id, wallet.address AS wallet_address
+           FROM opes.escrow_agreements agreement
+           JOIN opes.escrow_milestones milestone ON milestone.organization_id=agreement.organization_id AND milestone.agreement_id=agreement.id
+           JOIN opes.tenant_resource_bindings vault ON vault.organization_id=agreement.organization_id AND vault.environment='arc-testnet' AND vault.resource_type='business_policy_vault_contract' AND vault.status='ACTIVE'
+           JOIN opes.tenant_resource_bindings escrow ON escrow.organization_id=agreement.organization_id AND escrow.environment='arc-testnet' AND escrow.resource_type='milestone_escrow_contract' AND escrow.status='ACTIVE'
+           JOIN opes.tenant_resource_bindings wallet ON wallet.organization_id=agreement.organization_id AND wallet.environment='arc-testnet' AND wallet.resource_type='operator_wallet' AND wallet.status='ACTIVE'
+          WHERE agreement.organization_id=$1 AND agreement.id=$2
+          GROUP BY agreement.chain_agreement_id, agreement.total_amount_atomic, vault.address, escrow.address, wallet.resource_id, wallet.address`,
+        [action.organization_id, action.target_id, action.action_type],
+      ),
+    );
+    const row = result.rows[0];
+    if (!row || row.amount_atomic === '0')
+      throw new Error('Escrow execution bindings are missing');
+    const funding = action.action_type === 'FUND_ESCROW';
+    return {
+      ...base,
+      walletId: row.wallet_id,
+      walletAddress: row.wallet_address,
+      contractAddress: funding ? row.vault_address : row.escrow_address,
+      transferFrom: funding ? row.vault_address : row.escrow_address,
+      transferTo: funding ? row.escrow_address : row.vault_address,
+      amountAtomic: row.amount_atomic,
+      eventAddress: row.escrow_address,
+      eventSignature: funding
+        ? 'AgreementFunded(bytes32,uint256)'
+        : 'UnreleasedFundsRefunded(bytes32,address,uint256)',
+      eventTopics: funding
+        ? [row.chain_agreement_id]
+        : [row.chain_agreement_id, addressTopic(row.vault_address)],
+    };
   }
 
   private async operatorWallet(
@@ -648,6 +766,7 @@ async function insertEscrowLedger(
   db: Parameters<Parameters<DatabaseService['withWorker']>[0]>[0],
   action: ActionRow,
   transactionHash: string,
+  amount: string,
 ) {
   const definitions: Record<string, [string, string, string, string]> = {
     FUND_ESCROW: [
@@ -671,27 +790,6 @@ async function insertEscrowLedger(
   };
   const definition = definitions[action.action_type];
   if (!definition) return;
-  const amount =
-    action.action_type === 'RELEASE_ESCROW_MILESTONE'
-      ? (
-          await db.query<{ amount: string }>(
-            `SELECT amount_atomic::text AS amount FROM opes.escrow_milestones WHERE organization_id=$1 AND id=$2`,
-            [action.organization_id, action.target_id],
-          )
-        ).rows[0]?.amount
-      : action.action_type === 'FUND_ESCROW'
-        ? (
-            await db.query<{ amount: string }>(
-              `SELECT total_amount_atomic::text AS amount FROM opes.escrow_agreements WHERE organization_id=$1 AND id=$2`,
-              [action.organization_id, action.target_id],
-            )
-          ).rows[0]?.amount
-        : (
-            await db.query<{ amount: string }>(
-              `SELECT COALESCE(sum(amount_atomic) FILTER (WHERE status='REFUNDED'),0)::text AS amount FROM opes.escrow_milestones WHERE organization_id=$1 AND agreement_id=$2`,
-              [action.organization_id, action.target_id],
-            )
-          ).rows[0]?.amount;
   if (!amount || amount === '0')
     throw new Error('Escrow ledger amount is missing');
   for (const [line, account, direction] of [
