@@ -468,6 +468,10 @@ export class PaymentExecutionWorkerService {
   ): Promise<void> {
     await this.database.withWorker(async (database) => {
       await database.query(
+        "SELECT set_config('opes.organization_id', $1, true)",
+        [event.organization_id],
+      );
+      await database.query(
         `UPDATE opes.payment_execution_attempts SET status = 'CONFIRMED', transaction_hash = $3,
            failure_reason = NULL, updated_at = now() WHERE organization_id = $1 AND id = $2`,
         [event.organization_id, attemptId, transactionHash],
@@ -699,6 +703,7 @@ function isTransient(error: unknown): boolean {
     error instanceof TransientError ||
     error instanceof TypeError ||
     (error instanceof DOMException && error.name === 'TimeoutError') ||
+    status === 404 ||
     (status !== undefined && status >= 500)
   );
 }

@@ -224,11 +224,13 @@ function recordsSql(): string {
         FROM opes.evidence_documents d
       UNION ALL
       SELECT i.organization_id, i.id, 'invoice', 'Invoice ' || i.invoice_number, v.display_name,
-             i.status, i.amount_atomic::text, i.currency, NULL, NULL, i.created_at, i.created_at,
+             o.status, i.amount_atomic::text, i.currency, NULL, NULL, i.created_at, i.created_at,
              jsonb_build_object('obligationId', i.obligation_id, 'vendorId', i.vendor_id,
                'vendorAddressId', i.vendor_address_id, 'evidenceDocumentId', i.evidence_document_id,
                'invoiceNumber', i.invoice_number, 'lineItems', i.line_items, 'version', i.version)
         FROM opes.payable_obligation_versions i
+        JOIN opes.payable_obligations o
+          ON o.organization_id = i.organization_id AND o.id = i.obligation_id
         JOIN opes.vendors v ON v.organization_id = i.organization_id AND v.id = i.vendor_id
       UNION ALL
       SELECT p.organization_id, p.id, 'decision', 'Decision · ' || p.derived_action, p.source_type,

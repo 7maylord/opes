@@ -225,6 +225,41 @@ describe('PaymentExecutionWorkerService', () => {
     ).toBe(false);
   });
 
+  it('retries when Circle has not indexed a submitted transaction yet', async () => {
+    const error = Object.assign(new Error('payment execution not found'), {
+      status: 404,
+    });
+    const row = workRow();
+    const callData = buildExecuteDirectPaymentCalldata({
+      decisionHash: row.decision_hash,
+      obligationKey: row.idempotency_key,
+      contextHash: row.context_hash,
+      idempotencyKey: row.idempotency_key,
+      vendor: row.destination_address,
+      amount: row.amount_atomic,
+      expiresAt: row.expires_at.toISOString(),
+    });
+    const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
+    const { service } = serviceWithWorker(
+      recordingQuery(queries, row, {
+        id: 'attempt-1',
+        provider_transaction_id: 'circle-tx-1',
+        call_data: callData,
+      }),
+      { getTransaction: jest.fn().mockRejectedValue(error) },
+    );
+
+    await expect(service.processDuePaymentExecutions(1)).resolves.toBe(1);
+    expect(
+      queries.some((item) =>
+        item.text.includes("available_at = now() + interval '5 seconds'"),
+      ),
+    ).toBe(true);
+    expect(
+      queries.some((item) => item.text.includes("SET status = 'FAILED'")),
+    ).toBe(false);
+  });
+
   it('confirms only matching Arc receipt events and projects the ledger', async () => {
     process.env.OPES_RPC_ARC_TESTNET = 'https://arc-rpc.example.test';
     const row = workRow();
@@ -306,6 +341,11 @@ describe('PaymentExecutionWorkerService', () => {
     await expect(service.processDuePaymentExecutions(1)).resolves.toBe(1);
     expect(
       queries.some((item) => item.text.includes("SET status = 'CONFIRMED'")),
+    ).toBe(true);
+    expect(
+      queries.some((item) =>
+        item.text.includes("set_config('opes.organization_id'"),
+      ),
     ).toBe(true);
     expect(
       queries.some((item) =>

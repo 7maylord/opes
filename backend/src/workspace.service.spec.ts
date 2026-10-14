@@ -14,7 +14,9 @@ const context = {
 describe('WorkspaceService', () => {
   it('lists tenant-scoped records with a stable next cursor', async () => {
     let capturedValues: readonly unknown[] | undefined;
-    const query = jest.fn((_sql: string, values?: readonly unknown[]) => {
+    let capturedSql = '';
+    const query = jest.fn((sql: string, values?: readonly unknown[]) => {
+      capturedSql = sql;
       capturedValues = values;
       return Promise.resolve({
         rows: [
@@ -58,6 +60,8 @@ describe('WorkspaceService', () => {
       null,
       2,
     ]);
+    expect(capturedSql).toContain("SELECT i.organization_id, i.id, 'invoice'");
+    expect(capturedSql).toContain('o.status, i.amount_atomic::text');
   });
 
   it('rejects unsupported record types before accessing the database', async () => {
