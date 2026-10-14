@@ -14,6 +14,10 @@ import {
 } from './evm-decision-hash';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { evaluatePaymentRoute } from './liquidity-policy';
+import {
+  readTreasuryAvailability,
+  TreasuryAvailability,
+} from './liquidity.service';
 import { TenantContext } from './tenant-context';
 
 type DecisionAction = 'PAY' | 'DELAY' | 'ESCALATE' | 'REJECT';
@@ -242,7 +246,23 @@ export class DecisionService {
         database,
         context.organizationId,
       );
-      const checks = buildChecks(invoice, vaultBinding, route, modelAction);
+      await database.query(
+        `UPDATE opes.treasury_reservations SET status='RELEASED',updated_at=now()
+         WHERE organization_id=$1 AND source_version_id=$2 AND status='ACTIVE'`,
+        [context.organizationId, invoice.id],
+      );
+      const treasury = await readTreasuryAvailability(
+        database,
+        context.organizationId,
+        true,
+      );
+      const checks = buildChecks(
+        invoice,
+        vaultBinding,
+        route,
+        modelAction,
+        treasury,
+      );
       const derivedAction = deriveAction(modelAction, checks);
       const evidenceBundleHash = hashStable({
         invoiceVersionId: invoice.id,
@@ -390,8 +410,22 @@ export class DecisionService {
           context.membershipId,
         ],
       );
-
-      return mapDecision(requireRow(inserted.rows[0], 'payment decision'));
+      const decision = requireRow(inserted.rows[0], 'payment decision');
+      if (decision.derived_action === 'PAY') {
+        await database.query(
+          `INSERT INTO opes.treasury_reservations
+            (organization_id,decision_id,source_version_id,amount_atomic,expires_at)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [
+            context.organizationId,
+            decision.id,
+            invoice.id,
+            invoice.amount_atomic,
+            expiresAt,
+          ],
+        );
+      }
+      return mapDecision(decision);
     });
   }
 }
@@ -561,6 +595,7 @@ function buildChecks(
   vaultBinding: BindingRow | null,
   route: EvaluateInvoiceDecisionRequest['route'],
   modelAction: DecisionAction,
+  treasury: TreasuryAvailability,
 ): DecisionCheckResponse[] {
   return [
     check(
@@ -597,6 +632,24 @@ function buildChecks(
       isEvmAddress(vaultBinding?.address)
         ? 'verified vault binding is active'
         : 'verified vault binding is missing or invalid',
+    ),
+    check(
+      'treasury_snapshot_fresh',
+      treasury.ready ? 'PASS' : 'BLOCK',
+      treasury.ready
+        ? 'treasury balance snapshot is fresh'
+        : `treasury authorization is blocked: ${treasury.snapshotStatus.toLowerCase()} balance snapshot`,
+    ),
+    check(
+      'available_liquidity',
+      treasury.ready &&
+        BigInt(invoice.amount_atomic) <= treasury.availableAtomic
+        ? 'PASS'
+        : 'BLOCK',
+      treasury.ready &&
+        BigInt(invoice.amount_atomic) <= treasury.availableAtomic
+        ? 'available liquidity covers the payment and reservation'
+        : 'available liquidity does not cover the payment',
     ),
     check(
       'autonomous_amount_limit',

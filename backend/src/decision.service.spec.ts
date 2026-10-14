@@ -58,6 +58,31 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function treasuryRow() {
+  return {
+    configured: true,
+    operating_buffer_atomic: '1000000',
+    monthly_budget_atomic: '5000000000',
+    max_snapshot_age_seconds: 300,
+    binding_count: '1',
+    environment_count: '1',
+    snapshot_count: '1',
+    verified_balance_atomic: '5000000000',
+    restricted_balance_atomic: '0',
+    snapshot_observed_at: new Date(),
+    read_count: '1',
+    failed_read_count: '0',
+    committed_payables_atomic: '0',
+    approved_unsettled_atomic: '0',
+    reserved_atomic: '0',
+    monthly_settled_atomic: '0',
+    planned_incoming_atomic: '0',
+    in_transit_atomic: '0',
+    forecast_30_atomic: '0',
+    forecast_90_atomic: '0',
+  };
+}
+
 describe('DecisionService', () => {
   it('creates a payable invoice decision when deterministic checks pass', async () => {
     const query = jest
@@ -73,6 +98,11 @@ describe('DecisionService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
+      .mockResolvedValueOnce({ rows: [treasuryRow()] })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -108,6 +138,7 @@ describe('DecisionService', () => {
           ],
         }),
       );
+    query.mockResolvedValueOnce({ rows: [] });
     const service = serviceWithQuery(query);
 
     const decision = await service.evaluateInvoicePayment(context, request);
@@ -116,7 +147,7 @@ describe('DecisionService', () => {
     expect(decision.decisionVersion).toBe(1);
     expect(decision.decisionHash).toMatch(/^0x[0-9a-f]{64}$/);
     expect(query).toHaveBeenNthCalledWith(
-      4,
+      7,
       expect.stringContaining('INSERT INTO opes.payment_decisions'),
       expect.arrayContaining([
         'PAY',
@@ -138,6 +169,11 @@ describe('DecisionService', () => {
           { id: 'binding-1', address: '0x1', status: 'ACTIVE', metadata: {} },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
+      .mockResolvedValueOnce({ rows: [treasuryRow()] })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({
@@ -200,6 +236,11 @@ describe('DecisionService', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ organization_id: context.organizationId }],
+      })
+      .mockResolvedValueOnce({ rows: [treasuryRow()] })
       .mockResolvedValueOnce({ rows: [{ next_version: 1 }] })
       .mockImplementationOnce((_text: string, values: readonly unknown[]) =>
         Promise.resolve({

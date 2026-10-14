@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
+  configureTreasury,
   getTreasuryPosition,
   listWorkspaceRecords,
   planLiquidityAction,
@@ -34,6 +35,8 @@ export function TreasuryAuditViews({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
+  const [bufferAtomic, setBufferAtomic] = useState("0");
+  const [budgetAtomic, setBudgetAtomic] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +70,17 @@ export function TreasuryAuditViews({
   async function refreshPosition() {
     await run("Treasury position refreshed", async () => {
       setPosition(await getTreasuryPosition(token, organizationId));
+    });
+  }
+
+  async function saveSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await run("Treasury settings saved", async () => {
+      setPosition(await configureTreasury(token, organizationId, {
+        operatingBufferAtomic: bufferAtomic,
+        monthlyBudgetAtomic: budgetAtomic === "" ? null : budgetAtomic,
+        maxSnapshotAgeSeconds: 300,
+      }));
     });
   }
 
@@ -131,12 +145,25 @@ export function TreasuryAuditViews({
           <button disabled={pending} onClick={refreshPosition} className="btn">Refresh</button>
           {position !== null ? (
             <div className="space-y-2 text-sm">
-              <Metric label="Committed payables" value={formatAtomic(position.committedPayablesAtomic, 6)} />
+              <p className="font-medium">Balance snapshot: {position.snapshotStatus}</p>
+              <Metric label="Verified" value={formatAtomic(position.verifiedBalanceAtomic, 6)} />
+              <Metric label="Restricted" value={formatAtomic(position.restrictedBalanceAtomic, 6)} />
+              <Metric label="Reserved" value={formatAtomic(position.reservedAtomic, 6)} />
               <Metric label="Approved unsettled" value={formatAtomic(position.approvedUnsettledPaymentAtomic, 6)} />
-              <Metric label="Planned liquidity" value={formatAtomic(position.plannedLiquidityAtomic, 6)} />
+              <Metric label="Committed payables" value={formatAtomic(position.committedPayablesAtomic, 6)} />
+              <Metric label="Incoming" value={formatAtomic(position.plannedIncomingAtomic, 6)} />
+              <Metric label="In transit" value={formatAtomic(position.inTransitAtomic, 6)} />
+              <Metric label="30-day forecast" value={formatAtomic(position.forecast30DaysAtomic, 6)} />
+              <Metric label="90-day forecast" value={formatAtomic(position.forecast90DaysAtomic, 6)} />
+              <Metric label="Available" value={formatAtomic(position.availableLiquidityAtomic, 6)} />
               <p className="text-slate-600">Networks listed: {position.supportedNetworks.length}</p>
             </div>
           ) : null}
+          <form onSubmit={saveSettings} className="space-y-2 border-t border-slate-200 pt-3">
+            <Input label="Operating buffer atomic" value={bufferAtomic} onChange={setBufferAtomic} required />
+            <Input label="Monthly budget atomic (optional)" value={budgetAtomic} onChange={setBudgetAtomic} />
+            <button disabled={pending} className="btn-secondary">Save treasury controls</button>
+          </form>
         </div>
 
         <form onSubmit={submitLiquidity} className="space-y-3 rounded-2xl bg-white p-4">

@@ -44,6 +44,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     obligation_status: 'ACCEPTED',
     source_version_status: 'ACCEPTED',
     has_evidence_match: true,
+    reservation_status: 'ACTIVE',
     checks: [{ status: 'PASS' }],
     decision_expires_at: new Date(Date.now() + 86_400_000),
     approval_expires_at: new Date(Date.now() + 86_400_000),
@@ -115,7 +116,7 @@ describe('PaymentExecutionService', () => {
       ]),
     );
     expect(query).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.stringContaining('SELECT $1, $3'),
       [
         context.organizationId,
@@ -201,7 +202,7 @@ describe('PaymentExecutionService', () => {
         '25000000',
       ]),
     );
-    expect(query).toHaveBeenNthCalledWith(3, expect.any(String), [
+    expect(query).toHaveBeenNthCalledWith(4, expect.any(String), [
       context.organizationId,
       'execution-2',
       'payment.execute.crosschain',

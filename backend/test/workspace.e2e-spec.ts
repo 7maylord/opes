@@ -268,6 +268,121 @@ describe('Workspace read models (e2e)', () => {
     });
   });
 
+  it('calculates treasury truth and prevents concurrent over-reservation', async () => {
+    const server = app.getHttpAdapter().getInstance() as App;
+    const authorization = `Bearer ${sessionToken}`;
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `UPDATE opes.treasury_reservations SET status='RELEASED'
+         WHERE organization_id=$1 AND decision_id=$2`,
+        [organizationId, expiredDecisionId],
+      ),
+    );
+    await request(server)
+      .put(`/organizations/${organizationId}/treasury/settings`)
+      .set('Authorization', authorization)
+      .send({
+        operatingBufferAtomic: '100000',
+        monthlyBudgetAtomic: '10000000',
+        maxSnapshotAgeSeconds: 300,
+      })
+      .expect(200);
+    await database.withOrganizationScope(organizationId, async (sql) => {
+      await sql.query(
+        `INSERT INTO opes.treasury_balance_snapshots
+          (organization_id,environment,address,asset_symbol,block_number,balance_atomic)
+         VALUES ($1,'arc-testnet',$2,'USDC',100,1500000)`,
+        [organizationId, '0x3000000000000000000000000000000000000003'],
+      );
+      await sql.query(
+        `INSERT INTO opes.treasury_balance_reads
+          (organization_id,environment,status,block_number)
+         VALUES ($1,'arc-testnet','SUCCESS',100)`,
+        [organizationId],
+      );
+    });
+    await request(server)
+      .get(`/organizations/${organizationId}/treasury/position`)
+      .set('Authorization', authorization)
+      .expect(200)
+      .expect(({ body }: { body: unknown }) =>
+        expect(body).toMatchObject({
+          snapshotStatus: 'FRESH',
+          authorizationReady: true,
+          verifiedBalanceAtomic: '1500000',
+          operatingBufferAtomic: '100000',
+          availableLiquidityAtomic: '1400000',
+          forecast30DaysAtomic: '2000000',
+          forecast90DaysAtomic: '2000000',
+        }),
+      );
+
+    const decisionBody = (invoiceId: string) => ({
+      invoiceVersionId: invoiceId,
+      modelAction: 'PAY',
+      modelName: 'fixture',
+      modelRationale: 'verified payable',
+      promptVersion: 'f5-e2e',
+      route: {
+        liquidityRoute: 'OPERATING',
+        environment: 'arc-testnet',
+        chainId: 5042002,
+        assetSymbol: 'USDC',
+      },
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    const decisions = await Promise.all([
+      request(server)
+        .post(`/organizations/${organizationId}/decisions/invoice-payment`)
+        .set('Authorization', authorization)
+        .send(decisionBody(invoiceVersionId))
+        .expect(201),
+      request(server)
+        .post(`/organizations/${organizationId}/decisions/invoice-payment`)
+        .set('Authorization', authorization)
+        .send(decisionBody(stagedInvoiceId))
+        .expect(201),
+    ]);
+    const actions = decisions
+      .map(
+        (response) =>
+          (response.body as unknown as { derivedAction: string }).derivedAction,
+      )
+      .sort();
+    expect(actions).toEqual(['PAY', 'REJECT']);
+    const reservations = await database.withOrganizationScope(
+      organizationId,
+      (sql) =>
+        sql.query<{ count: string; amount: string }>(
+          `SELECT count(*)::text AS count,COALESCE(sum(amount_atomic),0)::text AS amount
+           FROM opes.treasury_reservations
+           WHERE organization_id=$1 AND status='ACTIVE' AND expires_at>now()`,
+          [organizationId],
+        ),
+    );
+    expect(reservations.rows[0]).toEqual({ count: '1', amount: '1000000' });
+
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.treasury_balance_reads
+          (organization_id,environment,status,failure_reason)
+         VALUES ($1,'arc-testnet','FAILED','RPC unavailable')`,
+        [organizationId],
+      ),
+    );
+    await request(server)
+      .get(`/organizations/${organizationId}/treasury/position`)
+      .set('Authorization', authorization)
+      .expect(200)
+      .expect(({ body }: { body: unknown }) =>
+        expect(body).toMatchObject({
+          snapshotStatus: 'FAILED',
+          authorizationReady: false,
+          availableLiquidityAtomic: '0',
+        }),
+      );
+  });
+
   afterAll(async () => {
     for (const id of [organizationId, otherOrganizationId]) {
       await database.withOrganizationScope(id, async (sql) => {
@@ -289,6 +404,22 @@ describe('Workspace read models (e2e)', () => {
         );
         await sql.query(
           'DELETE FROM opes.procurement_evidence_sources WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.treasury_reservations WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.treasury_settings WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.treasury_balance_reads WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.treasury_balance_snapshots WHERE organization_id = $1',
           [id],
         );
         await sql.query(
@@ -318,6 +449,10 @@ describe('Workspace read models (e2e)', () => {
         await sql.query('DELETE FROM opes.vendors WHERE organization_id = $1', [
           id,
         ]);
+        await sql.query(
+          'DELETE FROM opes.tenant_resource_bindings WHERE organization_id = $1',
+          [id],
+        );
         await sql.query(
           'DELETE FROM opes.business_agents WHERE organization_id = $1',
           [id],
@@ -360,6 +495,12 @@ describe('Workspace read models (e2e)', () => {
         await sql.query(
           `INSERT INTO opes.vendors (id, organization_id, display_name, status, created_by_membership_id) VALUES ($1, $2, 'Fixture Vendor', 'VERIFIED', $3)`,
           [vendorId, id, membershipId],
+        );
+        await sql.query(
+          `INSERT INTO opes.tenant_resource_bindings
+            (organization_id,environment,chain_id,provider,resource_type,resource_id,address,status)
+           VALUES ($1,'arc-testnet',5042002,'arc','business_policy_vault_contract',$2,$3,'ACTIVE')`,
+          [id, `vault-${id}`, '0x3000000000000000000000000000000000000003'],
         );
       }
     });
@@ -507,6 +648,12 @@ describe('Workspace read models (e2e)', () => {
           ],
         );
       }
+      await sql.query(
+        `INSERT INTO opes.treasury_reservations
+          (organization_id,decision_id,source_version_id,amount_atomic,expires_at)
+         VALUES ($1,$2,$3,1000000,now()+interval '1 hour')`,
+        [organizationId, expiredDecisionId, invoiceVersionId],
+      );
     });
   }
 });

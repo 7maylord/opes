@@ -19,6 +19,7 @@ import {
 } from './liquidity-policy';
 import { loadRuntimeConfig } from './runtime.config';
 import { TenantContext } from './tenant-context';
+import { calculateAvailableLiquidity } from './treasury-position';
 
 export interface CctpSourceMessageRequest {
   sourceMessage: string;
@@ -53,10 +54,37 @@ export interface LiquidityActionResponse {
 
 export interface TreasuryPositionResponse {
   assetSymbol: 'USDC';
+  configured: boolean;
+  snapshotStatus: 'FRESH' | 'STALE' | 'FAILED' | 'MISSING';
+  snapshotObservedAt: string | null;
+  authorizationReady: boolean;
+  verifiedBalanceAtomic: string;
+  restrictedBalanceAtomic: string;
+  operatingBalanceAtomic: string;
+  reservedAtomic: string;
   committedPayablesAtomic: string;
   approvedUnsettledPaymentAtomic: string;
-  plannedLiquidityAtomic: string;
+  plannedIncomingAtomic: string;
+  inTransitAtomic: string;
+  operatingBufferAtomic: string;
+  monthlyBudgetAtomic: string | null;
+  monthlyBudgetRemainingAtomic: string | null;
+  forecast30DaysAtomic: string;
+  forecast90DaysAtomic: string;
+  availableLiquidityAtomic: string;
   supportedNetworks: ReturnType<typeof supportedNetworks>;
+}
+
+export interface TreasurySettingsRequest {
+  operatingBufferAtomic: string;
+  monthlyBudgetAtomic?: string | null;
+  maxSnapshotAgeSeconds?: number;
+}
+
+export interface TreasuryAvailability {
+  ready: boolean;
+  availableAtomic: bigint;
+  snapshotStatus: TreasuryPositionResponse['snapshotStatus'];
 }
 
 interface LiquidityActionRow {
@@ -290,46 +318,54 @@ export class LiquidityService {
     context: TenantContext,
   ): Promise<TreasuryPositionResponse> {
     return this.database.withTenant(context, async (database) => {
-      const result = await database.query<{
-        committed_payables_atomic: string;
-        approved_unsettled_payment_atomic: string;
-        planned_liquidity_atomic: string;
-      }>(
-        `
-          SELECT
-            COALESCE((
-              SELECT SUM(version.amount_atomic)
-                FROM opes.payable_obligation_versions AS version
-                JOIN opes.payable_obligations AS obligation
-                  ON obligation.organization_id = version.organization_id
-                 AND obligation.id = version.obligation_id
-               WHERE version.organization_id = $1
-                 AND version.status = 'ACCEPTED'
-                 AND obligation.status = 'ACCEPTED'
-            ), 0)::text AS committed_payables_atomic,
-            COALESCE((
-              SELECT SUM(execution.amount_atomic)
-                FROM opes.payment_executions AS execution
-               WHERE execution.organization_id = $1
-                 AND execution.status IN ('PENDING', 'PROCESSING', 'SUBMITTED', 'UNKNOWN')
-            ), 0)::text AS approved_unsettled_payment_atomic,
-            COALESCE((
-              SELECT SUM(action.amount_atomic + action.fee_atomic)
-                FROM opes.liquidity_actions AS action
-               WHERE action.organization_id = $1
-                 AND action.status IN ('PLANNED', 'SUBMITTED')
-            ), 0)::text AS planned_liquidity_atomic
-        `,
-        [context.organizationId],
+      return mapTreasuryPosition(
+        await readTreasuryPosition(database, context.organizationId, false),
       );
-      const row = requireRow(result.rows[0], 'treasury position');
-      return {
-        assetSymbol: 'USDC',
-        committedPayablesAtomic: row.committed_payables_atomic,
-        approvedUnsettledPaymentAtomic: row.approved_unsettled_payment_atomic,
-        plannedLiquidityAtomic: row.planned_liquidity_atomic,
-        supportedNetworks: supportedNetworks(),
-      };
+    });
+  }
+
+  async configureTreasury(
+    context: TenantContext,
+    input: TreasurySettingsRequest,
+  ): Promise<TreasuryPositionResponse> {
+    if (context.role !== 'OWNER' && context.role !== 'ADMIN')
+      throw new ForbiddenException(
+        'Only owners and admins can configure treasury controls',
+      );
+    const buffer = requireAtomic(input.operatingBufferAtomic, true);
+    const budget =
+      input.monthlyBudgetAtomic === null ||
+      input.monthlyBudgetAtomic === undefined
+        ? null
+        : requireAtomic(input.monthlyBudgetAtomic, false);
+    const maxAge = input.maxSnapshotAgeSeconds ?? 300;
+    if (!Number.isInteger(maxAge) || maxAge < 30 || maxAge > 3600)
+      throw new BadRequestException(
+        'maxSnapshotAgeSeconds must be an integer from 30 to 3600',
+      );
+    return this.database.withTenant(context, async (database) => {
+      await database.query(
+        `INSERT INTO opes.treasury_settings
+          (organization_id,operating_buffer_atomic,monthly_budget_atomic,
+           max_snapshot_age_seconds,updated_by_membership_id)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT(organization_id) DO UPDATE SET
+           operating_buffer_atomic=EXCLUDED.operating_buffer_atomic,
+           monthly_budget_atomic=EXCLUDED.monthly_budget_atomic,
+           max_snapshot_age_seconds=EXCLUDED.max_snapshot_age_seconds,
+           updated_by_membership_id=EXCLUDED.updated_by_membership_id,
+           updated_at=now()`,
+        [
+          context.organizationId,
+          buffer.toString(),
+          budget?.toString() ?? null,
+          maxAge,
+          context.membershipId,
+        ],
+      );
+      return mapTreasuryPosition(
+        await readTreasuryPosition(database, context.organizationId, false),
+      );
     });
   }
 }
@@ -711,6 +747,201 @@ function requireLiquidityRole(context: TenantContext): void {
       'Only owners, admins and approvers can plan liquidity actions',
     );
   }
+}
+
+interface TreasuryPositionRow {
+  configured: boolean;
+  operating_buffer_atomic: string;
+  monthly_budget_atomic: string | null;
+  max_snapshot_age_seconds: number;
+  binding_count: string;
+  environment_count: string;
+  snapshot_count: string;
+  verified_balance_atomic: string;
+  restricted_balance_atomic: string;
+  snapshot_observed_at: Date | null;
+  read_count: string;
+  failed_read_count: string;
+  committed_payables_atomic: string;
+  approved_unsettled_atomic: string;
+  reserved_atomic: string;
+  monthly_settled_atomic: string;
+  planned_incoming_atomic: string;
+  in_transit_atomic: string;
+  forecast_30_atomic: string;
+  forecast_90_atomic: string;
+}
+
+export async function readTreasuryAvailability(
+  database: TenantDatabase,
+  organizationId: string,
+  lock: boolean,
+): Promise<TreasuryAvailability> {
+  const row = await readTreasuryPosition(database, organizationId, lock);
+  const position = mapTreasuryPosition(row);
+  return {
+    ready: position.authorizationReady,
+    availableAtomic: BigInt(position.availableLiquidityAtomic),
+    snapshotStatus: position.snapshotStatus,
+  };
+}
+
+async function readTreasuryPosition(
+  database: TenantDatabase,
+  organizationId: string,
+  lock: boolean,
+): Promise<TreasuryPositionRow> {
+  if (lock) {
+    await database.query(
+      `SELECT organization_id FROM opes.treasury_settings
+       WHERE organization_id=$1 FOR UPDATE`,
+      [organizationId],
+    );
+  }
+  const result = await database.query<TreasuryPositionRow>(
+    `WITH settings AS (
+       SELECT operating_buffer_atomic,monthly_budget_atomic,max_snapshot_age_seconds
+       FROM opes.treasury_settings WHERE organization_id=$1
+     ), bindings AS (
+       SELECT environment,lower(address) AS address,resource_type
+       FROM opes.tenant_resource_bindings
+       WHERE organization_id=$1 AND status='ACTIVE' AND address IS NOT NULL
+         AND resource_type IN ('operator_wallet','business_policy_vault_contract','milestone_escrow_contract')
+     ), balances AS (
+       SELECT binding.resource_type,snapshot.balance_atomic,snapshot.created_at
+       FROM bindings binding
+       LEFT JOIN LATERAL (
+         SELECT balance_atomic,created_at FROM opes.treasury_balance_snapshots
+         WHERE organization_id=$1 AND environment=binding.environment
+           AND lower(address)=binding.address AND asset_symbol='USDC'
+         ORDER BY block_number DESC LIMIT 1
+       ) snapshot ON true
+     ), binding_environments AS (
+       SELECT DISTINCT environment FROM bindings
+     ), read_health AS (
+       SELECT latest.status
+       FROM binding_environments binding_environment
+       LEFT JOIN LATERAL (
+         SELECT status FROM opes.treasury_balance_reads
+         WHERE organization_id=$1
+           AND environment=binding_environment.environment
+         ORDER BY observed_at DESC LIMIT 1
+       ) latest ON true
+     ), accepted AS (
+       SELECT DISTINCT ON (version.obligation_id)
+         version.amount_atomic,version.due_at
+       FROM opes.payable_obligation_versions version
+       JOIN opes.payable_obligations obligation
+         ON obligation.organization_id=version.organization_id
+        AND obligation.id=version.obligation_id
+       WHERE version.organization_id=$1 AND version.status='ACCEPTED'
+         AND obligation.status='ACCEPTED'
+       ORDER BY version.obligation_id,version.version DESC
+     )
+     SELECT
+       EXISTS(SELECT 1 FROM settings) AS configured,
+       COALESCE((SELECT operating_buffer_atomic FROM settings),0)::text AS operating_buffer_atomic,
+       (SELECT monthly_budget_atomic::text FROM settings) AS monthly_budget_atomic,
+       COALESCE((SELECT max_snapshot_age_seconds FROM settings),300) AS max_snapshot_age_seconds,
+       (SELECT count(*) FROM bindings)::text AS binding_count,
+       (SELECT count(*) FROM binding_environments)::text AS environment_count,
+       (SELECT count(balance_atomic) FROM balances)::text AS snapshot_count,
+       COALESCE((SELECT sum(balance_atomic) FROM balances),0)::text AS verified_balance_atomic,
+       COALESCE((SELECT sum(balance_atomic) FROM balances WHERE resource_type='milestone_escrow_contract'),0)::text AS restricted_balance_atomic,
+       (SELECT min(created_at) FROM balances) AS snapshot_observed_at,
+       (SELECT count(status) FROM read_health)::text AS read_count,
+       (SELECT count(*) FROM read_health WHERE status='FAILED')::text AS failed_read_count,
+       COALESCE((SELECT sum(amount_atomic) FROM accepted),0)::text AS committed_payables_atomic,
+       COALESCE((SELECT sum(amount_atomic) FROM opes.payment_executions
+         WHERE organization_id=$1 AND status IN ('PENDING','PROCESSING','SUBMITTED','UNKNOWN')),0)::text AS approved_unsettled_atomic,
+       COALESCE((SELECT sum(amount_atomic) FROM opes.treasury_reservations
+         WHERE organization_id=$1 AND status='ACTIVE' AND expires_at>now()),0)::text AS reserved_atomic,
+       COALESCE((SELECT sum(amount_atomic) FROM opes.payment_executions
+         WHERE organization_id=$1 AND status='CONFIRMED'
+           AND updated_at>=date_trunc('month',now())),0)::text AS monthly_settled_atomic,
+       COALESCE((SELECT sum(amount_atomic+fee_atomic) FROM opes.liquidity_actions
+         WHERE organization_id=$1 AND status='PLANNED'),0)::text AS planned_incoming_atomic,
+       COALESCE((SELECT sum(amount_atomic+fee_atomic) FROM opes.liquidity_actions
+         WHERE organization_id=$1 AND status IN ('SUBMITTED','ATTESTED','MINTED','SWAP_SUBMITTED','SWAPPED','UNKNOWN')),0)::text AS in_transit_atomic,
+       (COALESCE((SELECT sum(amount_atomic) FROM accepted
+         WHERE due_at IS NULL OR due_at<=now()+interval '30 days'),0)
+        +COALESCE((SELECT sum(amount_atomic) FROM opes.subscription_cycles
+          WHERE organization_id=$1 AND status='DUE' AND due_at<=now()+interval '30 days'),0))::text AS forecast_30_atomic,
+       (COALESCE((SELECT sum(amount_atomic) FROM accepted
+         WHERE due_at IS NULL OR due_at<=now()+interval '90 days'),0)
+        +COALESCE((SELECT sum(amount_atomic) FROM opes.subscription_cycles
+          WHERE organization_id=$1 AND status='DUE' AND due_at<=now()+interval '90 days'),0))::text AS forecast_90_atomic`,
+    [organizationId],
+  );
+  return requireRow(result.rows[0], 'treasury position');
+}
+
+function mapTreasuryPosition(
+  row: TreasuryPositionRow,
+): TreasuryPositionResponse {
+  const observed = row.snapshot_observed_at;
+  const complete =
+    row.binding_count !== '0' && row.snapshot_count === row.binding_count;
+  const age = observed === null ? Infinity : Date.now() - observed.getTime();
+  const snapshotStatus =
+    row.failed_read_count !== '0'
+      ? 'FAILED'
+      : !complete || row.read_count !== row.environment_count
+        ? 'MISSING'
+        : age > row.max_snapshot_age_seconds * 1000
+          ? 'STALE'
+          : 'FRESH';
+  const approved = BigInt(row.approved_unsettled_atomic);
+  const reserved = BigInt(row.reserved_atomic);
+  const calculated = calculateAvailableLiquidity({
+    verified: BigInt(row.verified_balance_atomic),
+    restricted: BigInt(row.restricted_balance_atomic),
+    reserved,
+    approvedUnsettled: approved,
+    operatingBuffer: BigInt(row.operating_buffer_atomic),
+    monthlyBudget:
+      row.monthly_budget_atomic === null
+        ? null
+        : BigInt(row.monthly_budget_atomic),
+    monthlySettled: BigInt(row.monthly_settled_atomic),
+    monthlyReserved: reserved + approved,
+  });
+  const ready = row.configured && snapshotStatus === 'FRESH';
+  return {
+    assetSymbol: 'USDC',
+    configured: row.configured,
+    snapshotStatus,
+    snapshotObservedAt: observed?.toISOString() ?? null,
+    authorizationReady: ready,
+    verifiedBalanceAtomic: row.verified_balance_atomic,
+    restrictedBalanceAtomic: row.restricted_balance_atomic,
+    operatingBalanceAtomic: (
+      BigInt(row.verified_balance_atomic) -
+      BigInt(row.restricted_balance_atomic)
+    ).toString(),
+    reservedAtomic: row.reserved_atomic,
+    committedPayablesAtomic: row.committed_payables_atomic,
+    approvedUnsettledPaymentAtomic: row.approved_unsettled_atomic,
+    plannedIncomingAtomic: row.planned_incoming_atomic,
+    inTransitAtomic: row.in_transit_atomic,
+    operatingBufferAtomic: row.operating_buffer_atomic,
+    monthlyBudgetAtomic: row.monthly_budget_atomic,
+    monthlyBudgetRemainingAtomic:
+      calculated.budgetRemaining?.toString() ?? null,
+    forecast30DaysAtomic: row.forecast_30_atomic,
+    forecast90DaysAtomic: row.forecast_90_atomic,
+    availableLiquidityAtomic: ready ? calculated.available.toString() : '0',
+    supportedNetworks: supportedNetworks(),
+  };
+}
+
+function requireAtomic(value: string, zeroAllowed: boolean): bigint {
+  if (!/^\d+$/.test(value))
+    throw new BadRequestException('Treasury amount must be atomic digits');
+  const parsed = BigInt(value);
+  if (zeroAllowed ? parsed < 0n : parsed <= 0n)
+    throw new BadRequestException('Treasury amount is out of range');
+  return parsed;
 }
 
 function liquidityExecutionMode(): 'sandbox' | 'live' {

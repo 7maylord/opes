@@ -201,6 +201,7 @@ export class InvoiceService {
         amount: input.amount,
         payoutAddress: address.payout_address,
       });
+      const dueAt = invoiceDueAt(extractionClaim(extraction.output, 'dueDate'));
 
       const obligationKey = hashStable({
         kind: 'invoice',
@@ -276,6 +277,7 @@ export class InvoiceService {
           lineItems,
           contentHash,
           semanticFingerprint,
+          dueAt,
         });
         await audit(
           database,
@@ -474,6 +476,7 @@ async function insertVersion(
     lineItems: NormalizedLineItem[];
     contentHash: string;
     semanticFingerprint: string;
+    dueAt: string | null;
   },
 ): Promise<VersionRow> {
   const version = await nextVersion(
@@ -499,9 +502,10 @@ async function insertVersion(
         content_hash,
         semantic_fingerprint,
         created_by_membership_id,
-        status
+        status,
+        due_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 6, $11::jsonb, $12, $13, $14, 'PENDING_MATCH')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 6, $11::jsonb, $12, $13, $14, 'PENDING_MATCH', $15)
       RETURNING id, version, status
     `,
     [
@@ -525,6 +529,7 @@ async function insertVersion(
       input.contentHash,
       input.semanticFingerprint,
       context.membershipId,
+      input.dueAt,
     ],
   );
   return requireRow(result.rows[0], 'payable obligation version');
@@ -690,6 +695,19 @@ function extractionClaim(output: unknown, field: string): string | null {
   return typeof value === 'string' && value.trim() !== ''
     ? value.trim().toLowerCase()
     : null;
+}
+
+function invoiceDueAt(value: string | null): string | null {
+  if (value === null) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
+    throw new BadRequestException('dueDate must be YYYY-MM-DD');
+  const instant = new Date(`${value}T23:59:59.999Z`);
+  if (
+    Number.isNaN(instant.getTime()) ||
+    instant.toISOString().slice(0, 10) !== value
+  )
+    throw new BadRequestException('dueDate must be a valid date');
+  return instant.toISOString();
 }
 
 function requireText(value: string | undefined, name: string): string {

@@ -50,6 +50,7 @@ interface ExecutionCandidateRow {
   obligation_status: string;
   source_version_status: string;
   has_evidence_match: boolean;
+  reservation_status: string;
   checks: Array<{ status: string }>;
   decision_expires_at: Date;
   approval_expires_at: Date;
@@ -103,6 +104,11 @@ export class PaymentExecutionService {
       assertExecutable(candidate);
 
       const execution = await insertExecution(database, context, candidate);
+      await database.query(
+        `UPDATE opes.treasury_reservations SET status='CONSUMED',updated_at=now()
+         WHERE organization_id=$1 AND decision_id=$2 AND status='ACTIVE'`,
+        [context.organizationId, candidate.decision_id],
+      );
       await enqueueExecution(
         database,
         context.organizationId,
@@ -147,6 +153,7 @@ async function getExecutionCandidate(
             AND evidence_match.status='PASS'
         ) AS has_evidence_match,
         decision.checks,
+        reservation.status AS reservation_status,
         decision.expires_at AS decision_expires_at,
         approval.expires_at AS approval_expires_at,
         vault.address AS vault_address
@@ -165,6 +172,11 @@ async function getExecutionCandidate(
       JOIN opes.payable_obligation_versions AS source_version
         ON source_version.organization_id = decision.organization_id
        AND source_version.id = decision.source_version_id
+      JOIN opes.treasury_reservations AS reservation
+        ON reservation.organization_id=decision.organization_id
+       AND reservation.decision_id=decision.id
+       AND reservation.status='ACTIVE'
+       AND reservation.expires_at>now()
       LEFT JOIN opes.tenant_resource_bindings AS vault
         ON vault.organization_id = decision.organization_id
        AND vault.provider = 'arc'
@@ -217,6 +229,8 @@ function assertExecutable(candidate: ExecutionCandidateRow): void {
   ) {
     throw new ConflictException('Payable evidence is no longer authorized');
   }
+  if (candidate.reservation_status !== 'ACTIVE')
+    throw new ConflictException('Treasury reservation is not active');
   if (candidate.derived_action !== 'PAY') {
     throw new ConflictException('Only payable decisions can be executed');
   }

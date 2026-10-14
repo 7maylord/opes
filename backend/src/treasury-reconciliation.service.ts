@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { encodeFunctionData, keccak256, stringToHex } from 'viem';
 import tokenAbiJson from './abi/IERC20Metadata.json';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { FactoryManifestService } from './factory-manifest.service';
+import { supportedNetworks } from './liquidity-policy';
 
 const tokenAbi = tokenAbiJson as Parameters<
   typeof encodeFunctionData
@@ -23,21 +23,54 @@ interface RpcLog {
 @Injectable()
 export class TreasuryReconciliationService {
   private readonly logger = new Logger(TreasuryReconciliationService.name);
-  constructor(
-    private readonly database: DatabaseService,
-    private readonly manifests: FactoryManifestService,
-  ) {}
+  constructor(private readonly database: DatabaseService) {}
   async process(limit = 25) {
     const tenants = await this.database.withWorker((db) =>
-      db.query<{ organization_id: string; addresses: string[] }>(
-        `SELECT organization_id,array_agg(lower(address)) FILTER (WHERE address IS NOT NULL) AS addresses FROM opes.tenant_resource_bindings WHERE environment='arc-testnet' AND status='ACTIVE' AND resource_type IN ('operator_wallet','business_policy_vault_contract','milestone_escrow_contract') GROUP BY organization_id LIMIT $1`,
+      db.query<{
+        organization_id: string;
+        environment: string;
+        chain_id: number;
+        addresses: string[];
+      }>(
+        `SELECT organization_id,environment,chain_id,
+           array_agg(lower(address)) FILTER (WHERE address IS NOT NULL) AS addresses
+         FROM opes.tenant_resource_bindings
+         WHERE status='ACTIVE' AND address IS NOT NULL AND chain_id IS NOT NULL
+           AND resource_type IN ('operator_wallet','business_policy_vault_contract','milestone_escrow_contract')
+         GROUP BY organization_id,environment,chain_id LIMIT $1`,
         [limit],
       ),
     );
     for (const tenant of tenants.rows) {
+      const network = supportedNetworks().find(
+        (item) =>
+          item.environment === tenant.environment &&
+          item.chainId === tenant.chain_id,
+      );
+      if (!network) continue;
       try {
-        await this.scanTenant(tenant.organization_id, tenant.addresses);
+        await this.scanTenant(
+          tenant.organization_id,
+          tenant.environment,
+          tenant.chain_id,
+          network.usdc,
+          tenant.addresses,
+        );
       } catch (error) {
+        await this.database.withWorker((db) =>
+          db.query(
+            `INSERT INTO opes.treasury_balance_reads
+              (organization_id,environment,status,failure_reason)
+             VALUES ($1,$2,'FAILED',$3)`,
+            [
+              tenant.organization_id,
+              tenant.environment,
+              error instanceof Error
+                ? error.message.slice(0, 500)
+                : 'Treasury balance read failed',
+            ],
+          ),
+        );
         this.logger.error(
           `treasury reconciliation failed for ${tenant.organization_id}`,
           error,
@@ -46,10 +79,16 @@ export class TreasuryReconciliationService {
     }
     return tenants.rows.length;
   }
-  private async scanTenant(organizationId: string, addresses: string[]) {
-    const chainId = 5_042_002;
-    const environment = 'arc-testnet';
-    const head = Number(BigInt(await rpc<string>('eth_blockNumber', [])));
+  private async scanTenant(
+    organizationId: string,
+    environment: string,
+    chainId: number,
+    tokenAddress: string,
+    addresses: string[],
+  ) {
+    const head = Number(
+      BigInt(await rpc<string>(environment, 'eth_blockNumber', [])),
+    );
     const finality = Number(
       process.env.OPES_RECONCILIATION_FINALITY_BLOCKS ?? '12',
     );
@@ -73,6 +112,7 @@ export class TreasuryReconciliationService {
           );
       if (cursor?.last_finalized_block_hash) {
         const block = await rpc<{ hash: string } | null>(
+          environment,
           'eth_getBlockByNumber',
           [hex(Number(cursor.last_finalized_block)), false],
         );
@@ -103,9 +143,9 @@ export class TreasuryReconciliationService {
         }
       }
       if (from <= finalized) {
-        const logs = await rpc<RpcLog[]>('eth_getLogs', [
+        const logs = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
           {
-            address: this.manifests.getArcTestnetFactory().tokenAddress,
+            address: tokenAddress,
             fromBlock: hex(from),
             toBlock: hex(finalized),
             topics: [TRANSFER_TOPIC],
@@ -136,12 +176,19 @@ export class TreasuryReconciliationService {
         addresses,
         from,
         finalized,
-        this.manifests.getArcTestnetFactory().tokenAddress,
+        tokenAddress,
       );
-      const block = await rpc<{ hash: string }>('eth_getBlockByNumber', [
-        hex(finalized),
-        false,
-      ]);
+      await db.query(
+        `INSERT INTO opes.treasury_balance_reads
+          (organization_id,environment,status,block_number)
+         VALUES ($1,$2,'SUCCESS',$3)`,
+        [organizationId, environment, finalized],
+      );
+      const block = await rpc<{ hash: string }>(
+        environment,
+        'eth_getBlockByNumber',
+        [hex(finalized), false],
+      );
       await db.query(
         `INSERT INTO opes.chain_reconciliation_cursors(organization_id,environment,chain_id,last_finalized_block,last_finalized_block_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT(organization_id,environment) DO UPDATE SET last_finalized_block=EXCLUDED.last_finalized_block,last_finalized_block_hash=EXCLUDED.last_finalized_block_hash,updated_at=now()`,
         [organizationId, environment, chainId, finalized, block.hash],
@@ -254,7 +301,10 @@ async function checkBalances(
       args: [address as `0x${string}`],
     });
     const balance = BigInt(
-      await rpc<string>('eth_call', [{ to: token, data }, hex(to)]),
+      await rpc<string>(environment, 'eth_call', [
+        { to: token, data },
+        hex(to),
+      ]),
     );
     const previous = (
       await db.query<{ balance_atomic: string }>(
@@ -301,7 +351,9 @@ async function postSponsorLedger(db: TenantDatabase, organizationId: string) {
     const receipt = await rpc<{
       gasUsed: string;
       effectiveGasPrice?: string;
-    } | null>('eth_getTransactionReceipt', [action.transaction_hash]);
+    } | null>('arc-testnet', 'eth_getTransactionReceipt', [
+      action.transaction_hash,
+    ]);
     if (!receipt) continue;
     const amount =
       BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice ?? '0x0');
@@ -330,9 +382,14 @@ export function topicAddress(topic: string) {
 export function hex(value: number) {
   return `0x${value.toString(16)}`;
 }
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const url = process.env.OPES_RPC_ARC_TESTNET?.trim();
-  if (!url) throw new Error('OPES_RPC_ARC_TESTNET is not configured');
+async function rpc<T>(
+  environment: string,
+  method: string,
+  params: unknown[],
+): Promise<T> {
+  const name = `OPES_RPC_${environment.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+  const url = process.env[name]?.trim();
+  if (!url) throw new Error(`${name} is not configured`);
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

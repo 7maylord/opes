@@ -150,6 +150,7 @@ describe('LedgerService', () => {
       })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: ledgerRows(
           'PAYMENT_SETTLED',

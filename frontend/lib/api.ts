@@ -774,9 +774,24 @@ export interface LiquidityActionResponse {
 
 export interface TreasuryPositionResponse {
   assetSymbol: "USDC";
+  configured: boolean;
+  snapshotStatus: "FRESH" | "STALE" | "FAILED" | "MISSING";
+  snapshotObservedAt: string | null;
+  authorizationReady: boolean;
+  verifiedBalanceAtomic: string;
+  restrictedBalanceAtomic: string;
+  operatingBalanceAtomic: string;
+  reservedAtomic: string;
   committedPayablesAtomic: string;
   approvedUnsettledPaymentAtomic: string;
-  plannedLiquidityAtomic: string;
+  plannedIncomingAtomic: string;
+  inTransitAtomic: string;
+  operatingBufferAtomic: string;
+  monthlyBudgetAtomic: string | null;
+  monthlyBudgetRemainingAtomic: string | null;
+  forecast30DaysAtomic: string;
+  forecast90DaysAtomic: string;
+  availableLiquidityAtomic: string;
   supportedNetworks: Array<{
     environment: string;
     chainId: number;
@@ -790,6 +805,22 @@ export interface TreasuryPositionResponse {
     cctpExecutable: boolean;
     gatewayExecutable: boolean;
   }>;
+}
+
+export async function configureTreasury(
+  token: string,
+  organizationId: string,
+  input: {
+    operatingBufferAtomic: string;
+    monthlyBudgetAtomic: string | null;
+    maxSnapshotAgeSeconds: number;
+  },
+) {
+  return request<TreasuryPositionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/treasury/settings`,
+    token,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
 }
 
 export interface LedgerEntryResponse {

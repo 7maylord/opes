@@ -183,6 +183,11 @@ export async function projectPaymentSettlementInDatabase(
         AND obligation.status = 'ACCEPTED'`,
     [organizationId, source.source_version_id],
   );
+  await database.query(
+    `UPDATE opes.treasury_reservations SET status='RELEASED',updated_at=now()
+     WHERE organization_id=$1 AND decision_id=$2 AND status='CONSUMED'`,
+    [organizationId, source.decision_id],
+  );
 }
 
 async function getInvoiceSource(

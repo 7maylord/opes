@@ -5,6 +5,7 @@ import {
   Headers,
   Param,
   Post,
+  Put,
   UnauthorizedException,
 } from '@nestjs/common';
 import { parseBearerToken } from './auth-header';
@@ -15,6 +16,7 @@ import type {
   LiquidityActionRequest,
   LiquidityActionResponse,
   TreasuryPositionResponse,
+  TreasurySettingsRequest,
 } from './liquidity.service';
 import { SessionService } from './session.service';
 import { TenantContextService } from './tenant-context.service';
@@ -70,6 +72,21 @@ export class LiquidityController {
       correlationId,
     );
     return this.liquidity.getTreasuryPosition(context);
+  }
+
+  @Put('treasury/settings')
+  async configureTreasury(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: TreasurySettingsRequest,
+  ): Promise<TreasuryPositionResponse> {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.liquidity.configureTreasury(context, body);
   }
 
   private async resolveContext(
