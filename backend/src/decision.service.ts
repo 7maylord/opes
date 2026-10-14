@@ -472,6 +472,13 @@ async function getInvoiceVersion(
       WHERE version.organization_id = $1
         AND version.id = $2
         AND version.status = 'ACCEPTED'
+        AND obligation.status = 'ACCEPTED'
+        AND EXISTS (
+          SELECT 1 FROM opes.payable_evidence_matches evidence_match
+          WHERE evidence_match.organization_id = version.organization_id
+            AND evidence_match.invoice_version_id = version.id
+            AND evidence_match.status = 'PASS'
+        )
       LIMIT 1
     `,
     [organizationId, invoiceVersionId],

@@ -98,20 +98,7 @@ function queryReturningHappyPath(semanticDuplicateId?: string) {
         {
           id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
           version: 1,
-          status: 'ACCEPTED',
-        },
-      ],
-    })
-    .mockResolvedValueOnce({ rows: [] })
-    .mockResolvedValueOnce({
-      rows: [
-        {
-          version_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-          obligation_id: '99999999-9999-9999-9999-999999999999',
-          vendor_id: validRequest.vendorId,
-          currency: 'USDC',
-          amount_atomic: '12340001',
-          status: 'ACCEPTED',
+          status: 'PENDING_MATCH',
         },
       ],
     })
@@ -131,17 +118,18 @@ describe('InvoiceService', () => {
       currency: 'USDC',
       amountAtomic: '12340001',
       amountDecimals: 6,
-      status: 'ACCEPTED',
+      status: 'PENDING_MATCH',
     });
     expect(query).toHaveBeenNthCalledWith(
       8,
       expect.stringContaining('INSERT INTO opes.payable_obligation_versions'),
       expect.arrayContaining(['12340001']),
     );
-    expect(query).toHaveBeenCalledWith(
-      expect.stringContaining('INSERT INTO opes.ledger_entries'),
-      expect.arrayContaining(['INVOICE_ACCEPTED', '12340001']),
-    );
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('INSERT INTO opes.ledger_entries'),
+      ),
+    ).toBe(false);
   });
 
   it('rejects precision loss before opening tenant scope', async () => {

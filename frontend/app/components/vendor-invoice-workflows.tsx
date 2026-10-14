@@ -120,7 +120,7 @@ export function VendorInvoiceWorkflows({
     if (vendor === null || vendorAddress === null || document === null || extraction === null) {
       return setError("Vendor, address and reviewed extraction are required.");
     }
-    await run("Invoice verified", async () => {
+    await run("Invoice staged for evidence matching", async () => {
       setObligation(
         await verifyInvoice(token, organizationId, {
           vendorId: vendor.id,
@@ -160,6 +160,8 @@ export function VendorInvoiceWorkflows({
 
   async function submitDecision() {
     if (obligation === null) return setError("Verify an invoice first.");
+    if (obligation.status !== "ACCEPTED")
+      return setError("Complete the purchase and delivery evidence match first.");
     await run("Decision dry run completed", async () => {
       const [liquidityRoute, environment, chainId, assetSymbol] = paymentRoute.split("|");
       setDecision(

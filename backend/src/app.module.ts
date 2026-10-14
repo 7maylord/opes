@@ -35,6 +35,8 @@ import { PaymentReconciliationService } from './payment-reconciliation.service';
 import { PaymentWebhookController } from './payment-webhook.controller';
 import { PaymentExecutionWorkerService } from './payment-execution-worker.service';
 import { ProvisioningWorkerService } from './provisioning-worker.service';
+import { ProcurementEvidenceController } from './procurement-evidence.controller';
+import { ProcurementEvidenceService } from './procurement-evidence.service';
 import { RailwayBucketService } from './railway-bucket.service';
 import { RecurringExecutionService } from './recurring-execution.service';
 import { EscrowExecutionService } from './escrow-execution.service';
@@ -67,6 +69,7 @@ import { WorkspaceService } from './workspace.service';
     OnboardingController,
     OperationsController,
     PaymentWebhookController,
+    ProcurementEvidenceController,
     OrganizationInvitationController,
     OrganizationController,
     SessionController,
@@ -98,6 +101,7 @@ import { WorkspaceService } from './workspace.service';
     PaymentExecutionWorkerService,
     PaymentReconciliationService,
     ProvisioningWorkerService,
+    ProcurementEvidenceService,
     RailwayBucketService,
     RecurringExecutionService,
     EscrowExecutionService,

@@ -45,6 +45,9 @@ export class AgentDecisionService {
             address.status AS address_status, address.payout_address,
             document.status AS document_status, claim.claims AS extraction_output
            FROM opes.payable_obligation_versions AS version
+           JOIN opes.payable_obligations AS obligation
+             ON obligation.organization_id = version.organization_id
+            AND obligation.id = version.obligation_id
            JOIN opes.vendors AS vendor
              ON vendor.organization_id = version.organization_id AND vendor.id = version.vendor_id
            JOIN opes.vendor_payout_addresses AS address
@@ -57,7 +60,16 @@ export class AgentDecisionService {
              ON claim.organization_id = extraction.organization_id
             AND claim.extraction_id = extraction.id
             AND claim.status = 'CONFIRMED'
-          WHERE version.organization_id = $1 AND version.id = $2 LIMIT 1`,
+          WHERE version.organization_id = $1 AND version.id = $2
+            AND version.status = 'ACCEPTED'
+            AND obligation.status = 'ACCEPTED'
+            AND EXISTS (
+              SELECT 1 FROM opes.payable_evidence_matches evidence_match
+              WHERE evidence_match.organization_id = version.organization_id
+                AND evidence_match.invoice_version_id = version.id
+                AND evidence_match.status = 'PASS'
+            )
+          LIMIT 1`,
         [context.organizationId, input.invoiceVersionId],
       ),
     );

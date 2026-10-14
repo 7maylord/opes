@@ -47,6 +47,9 @@ interface ExecutionCandidateRow {
   approval_destination_address: string;
   decision_hash: string | null;
   obligation_key: string;
+  obligation_status: string;
+  source_version_status: string;
+  has_evidence_match: boolean;
   checks: Array<{ status: string }>;
   decision_expires_at: Date;
   approval_expires_at: Date;
@@ -135,6 +138,14 @@ async function getExecutionCandidate(
         approval.destination_address AS approval_destination_address,
         decision.decision_hash,
         obligation.obligation_key,
+        obligation.status AS obligation_status,
+        source_version.status AS source_version_status,
+        EXISTS (
+          SELECT 1 FROM opes.payable_evidence_matches evidence_match
+          WHERE evidence_match.organization_id=decision.organization_id
+            AND evidence_match.invoice_version_id=decision.source_version_id
+            AND evidence_match.status='PASS'
+        ) AS has_evidence_match,
         decision.checks,
         decision.expires_at AS decision_expires_at,
         approval.expires_at AS approval_expires_at,
@@ -151,6 +162,9 @@ async function getExecutionCandidate(
       JOIN opes.payable_obligations AS obligation
         ON obligation.organization_id = decision.organization_id
        AND obligation.id = decision.source_id
+      JOIN opes.payable_obligation_versions AS source_version
+        ON source_version.organization_id = decision.organization_id
+       AND source_version.id = decision.source_version_id
       LEFT JOIN opes.tenant_resource_bindings AS vault
         ON vault.organization_id = decision.organization_id
        AND vault.provider = 'arc'
@@ -196,6 +210,13 @@ async function getExecutionCandidate(
 }
 
 function assertExecutable(candidate: ExecutionCandidateRow): void {
+  if (
+    candidate.obligation_status !== 'ACCEPTED' ||
+    candidate.source_version_status !== 'ACCEPTED' ||
+    !candidate.has_evidence_match
+  ) {
+    throw new ConflictException('Payable evidence is no longer authorized');
+  }
   if (candidate.derived_action !== 'PAY') {
     throw new ConflictException('Only payable decisions can be executed');
   }

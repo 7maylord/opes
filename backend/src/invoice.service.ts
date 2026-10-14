@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
-import { projectInvoiceAccrualInDatabase } from './ledger.service';
 import { TenantContext } from './tenant-context';
 
 const USDC_DECIMALS = 6;
@@ -23,6 +22,7 @@ export interface VerifyInvoiceRequest {
   amount: string;
   lineItems: Array<{
     description: string;
+    quantity?: string;
     amount: string;
   }>;
 }
@@ -215,6 +215,7 @@ export class InvoiceService {
         dueDate: extractionClaim(extraction.output, 'dueDate'),
         lineItems: lineItems.map((item) => ({
           description: item.description.trim().toLowerCase(),
+          quantityMicros: item.quantityMicros.toString(),
           amountAtomic: item.amountAtomic.toString(),
         })),
       });
@@ -229,6 +230,7 @@ export class InvoiceService {
         amountAtomic: amountAtomic.toString(),
         lineItems: lineItems.map((item) => ({
           description: item.description,
+          quantityMicros: item.quantityMicros.toString(),
           amountAtomic: item.amountAtomic.toString(),
         })),
       });
@@ -278,7 +280,7 @@ export class InvoiceService {
         await audit(
           database,
           context,
-          'invoice.accepted',
+          'invoice.staged',
           'payable_obligation',
           obligation.id,
           {
@@ -288,12 +290,6 @@ export class InvoiceService {
             semanticDuplicateResolutionId,
           },
         );
-        await projectInvoiceAccrualInDatabase(
-          database,
-          context.organizationId,
-          version.id,
-        );
-
         return {
           id: obligation.id,
           versionId: version.id,
@@ -418,11 +414,16 @@ async function upsertObligation(
         vendor_id,
         source_reference,
         obligation_key,
-        created_by_membership_id
+        created_by_membership_id,
+        status
       )
-      VALUES ($1, $2, $3, $4, $5)
+      VALUES ($1, $2, $3, $4, $5, 'PENDING_MATCH')
       ON CONFLICT (organization_id, obligation_key)
-      DO UPDATE SET updated_at = opes.payable_obligations.updated_at
+      DO UPDATE SET status = CASE
+          WHEN opes.payable_obligations.status = 'PAID' THEN 'PAID'
+          ELSE 'PENDING_MATCH'
+        END,
+        updated_at = now()
       RETURNING id
     `,
     [
@@ -451,7 +452,7 @@ async function findSemanticDuplicate(
       WHERE version.organization_id = $1
         AND version.semantic_fingerprint = $2
         AND obligation.obligation_key <> $3
-        AND version.status = 'ACCEPTED'
+        AND version.status IN ('PENDING_MATCH', 'BLOCKED', 'ACCEPTED')
       ORDER BY version.created_at ASC LIMIT 1`,
     [organizationId, semanticFingerprint, obligationKey],
   );
@@ -497,9 +498,10 @@ async function insertVersion(
         line_items,
         content_hash,
         semantic_fingerprint,
-        created_by_membership_id
+        created_by_membership_id,
+        status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 6, $11::jsonb, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 6, $11::jsonb, $12, $13, $14, 'PENDING_MATCH')
       RETURNING id, version, status
     `,
     [
@@ -516,6 +518,7 @@ async function insertVersion(
       JSON.stringify(
         input.lineItems.map((item) => ({
           description: item.description,
+          quantityMicros: item.quantityMicros.toString(),
           amountAtomic: item.amountAtomic.toString(),
         })),
       ),
@@ -579,6 +582,7 @@ async function audit(
 
 interface NormalizedLineItem {
   description: string;
+  quantityMicros: bigint;
   amountAtomic: bigint;
 }
 
@@ -593,6 +597,11 @@ function normalizeLineItems(
     description: requireText(
       item.description,
       `lineItems.${index}.description`,
+    ),
+    quantityMicros: parseAtomicAmount(
+      item.quantity ?? '1',
+      USDC_DECIMALS,
+      `lineItems.${index}.quantity`,
     ),
     amountAtomic: parseAtomicAmount(
       item.amount,
