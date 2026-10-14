@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AccountingConnectorController } from './accounting-connector.controller';
+import { AccountingConnectorService } from './accounting-connector.service';
 import { AgentController } from './agent.controller';
 import { AgentDecisionService } from './agent-decision.service';
 import { AgentService } from './agent.service';
@@ -52,6 +54,7 @@ import { WorkspaceService } from './workspace.service';
 @Module({
   imports: [],
   controllers: [
+    AccountingConnectorController,
     AgentController,
     AppController,
     AuthController,
@@ -71,6 +74,7 @@ import { WorkspaceService } from './workspace.service';
     WorkspaceController,
   ],
   providers: [
+    AccountingConnectorService,
     AgentService,
     AgentDecisionService,
     AppService,

@@ -8,6 +8,7 @@ import { loadRuntimeConfig } from './runtime.config';
 import { RecurringExecutionService } from './recurring-execution.service';
 import { EscrowExecutionService } from './escrow-execution.service';
 import { TreasuryReconciliationService } from './treasury-reconciliation.service';
+import { AccountingConnectorService } from './accounting-connector.service';
 
 async function bootstrapWorker() {
   const config = loadRuntimeConfig();
@@ -25,6 +26,7 @@ async function bootstrapWorker() {
   const recurring = app.get(RecurringExecutionService);
   const escrow = app.get(EscrowExecutionService);
   const reconciliation = app.get(TreasuryReconciliationService);
+  const accounting = app.get(AccountingConnectorService);
   const runProvisioning = async () => {
     try {
       await provisioning.processDueArcProvisioning();
@@ -67,6 +69,13 @@ async function bootstrapWorker() {
       logger.error('treasury reconciliation worker failed', error);
     }
   };
+  const runAccounting = async () => {
+    try {
+      await accounting.processDue();
+    } catch (error) {
+      logger.error('accounting connector worker failed', error);
+    }
+  };
 
   await runProvisioning();
   await runPayments();
@@ -74,6 +83,7 @@ async function bootstrapWorker() {
   await runRecurring();
   await runEscrow();
   await runReconciliation();
+  await runAccounting();
   const interval = setInterval(() => {
     void runProvisioning();
     void runPayments();
@@ -81,6 +91,7 @@ async function bootstrapWorker() {
     void runRecurring();
     void runEscrow();
     void runReconciliation();
+    void runAccounting();
   }, 10_000);
 
   await new Promise<void>((resolve) => {
