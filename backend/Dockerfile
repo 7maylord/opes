@@ -14,6 +14,6 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 COPY migrations ./migrations
-COPY scripts/migrate.mjs ./scripts/migrate.mjs
+COPY scripts/*.mjs ./scripts/
 EXPOSE 3004
-CMD ["node", "dist/main"]
+CMD ["node", "scripts/start.mjs"]

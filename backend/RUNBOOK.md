@@ -14,7 +14,7 @@ DATABASE_URL=<release-database-url> pnpm --dir backend db:migrate
 
 Run migrations once as a controlled release step. Do not run migrations from every API or worker replica.
 
-`MIGRATION_DATABASE_URL` belongs only on the API pre-deploy environment and uses the Railway database owner. `DATABASE_URL` on both running services must use a separate `opes_runtime` login created with `NOSUPERUSER NOBYPASSRLS`. Before the first deploy, create that login with a generated password; the migration runner grants its table, sequence, function, and default privileges after each rollout. Never run the application with the Railway database owner URL because PostgreSQL superusers bypass tenant RLS.
+`MIGRATION_DATABASE_URL` belongs only on the API pre-deploy environment and uses the Railway database owner. Set `OPES_RUNTIME_DATABASE_PASSWORD` there to a generated value of at least 32 bytes. The migration runner creates or rotates the `opes_runtime` login with `NOSUPERUSER NOBYPASSRLS` and grants its table, sequence, function, and default privileges. `DATABASE_URL` on both running services must use that restricted login. Never run the application with the Railway database owner URL because PostgreSQL superusers bypass tenant RLS.
 
 ## Required live services
 
@@ -23,7 +23,7 @@ The API and worker are separate Railway services from the same `backend/` root:
 - API: `pnpm start:prod`
 - Worker: `pnpm start:worker:prod`
 
-Use `railway.api.json` as the API service config path and `railway.worker.json` as the worker config path. Both services use `backend/` as their repository root and the same Dockerfile. Only the API gets a public domain. The API must return HTTP 200 from `/ready` before Railway cuts traffic over.
+Both services use `backend/` as their repository root, Dockerfile, and `railway.json`. Set `OPES_PROCESS=worker` only on the worker; the shared launcher then skips migrations and starts `dist/worker`. The API default runs the advisory-locked migration step before starting `dist/main`. Only the API gets a public domain, and it must return HTTP 200 from `/ready` before traffic is accepted.
 
 Required Railway resources:
 
@@ -39,7 +39,7 @@ The current production origins are `https://opes.maylord.xyz` and `https://opes.
 ## Service variable boundaries
 
 - Vercel: `NEXT_PUBLIC_OPES_API_URL`, `NEXT_PUBLIC_PRIVY_APP_ID`
-- API: runtime database URL, migration database URL, Privy server secret, operations token, storage credentials, DeepSeek key, allowed origins
+- API: runtime database URL, migration database URL, runtime-role password, Privy server secret, operations token, storage credentials, DeepSeek key, allowed origins
 - Worker: runtime database URL, Circle credentials, RPC/provider/signer credentials, storage credentials when extraction jobs consume them
 - PostgreSQL: no application or provider secrets
 

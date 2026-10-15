@@ -27,6 +27,27 @@ try {
     process.stdout.write(`applied ${version}\n`);
   }
 
+  const runtimePassword = process.env.OPES_RUNTIME_DATABASE_PASSWORD?.trim();
+  if (runtimePassword) {
+    if (Buffer.byteLength(runtimePassword) < 32)
+      throw new Error('OPES_RUNTIME_DATABASE_PASSWORD must be at least 32 bytes');
+    await client.query(`DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'opes_runtime') THEN
+          CREATE ROLE opes_runtime;
+        END IF;
+      END
+    $$`);
+    const roleStatement = await client.query(
+      `SELECT format(
+        'ALTER ROLE opes_runtime WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS',
+        $1::text
+      ) AS sql`,
+      [runtimePassword],
+    );
+    await client.query(roleStatement.rows[0].sql);
+  }
+
   const runtimeRole = await client.query("SELECT 1 FROM pg_roles WHERE rolname = 'opes_runtime'");
   if (runtimeRole.rowCount) {
     const databaseGrant = await client.query(

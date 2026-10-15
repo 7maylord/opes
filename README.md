@@ -46,8 +46,8 @@ Contract checks run from `contracts/` with `forge fmt --check`, `forge build --s
 ## Deployment
 
 - Vercel project root: `frontend`; set `NEXT_PUBLIC_OPES_API_URL=https://opes.up.railway.app` and `NEXT_PUBLIC_PRIVY_APP_ID`.
-- Railway API service: `opes-api`, rooted at `backend`, using `railway.api.json` and the `opes.up.railway.app` domain.
-- Railway worker service: `opes-worker`, rooted at `backend`, using `railway.worker.json` without a public domain.
+- Railway API service: `opes-api`, rooted at `backend`, using `railway.json` and the `opes.up.railway.app` domain.
+- Railway worker service: `opes-worker`, rooted at `backend`, using the same `railway.json`, with `OPES_PROCESS=worker` and no public domain.
 - Railway data resources: `PostgresOpes` and the private `opesbucket` Storage Bucket.
 - Attach Railway PostgreSQL to both backend services. Attach one private Railway Storage Bucket and its S3-compatible variables to the API and worker only where document processing needs them.
 - Put Circle, DeepSeek, Privy secret, Arc/Base RPC, operations, and optional swap-signer credentials only on backend services that consume them. Set `OPES_ALLOWED_ORIGINS` to the exact Vercel production and preview origins.

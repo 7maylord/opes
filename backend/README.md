@@ -9,7 +9,7 @@ pnpm db:migrate
 pnpm start:dev
 ```
 
-The API defaults to port 3004 through `.env.example`. Run `pnpm start:worker` in a second terminal. Production uses the API and worker as separate Railway services from the same Docker image; see `railway.api.json`, `railway.worker.json`, and `RUNBOOK.md`.
+The API defaults to port 3004 through `.env.example`. Run `pnpm start:worker` in a second terminal. Production uses the API and worker as separate Railway services from the same Docker image and `railway.json`; set `OPES_PROCESS=worker` only on the worker. See `RUNBOOK.md`.
 
 The production API is [opes.up.railway.app](https://opes.up.railway.app). Its public checks are `/health` and `/ready`; the production browser origin is `https://opes.maylord.xyz`.
 
