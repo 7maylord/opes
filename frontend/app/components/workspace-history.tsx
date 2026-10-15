@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { getWorkspaceRecord, listWorkspaceRecords } from "@/lib/api";
 import type {
   WorkspaceDetail,
@@ -32,11 +33,12 @@ export function WorkspaceHistory({ token, organizationId }: { token: string; org
   const [status, setStatus] = useState("");
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
   const load = useCallback(async (cursor?: string) => {
     setLoading(true);
-    setError("");
+    setLoadFailed(false);
     try {
       const page = await listWorkspaceRecords(token, organizationId, kind, {
         cursor,
@@ -48,7 +50,11 @@ export function WorkspaceHistory({ token, organizationId }: { token: string; org
       setNextCursor(page.nextCursor);
       if (!cursor) setDetail(null);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load workspace history");
+      setLoadFailed(true);
+      toast.error(reason instanceof Error ? reason.message : "Unable to load workspace history", {
+        id: "workspace-history-load-error",
+        action: { label: "Retry", onClick: () => setRetryKey((current) => current + 1) },
+      });
     } finally {
       setLoading(false);
     }
@@ -65,21 +71,26 @@ export function WorkspaceHistory({ token, organizationId }: { token: string; org
       setItems(page.items);
       setNextCursor(page.nextCursor);
       setDetail(null);
-      setError("");
+      setLoadFailed(false);
     }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load workspace history");
+      if (!cancelled) {
+        setLoadFailed(true);
+        toast.error(reason instanceof Error ? reason.message : "Unable to load workspace history", {
+          id: "workspace-history-load-error",
+          action: { label: "Retry", onClick: () => setRetryKey((current) => current + 1) },
+        });
+      }
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [kind, organizationId, search, status, token]);
+  }, [kind, organizationId, retryKey, search, status, token]);
 
   async function openRecord(record: WorkspaceRecord) {
-    setError("");
     try {
       setDetail(await getWorkspaceRecord(token, organizationId, record.kind, record.id));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to load record detail");
+      toast.error(reason instanceof Error ? reason.message : "Unable to load record detail");
     }
   }
 
@@ -114,9 +125,8 @@ export function WorkspaceHistory({ token, organizationId }: { token: string; org
         ))}
       </div>
 
-      {error ? <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"><span>{error}</span><button type="button" onClick={() => void load()} className="font-semibold underline">Retry</button></div> : null}
       {loading && items.length === 0 ? <p className="mt-6 text-sm text-slate-600" role="status">Loading records…</p> : null}
-      {!loading && !error && items.length === 0 ? <p className="mt-6 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600">No {kinds.find((item) => item.value === kind)?.label.toLowerCase()} match this view.</p> : null}
+      {!loading && !loadFailed && items.length === 0 ? <p className="mt-6 rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600">No {kinds.find((item) => item.value === kind)?.label.toLowerCase()} match this view.</p> : null}
 
       <div className="mt-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.72fr)]">
         <div className="grid content-start gap-3 sm:grid-cols-2">

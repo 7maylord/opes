@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import {
   configureTreasury,
   getTreasuryPosition,
@@ -32,8 +33,6 @@ export function TreasuryAuditViews({
   const [destination, setDestination] = useState("base-sepolia|84532|USDC");
   const [invoices, setInvoices] = useState<WorkspaceRecord[]>([]);
   const [executions, setExecutions] = useState<WorkspaceRecord[]>([]);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [bufferAtomic, setBufferAtomic] = useState("0");
   const [budgetAtomic, setBudgetAtomic] = useState("");
@@ -52,7 +51,7 @@ export function TreasuryAuditViews({
       setInvoiceVersionId(invoicePage.items[0]?.id ?? "");
       setExecutionId(executionPage.items[0]?.id ?? "");
     }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load treasury options");
+      if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load treasury options");
     });
     return () => { cancelled = true; };
   }, [organizationId, token]);
@@ -117,13 +116,11 @@ export function TreasuryAuditViews({
 
   async function run(success: string, work: () => Promise<void>) {
     setPending(true);
-    setError("");
-    setMessage("");
     try {
       await work();
-      setMessage(success);
+      toast.success(success);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Treasury action failed");
+      toast.error(reason instanceof Error ? reason.message : "Treasury action failed");
     } finally {
       setPending(false);
     }
@@ -136,9 +133,6 @@ export function TreasuryAuditViews({
         Testnet/mainnet capabilities come from backend policy. Planned liquidity,
         unsettled approvals and ledger postings are shown separately from paid status.
       </p>
-      {error !== "" ? <Notice tone="error" text={error} /> : null}
-      {message !== "" ? <Notice tone="success" text={message} /> : null}
-
       <div className="mt-4 grid gap-4 xl:grid-cols-3">
         <div className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">Treasury position</h4>
@@ -233,8 +227,4 @@ function LiquidityLegs({ action }: { action: LiquidityActionResponse }) {
     [`${action.destination.assetSymbol} settlement`, failed ? "failed" : action.status === "CONFIRMED" ? "confirmed" : "pending"],
   ];
   return <ol className="grid gap-2 text-sm">{legs.map(([label, state]) => <li key={label} className="flex items-center justify-between rounded-xl bg-slate-100 px-3 py-2"><span>{label}</span><span className={state === "confirmed" ? "font-semibold text-emerald-700" : state === "failed" ? "font-semibold text-red-700" : "font-semibold text-amber-700"}>{state}</span></li>)}</ol>;
-}
-
-function Notice({ tone, text }: { tone: "error" | "success"; text: string }) {
-  return <p className={tone === "error" ? "mt-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" : "mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"}>{text}</p>;
 }

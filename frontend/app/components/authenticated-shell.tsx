@@ -9,9 +9,9 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { usePrivy } from "@privy-io/react-auth";
+import { useCreateWallet, usePrivy, useWallets } from "@privy-io/react-auth";
+import { toast } from "sonner";
 import {
-  ApiError,
   acceptInvitation,
   exchangePrivySession,
   getAgent,
@@ -63,6 +63,8 @@ export function AuthenticatedShell() {
     login,
     logout: privyLogout,
   } = usePrivy();
+  const { ready: walletsReady, wallets } = useWallets();
+  const { createWallet } = useCreateWallet();
   const [token, setStoredToken] = useStoredValue(sessionStorageKeys.token, "");
   const [selectedOrganizationId, setSelectedOrganizationId] = useStoredValue(
     sessionStorageKeys.selectedOrganizationId,
@@ -91,13 +93,12 @@ export function AuthenticatedShell() {
   const [organizations, setOrganizations] = useState<UserOrganization[]>([]);
   const [agent, setAgent] = useState<BusinessAgentDetail | null>(null);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
-  const [error, setError] = useState("");
-  const [actionMessage, setActionMessage] = useState("");
   const [actionPending, setActionPending] = useState(false);
   const privyExchangePending = useRef(false);
-  const isLoading = token !== "" && user === null && error === "";
+  const isLoading = token !== "" && user === null;
 
   const clearBrowserSession = useCallback(() => {
+    privyExchangePending.current = false;
     clearTenantCache(localStorage);
     setStoredToken("");
     setSelectedOrganizationId("");
@@ -105,28 +106,37 @@ export function AuthenticatedShell() {
     setOrganizations([]);
     setAgent(null);
     setMembers([]);
-    setError("");
-    setActionMessage("");
   }, [setSelectedOrganizationId, setStoredToken]);
 
   useEffect(() => {
-    if (!privyReady || !privyAuthenticated || token !== "" || privyExchangePending.current) return;
+    if (!privyReady || !walletsReady || !privyAuthenticated || token !== "" || privyExchangePending.current) return;
     privyExchangePending.current = true;
     let cancelled = false;
-    getAccessToken()
-      .then((accessToken) => {
+    void (async () => {
+      try {
+        const hasEmbeddedEthereumWallet = wallets.some(
+          (wallet) =>
+            wallet.type === "ethereum" &&
+            (wallet.walletClientType === "privy" || wallet.walletClientType === "privy-v2"),
+        );
+        if (!hasEmbeddedEthereumWallet) await createWallet();
+        const accessToken = await getAccessToken();
         if (!accessToken) throw new Error("Privy session is unavailable");
-        return exchangePrivySession(accessToken);
-      })
-      .then((session) => {
-        if (!cancelled) setStoredToken(session.sessionToken);
-      })
-      .catch((reason: unknown) => {
+        const session = await exchangePrivySession(accessToken);
+        if (!cancelled) {
+          setStoredToken(session.sessionToken);
+          toast.success("Workspace opened");
+        }
+      } catch (reason) {
         privyExchangePending.current = false;
-        if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to sign in");
-      });
+        if (!cancelled) {
+          toast.error(reason instanceof Error ? reason.message : "Unable to sign in");
+          await privyLogout().catch(() => undefined);
+        }
+      }
+    })();
     return () => { cancelled = true; };
-  }, [getAccessToken, privyAuthenticated, privyReady, setStoredToken, token]);
+  }, [createWallet, getAccessToken, privyAuthenticated, privyLogout, privyReady, setStoredToken, token, wallets, walletsReady]);
 
   useEffect(() => {
     if (token === "") return;
@@ -148,10 +158,9 @@ export function AuthenticatedShell() {
         if (cancelled) return;
         const message =
           reason instanceof Error ? reason.message : "Unable to load session";
-        setError(message);
-        if (reason instanceof ApiError && reason.status === 401) {
-          clearBrowserSession();
-        }
+        toast.error(message);
+        clearBrowserSession();
+        void privyLogout();
       });
 
     return () => {
@@ -161,7 +170,7 @@ export function AuthenticatedShell() {
     clearBrowserSession,
     selectedOrganizationId,
     setSelectedOrganizationId,
-    token,
+    privyLogout, token,
   ]);
 
   useEffect(() => {
@@ -180,7 +189,7 @@ export function AuthenticatedShell() {
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
-        setError(reason instanceof Error ? reason.message : "Unable to load setup");
+        toast.error(reason instanceof Error ? reason.message : "Unable to load setup");
       });
 
     return () => {
@@ -209,7 +218,7 @@ export function AuthenticatedShell() {
       });
       setOrganizations(await listOrganizations(token));
       setSelectedOrganizationId(result.organization.id);
-      setActionMessage("Organization created. Arc setup is queued.");
+      toast.success("Organization created. Arc setup is queued.");
     });
   }
 
@@ -220,7 +229,7 @@ export function AuthenticatedShell() {
       setOrganizations(await listOrganizations(token));
       setSelectedOrganizationId(result.organization.id);
       setInvitationToken("");
-      setActionMessage("Invitation accepted. Workspace loaded.");
+      toast.success("Invitation accepted. Workspace loaded.");
     });
   }
 
@@ -249,7 +258,7 @@ export function AuthenticatedShell() {
       ]);
       setLatestInvitationToken(invited.invitationToken);
       setInviteForm({ email: "", displayName: "", role: "APPROVER" });
-      setActionMessage(`Invitation created for ${invited.email}.`);
+      toast.success(`Invitation created for ${invited.email}.`);
     });
   }
 
@@ -271,7 +280,7 @@ export function AuthenticatedShell() {
               ],
             },
       );
-      setActionMessage("Arc factory provisioning is queued.");
+      toast.success("Arc factory provisioning is queued.");
     });
   }
 
@@ -288,12 +297,10 @@ export function AuthenticatedShell() {
 
   async function runAction(work: () => Promise<void>) {
     setActionPending(true);
-    setError("");
-    setActionMessage("");
     try {
       await work();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Action failed");
+      toast.error(reason instanceof Error ? reason.message : "Action failed");
     } finally {
       setActionPending(false);
     }
@@ -317,7 +324,6 @@ export function AuthenticatedShell() {
                 {privyAuthenticated ? "Opening workspace…" : "Sign in with email"}
               </button>
             </AuthCard>
-            <Messages error={error} actionMessage={actionMessage} />
           </div>
           </LandingExperience>
         ) : (
@@ -383,7 +389,6 @@ export function AuthenticatedShell() {
                 <StatusBadge label={selectedOrganization?.lifecycleStatus} />
               </div>
 
-              <Messages error={error} actionMessage={actionMessage} />
               {isLoading ? <p className="text-slate-600">Loading...</p> : null}
 
               {organizations.length === 0 && !isLoading ? (
@@ -732,26 +737,5 @@ function StatusBadge({ label }: { label?: string }) {
     <span className="w-fit rounded-full bg-cyan-100 px-4 py-2 text-sm font-semibold text-cyan-900">
       {label ?? "Unavailable"}
     </span>
-  );
-}
-
-function Messages({ error, actionMessage }: { error: string; actionMessage: string }) {
-  return (
-    <>
-      {error !== "" ? <ErrorMessage message={error} /> : null}
-      {actionMessage !== "" ? (
-        <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          {actionMessage}
-        </p>
-      ) : null}
-    </>
-  );
-}
-
-function ErrorMessage({ message }: { message: string }) {
-  return (
-    <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-      {message}
-    </p>
   );
 }

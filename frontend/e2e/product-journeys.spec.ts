@@ -24,6 +24,14 @@ async function openSignedIn(page: Page) {
   await expect(page.getByRole("heading", { name: "Alpha Co" })).toBeVisible();
 }
 
+test("Privy email sign-in creates an embedded owner wallet before opening OPES", async ({ page }) => {
+  await installApiMock(page);
+  await page.goto("/?privy-auth=1");
+  await expect(page.getByRole("heading", { name: "Alpha Co" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("opes:e2e-wallet-created"))).toBe("1");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("opes:session-token"))).toBe("mock-session-token");
+});
+
 test("journey 1: owner creates organization and sees setup checklist", async ({ page }) => {
   await installApiMock(page);
   await page.goto("/");
@@ -186,6 +194,7 @@ async function respond(route: Route, state: MockState) {
 }
 
 function responseFor(method: string, path: string, body: Record<string, unknown>, authorization: string | undefined, state: MockState) {
+  if (method === "POST" && path === "auth/privy/session") return { user, sessionToken: "mock-session-token" };
   if (method === "DELETE" && path === "session") return { revoked: true };
   if (method === "GET" && path === "session") return user;
   if (method === "GET" && path === "organizations") return authorization === "Bearer mock-session-token" || state.onboarded ? organizations : [];

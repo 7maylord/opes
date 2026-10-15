@@ -1,16 +1,33 @@
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 
 export function PrivyProvider({ children }: { children: ReactNode }) {
   return children;
 }
 
 export function usePrivy() {
+  const authenticated = useSyncExternalStore(
+    () => () => undefined,
+    () => new URLSearchParams(window.location.search).has("privy-auth"),
+    () => false,
+  );
   return {
     ready: true,
-    authenticated: false,
-    getAccessToken: async () => null,
+    authenticated,
+    getAccessToken: async () => "privy-access-token",
     login: () => undefined,
     logout: async () => undefined,
+  };
+}
+
+export function useWallets() {
+  return { ready: true, wallets: [] };
+}
+
+export function useCreateWallet() {
+  return {
+    createWallet: async () => {
+      localStorage.setItem("opes:e2e-wallet-created", "1");
+    },
   };
 }
 

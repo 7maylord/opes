@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useSendTransaction } from "@privy-io/react-auth";
+import { toast } from "sonner";
 import {
   addVendorAddress,
   approveDecision,
@@ -57,8 +58,6 @@ export function VendorInvoiceWorkflows({
   const [decision, setDecision] = useState<PaymentDecisionResponse | null>(null);
   const [approval, setApproval] = useState<DecisionApprovalResponse | null>(null);
   const [execution, setExecution] = useState<PaymentExecutionResponse | null>(null);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
 
   async function submitVendor(event: FormEvent<HTMLFormElement>) {
@@ -70,7 +69,7 @@ export function VendorInvoiceWorkflows({
 
   async function submitAddress(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (vendor === null) return setError("Create a vendor first.");
+    if (vendor === null) return toast.error("Create a vendor first.");
     await run("Vendor payout address recorded", async () => {
       setVendorAddress(
         await addVendorAddress(token, organizationId, vendor.id, {
@@ -85,14 +84,14 @@ export function VendorInvoiceWorkflows({
   }
 
   async function createPortalAccess() {
-    if (vendor === null) return setError("Create a vendor first.");
+    if (vendor === null) return toast.error("Create a vendor first.");
     await run("Vendor portal access created", async () => {
       setPortalAccess(await createVendorPortalAccess(token, organizationId, vendor.id, vendorEmail));
     });
   }
 
   async function submitAddressVerification() {
-    if (vendorAddress === null) return setError("Add a payout address first.");
+    if (vendorAddress === null) return toast.error("Add a payout address first.");
     await run("Vendor address verified", async () => {
       setVendorAddress(await verifyVendorAddress(token, organizationId, vendorAddress.id));
     });
@@ -100,7 +99,7 @@ export function VendorInvoiceWorkflows({
 
   async function submitDocument(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (invoiceFile === null) return setError("Choose an invoice file first.");
+    if (invoiceFile === null) return toast.error("Choose an invoice file first.");
     await run("Invoice evidence recorded", async () => {
       setDocument(
         await uploadEvidenceDocument(token, organizationId, {
@@ -112,7 +111,7 @@ export function VendorInvoiceWorkflows({
   }
 
   async function submitExtraction() {
-    if (document === null) return setError("Record invoice evidence first.");
+    if (document === null) return toast.error("Record invoice evidence first.");
     await run("Invoice extracted for review", async () => {
       const extracted = await extractInvoiceDocument(token, organizationId, document.id);
       setExtraction(extracted);
@@ -129,7 +128,7 @@ export function VendorInvoiceWorkflows({
 
   async function submitInvoiceVerification() {
     if (vendor === null || vendorAddress === null || document === null || extraction === null) {
-      return setError("Vendor, address and reviewed extraction are required.");
+      return toast.error("Vendor, address and reviewed extraction are required.");
     }
     await run("Invoice staged for evidence matching", async () => {
       setObligation(
@@ -149,7 +148,7 @@ export function VendorInvoiceWorkflows({
 
   async function submitClaimConfirmation() {
     if (document === null || extraction === null)
-      return setError("Extract an invoice first.");
+      return toast.error("Extract an invoice first.");
     await run("Invoice claims confirmed", async () => {
       const output = extraction.output as Record<string, unknown>;
       await confirmDocumentClaims(
@@ -170,9 +169,9 @@ export function VendorInvoiceWorkflows({
   }
 
   async function submitDecision() {
-    if (obligation === null) return setError("Verify an invoice first.");
+    if (obligation === null) return toast.error("Verify an invoice first.");
     if (obligation.status !== "ACCEPTED")
-      return setError("Complete the purchase and delivery evidence match first.");
+      return toast.error("Complete the purchase and delivery evidence match first.");
     await run("Decision dry run completed", async () => {
       const [liquidityRoute, environment, chainId, assetSymbol] = paymentRoute.split("|");
       setDecision(
@@ -191,7 +190,7 @@ export function VendorInvoiceWorkflows({
   }
 
   async function submitApproval() {
-    if (decision === null) return setError("Run a decision first.");
+    if (decision === null) return toast.error("Run a decision first.");
     await run("Decision approved", async () => {
       const result = await approveDecision(token, organizationId, decision.id);
       const transaction = await sendTransaction({to:result.ownerAction.to,data:result.ownerAction.data,chainId:result.ownerAction.chainId,value:0});
@@ -201,7 +200,7 @@ export function VendorInvoiceWorkflows({
   }
 
   async function submitExecution() {
-    if (decision === null) return setError("Run a decision first.");
+    if (decision === null) return toast.error("Run a decision first.");
     await run("Execution requested", async () => {
       setExecution(await executeDecision(token, organizationId, decision.id));
     });
@@ -209,13 +208,11 @@ export function VendorInvoiceWorkflows({
 
   async function run(success: string, work: () => Promise<void>) {
     setPending(true);
-    setError("");
-    setMessage("");
     try {
       await work();
-      setMessage(success);
+      toast.success(success);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Workflow failed");
+      toast.error(reason instanceof Error ? reason.message : "Workflow failed");
     } finally {
       setPending(false);
     }
@@ -228,9 +225,6 @@ export function VendorInvoiceWorkflows({
         Create the vendor source, record evidence, compare the decision checks,
         then approve and request execution through backend-controlled routes.
       </p>
-      {error !== "" ? <Notice tone="error" text={error} /> : null}
-      {message !== "" ? <Notice tone="success" text={message} /> : null}
-
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <form onSubmit={submitVendor} className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">1. Vendor</h4>
@@ -297,8 +291,4 @@ function Result({ value }: { value: unknown }) {
   if (value === null || value === undefined) return null;
   const entries = Object.entries(value as Record<string, unknown>).filter(([key, item]) => !["metadata", "providerPayload", "ownerAction", "ownerActions"].includes(key) && item !== null && typeof item !== "object").slice(0, 8);
   return <dl className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">{entries.map(([key, item]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-500">{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt><dd className="max-w-[60%] truncate font-medium">{String(item)}</dd></div>)}</dl>;
-}
-
-function Notice({ tone, text }: { tone: "error" | "success"; text: string }) {
-  return <p className={tone === "error" ? "mt-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" : "mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"}>{text}</p>;
 }

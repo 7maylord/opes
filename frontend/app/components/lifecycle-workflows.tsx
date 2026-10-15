@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSendTransaction } from "@privy-io/react-auth";
+import { toast } from "sonner";
 import {
   acceptMilestone,
   cancelSubscription,
@@ -38,8 +39,6 @@ export function LifecycleWorkflows({
   const [cycle, setCycle] = useState<SubscriptionCycleResponse | null>(null);
   const [agreement, setAgreement] = useState<EscrowAgreementResponse | null>(null);
   const [milestone, setMilestone] = useState<EscrowMilestoneResponse | null>(null);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
   const [vendors, setVendors] = useState<WorkspaceRecord[]>([]);
   const [documents, setDocuments] = useState<WorkspaceRecord[]>([]);
@@ -57,7 +56,7 @@ export function LifecycleWorkflows({
       setVendorId(firstVendor?.id ?? "");
       setVendorAddressId(readAddresses(firstVendor)[0]?.id ?? "");
     }).catch((reason: unknown) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : "Unable to load lifecycle options");
+      if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load lifecycle options");
     });
     return () => { cancelled = true; };
   }, [organizationId, token]);
@@ -90,7 +89,7 @@ export function LifecycleWorkflows({
   }
 
   async function submitCycle() {
-    if (subscription === null) return setError("Create a subscription first.");
+    if (subscription === null) return toast.error("Create a subscription first.");
     await run("Subscription cycle created", async () => {
       setCycle(
         await createSubscriptionCycle(token, organizationId, subscription.id, {
@@ -101,7 +100,7 @@ export function LifecycleWorkflows({
   }
 
   async function activateSubscription() {
-    if (subscription === null) return setError("Create a subscription first.");
+    if (subscription === null) return toast.error("Create a subscription first.");
     await run("Recurring mandate activated", async () => {
       for (const action of subscription.ownerActions) {
         if (action.status === "CONFIRMED") continue;
@@ -118,7 +117,7 @@ export function LifecycleWorkflows({
   }
 
   async function submitCancel() {
-    if (subscription === null) return setError("Create a subscription first.");
+    if (subscription === null) return toast.error("Create a subscription first.");
     await run("Subscription cancelled", async () => {
       const result = await cancelSubscription(token, organizationId, subscription.id);
       await signAction(result);
@@ -127,7 +126,7 @@ export function LifecycleWorkflows({
   }
 
   async function changeStatus(operation: 'pause' | 'resume') {
-    if (subscription === null) return setError("Create a subscription first.");
+    if (subscription === null) return toast.error("Create a subscription first.");
     await run(`Subscription ${operation}d`, async () => {
       await signAction(await changeSubscriptionStatus(token, organizationId, subscription.id, operation));
       setSubscription((current) => current === null ? current : { ...current, status: operation === 'pause' ? 'PAUSED' : 'ACTIVE' });
@@ -161,31 +160,31 @@ export function LifecycleWorkflows({
 
   async function submitEvidence() {
     const target = agreement?.milestones[0];
-    if (target === undefined) return setError("Create an escrow agreement first.");
-    if (documentId === "") return setError("Enter a milestone evidence document ID.");
+    if (target === undefined) return toast.error("Create an escrow agreement first.");
+    if (documentId === "") return toast.error("Enter a milestone evidence document ID.");
     await run("Milestone evidence submitted", async () => {
       setMilestone(await submitMilestoneEvidence(token, organizationId, target.id, documentId));
     });
   }
 
   async function activateEscrow() {
-    if (!agreement) return setError("Create an escrow agreement first.");
+    if (!agreement) return toast.error("Create an escrow agreement first.");
     await run("Escrow agreement activated", async () => { for (const action of agreement.ownerActions) if (action.status !== 'CONFIRMED') await signAction(action); setAgreement(current => current ? {...current,status:'CREATED'} : current); });
   }
 
   async function submitFunding() {
-    if (!agreement) return setError("Create an escrow agreement first.");
+    if (!agreement) return toast.error("Create an escrow agreement first.");
     await run("Escrow funding approved", async () => { await signAction(await fundEscrow(token, organizationId, agreement.id)); setAgreement(current => current ? {...current,status:'FUNDING_APPROVED'} : current); });
   }
 
   async function submitEscrowCancel() {
-    if (!agreement) return setError("Create an escrow agreement first.");
+    if (!agreement) return toast.error("Create an escrow agreement first.");
     await run("Escrow cancelled; refund queued", async () => { await signAction(await cancelEscrow(token, organizationId, agreement.id, 'Cancelled by owner')); setAgreement(current => current ? {...current,status:'CANCELLED'} : current); });
   }
 
   async function submitAccept() {
     const target = milestone ?? agreement?.milestones[0];
-    if (target === undefined) return setError("Create an escrow agreement first.");
+    if (target === undefined) return toast.error("Create an escrow agreement first.");
     await run("Milestone accepted", async () => {
       await signAction(await acceptMilestone(token, organizationId, target.id));
       setMilestone({ ...target, status: 'ACCEPTED' });
@@ -194,7 +193,7 @@ export function LifecycleWorkflows({
 
   async function submitDispute() {
     const target = milestone ?? agreement?.milestones[0];
-    if (target === undefined) return setError("Create an escrow agreement first.");
+    if (target === undefined) return toast.error("Create an escrow agreement first.");
     await run("Milestone disputed", async () => {
       await signAction(await disputeMilestone(token, organizationId, target.id, "Needs review"));
       setMilestone({ ...target, status: 'DISPUTED' });
@@ -203,13 +202,11 @@ export function LifecycleWorkflows({
 
   async function run(success: string, work: () => Promise<void>) {
     setPending(true);
-    setError("");
-    setMessage("");
     try {
       await work();
-      setMessage(success);
+      toast.success(success);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Lifecycle action failed");
+      toast.error(reason instanceof Error ? reason.message : "Lifecycle action failed");
     } finally {
       setPending(false);
     }
@@ -222,9 +219,6 @@ export function LifecycleWorkflows({
         Choose persisted vendors, verified payout addresses and evidence from this workspace.
         Returned backend states are shown before any next action.
       </p>
-      {error !== "" ? <Notice tone="error" text={error} /> : null}
-      {message !== "" ? <Notice tone="success" text={message} /> : null}
-
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <form onSubmit={submitSubscription} className="space-y-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">Subscription</h4>
@@ -295,8 +289,4 @@ function readAddresses(vendor: WorkspaceRecord | undefined): Array<{ id: string;
       ? [{ id: address.id, environment: address.environment, assetSymbol: address.assetSymbol, payoutAddress: address.payoutAddress }]
       : [];
   });
-}
-
-function Notice({ tone, text }: { tone: "error" | "success"; text: string }) {
-  return <p className={tone === "error" ? "mt-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-700" : "mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800"}>{text}</p>;
 }
