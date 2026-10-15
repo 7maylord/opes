@@ -35,6 +35,7 @@ import { LifecycleWorkflows } from "./lifecycle-workflows";
 import { TreasuryAuditViews } from "./treasury-audit-views";
 import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
 import { OwnerTreasuryControls } from "./owner-treasury-controls";
+import { WorkspaceSetup } from "./workspace-setup";
 import { WorkspaceHistory } from "./workspace-history";
 import { EmailInboxScreen } from "./email-inbox-screen";
 import { AccountingIntegrations } from "./accounting-integrations";
@@ -97,7 +98,7 @@ export function AuthenticatedShell() {
   const [organizations, setOrganizations] = useState<UserOrganization[]>([]);
   const [agent, setAgent] = useState<BusinessAgentDetail | null>(null);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
-  const [workspaceView, setWorkspaceView] = useState<"overview" | "inbox" | "integrations">("overview");
+  const [workspaceView, setWorkspaceView] = useState<"overview" | "setup" | "invoices" | "agreements" | "treasury" | "team" | "inbox" | "integrations">("overview");
   const [actionPending, setActionPending] = useState(false);
   const privyExchangePending = useRef<Promise<AuthSessionResult> | null>(null);
   const isLoading = token !== "" && user === null;
@@ -215,7 +216,8 @@ export function AuthenticatedShell() {
 
     let cancelled = false;
 
-    Promise.all([
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => Promise.all([
       getAgent(token, selectedOrganizationId),
       listOrganizationMembers(token, selectedOrganizationId),
     ])
@@ -223,14 +225,19 @@ export function AuthenticatedShell() {
         if (cancelled) return;
         setAgent(nextAgent);
         setMembers(nextMembers);
+        if (!canExecute(buildSetupChecklist(nextAgent, nextMembers))) {
+          timer = setTimeout(() => { void refresh(); }, 10000);
+        }
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
         toast.error(reason instanceof Error ? reason.message : "Unable to load setup");
       });
 
+    void refresh();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [selectedOrganizationId, token]);
 
@@ -255,7 +262,8 @@ export function AuthenticatedShell() {
       });
       setOrganizations(await listOrganizations(token));
       setSelectedOrganizationId(result.organization.id);
-      toast.success("Organization created. Arc setup is queued.");
+      setWorkspaceView("setup");
+      toast.success("Organization created. Wallet and contract setup has started.");
     });
   }
 
@@ -278,6 +286,7 @@ export function AuthenticatedShell() {
       setLatestInvitationToken("");
     }
     setSelectedOrganizationId(nextOrganizationId);
+    setWorkspaceView("overview");
   }
 
   async function submitInvite(event: FormEvent<HTMLFormElement>) {
@@ -363,9 +372,9 @@ export function AuthenticatedShell() {
   }
 
   return (
-    <main className={token === "" ? "min-h-screen bg-[#f4f3ed] text-[#20251f]" : "min-h-screen overflow-hidden bg-slate-950 text-slate-100"}>
-      <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_15%_20%,rgba(34,211,238,0.24),transparent_32%),radial-gradient(circle_at_86%_6%,rgba(20,184,166,0.20),transparent_30%),linear-gradient(135deg,#020617_0%,#0f172a_48%,#111827_100%)]" />
-      <section className={token === "" ? "" : "mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8"}>
+    <main className={token === "" ? "min-h-screen bg-[#f4f3ed] text-[#20251f]" : "min-h-screen bg-[#f4f3ed] text-slate-900"}>
+
+      <section className={token === "" ? "" : "mx-auto flex w-full max-w-[1600px] flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8"}>
         {token === "" ? (
           <LandingExperience
             onEnterWorkspace={openPrivyLogin}
@@ -379,8 +388,8 @@ export function AuthenticatedShell() {
               setNetworkLabel={setNetworkLabel}
               setExecutionLabel={setExecutionLabel}
             />
-            <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-            <aside className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
+            <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <aside className="min-w-0 self-start rounded-2xl bg-[#20251f] p-5 text-white lg:sticky lg:top-6">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.22em] text-slate-400">
@@ -416,19 +425,16 @@ export function AuthenticatedShell() {
                 ))}
               </select>
               <p className="mt-4 text-sm leading-6 text-slate-400">
-                Switching organizations clears tenant-scoped browser cache before
-                loading the next workspace.
+                One workspace. Every obligation accounted for.
               </p>
-              <nav className="mt-6 grid gap-2" aria-label="Workspace views">
-                {([[
-                  "overview", "Overview",
-                ], ["inbox", "Email inbox"], ["integrations", "Integrations"]] as const).map(([value, label]) => (
-                  <button key={value} type="button" onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "rounded-2xl bg-cyan-300 px-4 py-3 text-left font-semibold text-slate-950" : "rounded-2xl px-4 py-3 text-left text-slate-300 hover:bg-white/10"}>{label}</button>
+              <nav className="mt-6 flex gap-2 overflow-x-auto lg:grid" aria-label="Workspace views">
+                {([ ["overview", "Overview"], ["setup", "Getting started"], ["invoices", "Invoices & vendors"], ["agreements", "Agreements"], ["treasury", "Treasury & controls"], ["inbox", "Email inbox"], ["integrations", "Integrations"], ["team", "Team"] ] as const).map(([value, label]) => (
+                  <button key={value} type="button" aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "shrink-0 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "shrink-0 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}>{label}</button>
                 ))}
               </nav>
             </aside>
 
-            <section className="space-y-6 rounded-3xl border border-white/10 bg-white p-6 text-slate-950 shadow-xl md:p-8">
+            <section className="min-w-0 space-y-6 rounded-2xl border border-[#dedfd5] bg-white p-6 text-slate-950 md:p-8">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div>
                   <p className="text-sm font-medium uppercase tracking-[0.22em] text-cyan-700">
@@ -443,14 +449,14 @@ export function AuthenticatedShell() {
 
               {isLoading ? <p className="text-slate-600">Loading...</p> : null}
 
-              {workspaceView === "overview" ? <>
+              {workspaceView === "overview" || organizations.length === 0 ? <>
               {organizations.length === 0 && !isLoading ? (
                 <div className="grid gap-6 lg:grid-cols-2">
                   <Panel title="Create organization">
                     <form onSubmit={submitOnboarding} className="space-y-4">
                       <TextInput label="Organization name" value={onboarding.organizationName} onChange={(organizationName) => setOnboarding((current) => ({ ...current, organizationName }))} required />
                       <TextInput label="Slug optional" value={onboarding.organizationSlug} onChange={(organizationSlug) => setOnboarding((current) => ({ ...current, organizationSlug }))} />
-                      <button disabled={actionPending} className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-50">Create and queue setup</button>
+                      <button disabled={actionPending} className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white disabled:opacity-50">Create workspace</button>
                     </form>
                   </Panel>
                   <Panel title="Accept invite">
@@ -469,41 +475,7 @@ export function AuthenticatedShell() {
                 <InfoCard label="Execution" value={setupComplete ? executionLabel : "Locked"} />
               </div>
 
-              <div className="grid gap-6 xl:grid-cols-2">
-                <Panel title="Setup checklist">
-                  <ul className="space-y-3">
-                    {setupChecks.map((check) => (
-                      <li key={check.label} className="rounded-2xl border border-slate-200 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-semibold">{check.label}</span>
-                          <span
-                            className={
-                              check.complete
-                                ? "rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800"
-                                : "rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800"
-                            }
-                          >
-                            {check.complete ? "Ready" : "Pending"}
-                          </span>
-                        </div>
-                        <p className="mt-2 break-all text-sm text-slate-600">{check.detail}</p>
-                      </li>
-                    ))}
-                  </ul>
-                  <button
-                    type="button"
-                    onClick={requestProvisioning}
-                    disabled={actionPending || selectedOrganizationId === ""}
-                    className="mt-4 min-h-11 rounded-2xl bg-slate-950 px-5 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-                  >
-                    Queue Arc contract setup
-                  </button>
-                </Panel>
-
-                <Panel title="Lifecycle controls">
-                  {setupComplete && selectedOrganization?.role === 'OWNER' ? <OwnerTreasuryControls token={token} organizationId={selectedOrganizationId}/> : <p className="text-sm text-slate-600">Owner controls unlock after Arc setup completes.</p>}
-                </Panel>
-              </div>
+              {selectedOrganizationId ? <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-[#edf1e5] p-6"><div><h3 className="text-xl font-semibold">{setupComplete ? "Your contracts are ready" : "Finish setting up your workspace"}</h3><p className="mt-2 text-sm text-slate-600">{setupComplete ? "Review funding and spending rules before your first payment." : "Follow wallet creation, fund your treasury and configure your payment rules."}</p></div><button className="btn" onClick={() => setWorkspaceView(setupComplete ? "invoices" : "setup")}>{setupComplete ? "Open invoices" : "Continue setup"}</button></div> : null}
 
               {selectedOrganizationId !== "" ? (
                 <WorkspaceHistory
@@ -513,27 +485,12 @@ export function AuthenticatedShell() {
                 />
               ) : null}
 
-              {selectedOrganizationId !== "" ? (
-                <VendorInvoiceWorkflows
-                  token={token}
-                  organizationId={selectedOrganizationId}
-                />
-              ) : null}
-
-              {selectedOrganizationId !== "" ? (
-                <LifecycleWorkflows
-                  token={token}
-                  organizationId={selectedOrganizationId}
-                />
-              ) : null}
-
-              {selectedOrganizationId !== "" ? (
-                <TreasuryAuditViews
-                  token={token}
-                  organizationId={selectedOrganizationId}
-                />
-              ) : null}
-
+              </> : null}
+              {workspaceView === "setup" && selectedOrganizationId ? <WorkspaceSetup agent={agent} user={user} checks={setupChecks} canManage={canManageMembers} pending={actionPending} onRetry={requestProvisioning} onTreasury={() => setWorkspaceView("treasury")} onInbox={() => setWorkspaceView("inbox")} onIntegrations={() => setWorkspaceView("integrations")} /> : null}
+              {workspaceView === "invoices" && selectedOrganizationId ? <VendorInvoiceWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
+              {workspaceView === "agreements" && selectedOrganizationId ? <LifecycleWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
+              {workspaceView === "treasury" && selectedOrganizationId ? <><TreasuryAuditViews key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /><Panel title="Owner controls">{setupComplete && selectedOrganization?.role === "OWNER" ? <OwnerTreasuryControls key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : <p className="text-sm text-slate-600">Owner controls unlock after contract setup completes.</p>}</Panel></> : null}
+              {workspaceView === "team" ? <>
               <Panel title="Members and invitations">
                 {organizations.length > 0 ? (
                   <form onSubmit={submitInvitation} className="mb-6 flex flex-col gap-3 border-b border-slate-200 pb-6 sm:flex-row">
@@ -631,27 +588,28 @@ function CommandHeader({
   setExecutionLabel: (value: string) => void;
 }) {
   return (
-    <header className="flex flex-col gap-5 rounded-3xl border border-white/10 bg-white/[0.04] p-6 shadow-2xl shadow-black/30 md:flex-row md:items-center md:justify-between">
+    <header className="flex flex-col gap-5 border-b border-[#dedfd5] pb-6 md:flex-row md:items-center md:justify-between">
       <div>
-        <p className="text-sm font-medium uppercase tracking-[0.28em] text-cyan-300">
+        <p className="text-sm font-medium uppercase tracking-[0.28em] text-blue-700">
           OPES command center
         </p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-5xl">
-          Agent-led treasury operations
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+          Your treasury, in focus
         </h1>
-        <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 md:text-base">
-          Authenticated shell for tenant-scoped workflows. The browser holds only
-          the user session token and selected organization context.
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+          Know what is owed, what is available, and what happens next.
         </p>
       </div>
       <div className="grid gap-3 text-sm sm:grid-cols-2">
         <LabelSelect
+          light
           label="Network"
           value={networkLabel}
           options={networkOptions}
           onChange={setNetworkLabel}
         />
         <LabelSelect
+          light
           label="Mode"
           value={executionLabel}
           options={executionOptions}

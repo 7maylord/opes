@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 const orgId = "11111111-1111-1111-1111-111111111111";
 const secondOrgId = "22222222-2222-2222-2222-222222222222";
-const user = { id: "user-1", email: "owner@example.com", displayName: "Owner User" };
+const user = { id: "user-1", email: "owner@example.com", displayName: "Owner User", ownerWalletAddress: "0x5000000000000000000000000000000000000005" };
 const organizations = [
   { id: orgId, slug: "alpha-co", displayName: "Alpha Co", lifecycleStatus: "SETUP_REQUIRED", membershipId: "member-owner", role: "OWNER", agentId: "agent-1", agentLifecycleStatus: "SETUP_REQUIRED" },
   { id: secondOrgId, slug: "beta-co", displayName: "Beta Co", lifecycleStatus: "PROVISIONING", membershipId: "member-admin", role: "ADMIN", agentId: "agent-2", agentLifecycleStatus: "PROVISIONING" },
@@ -63,24 +63,30 @@ test("Privy session survives a rerender while the backend exchange is pending", 
   expect(await page.evaluate(() => localStorage.getItem("opes:session-token"))).toBe("mock-session-token");
 });
 
-test("journey 1: owner creates organization and sees setup checklist", async ({ page }) => {
+test("journey 1: owner creates organization and sees setup checklist", async ({ page }, testInfo) => {
   await installApiMock(page);
   await page.goto("/");
   await setSession(page, "new-user-token");
   await page.getByLabel("Organization name").fill("Alpha Co");
-  await page.getByRole("button", { name: "Create and queue setup" }).click();
-  await expect(page.getByText("Organization created. Arc setup is queued.")).toBeVisible();
+  await page.getByRole("button", { name: "Create workspace" }).click();
+  await expect(page.getByText("Organization created. Wallet and contract setup has started.")).toBeVisible();
   await expect(page.getByText("Factory verified")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Queue Arc contract setup" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open Circle USDC faucet" })).toHaveAttribute("href", "https://faucet.circle.com/");
+  await expect(page.getByRole("button", { name: "Retry contract deployment" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy owner wallet", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Vendor name")).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("workspace-setup.png"), fullPage: true });
 });
 
 test("journey 2: invite and accept member", async ({ page }) => {
   await openSignedIn(page);
+  await page.getByRole("button", { name: "Team", exact: true }).click();
   await page.getByLabel("Email").fill("approver@example.com");
   await page.getByLabel("Display name").fill("Approver User");
   await page.getByRole("button", { name: "Invite" }).click();
   await expect(page.getByText("Invitation token:")).toBeVisible();
   await page.getByRole("button", { name: "Logout" }).click();
+  await expect(page.getByRole("button", { name: "Enter workspace", exact: true })).toBeVisible();
   await setSession(page, "invitee-token");
   await page.getByLabel("Invitation token").fill("invite-token-123");
   await page.getByRole("button", { name: "Accept invitation" }).click();
@@ -89,6 +95,7 @@ test("journey 2: invite and accept member", async ({ page }) => {
 
 test("journey 3: invoice decision reaches owner-signature approval", async ({ page }) => {
   await openSignedIn(page);
+  await page.getByRole("button", { name: "Invoices & vendors", exact: true }).click();
   await page.getByLabel("Vendor name").fill("Canteen Supplies");
   await page.getByRole("button", { name: "Create vendor" }).click();
   await page.getByLabel("Arc USDC payout address").fill("0x4000000000000000000000000000000000000004");
@@ -102,14 +109,15 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   });
   await page.getByRole("button", { name: "Upload and verify document" }).click();
   await page.getByRole("button", { name: "Extract invoice" }).click();
-  await page.getByRole("button", { name: "Verify invoice" }).click({ force: true });
-  await page.getByRole("button", { name: "Generate agent decision" }).click({ force: true });
+  await page.getByRole("button", { name: "Verify invoice" }).click();
+  await page.getByRole("button", { name: "Generate agent decision" }).click();
   await expect(page.getByText("Decision dry run completed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
 });
 
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
   await openSignedIn(page);
+  await page.getByRole("button", { name: "Agreements", exact: true }).click();
   const subscription = page.getByRole("heading", { name: "Subscription", exact: true }).locator("..");
   await subscription.getByRole("combobox").nth(0).selectOption("vendor-1");
   await subscription.getByRole("combobox").nth(1).selectOption("address-1");
@@ -120,6 +128,7 @@ test("journey 4: recurring subscription requires an owner-signed mandate", async
 
 test("journey 5: escrow requires owner-signed setup before funding", async ({ page }) => {
   await openSignedIn(page);
+  await page.getByRole("button", { name: "Agreements", exact: true }).click();
   const escrow = page.getByRole("heading", { name: "Escrow agreement", exact: true }).locator("..");
   await escrow.getByRole("combobox").nth(0).selectOption("vendor-1");
   await escrow.getByRole("combobox").nth(1).selectOption("address-1");
@@ -131,6 +140,7 @@ test("journey 5: escrow requires owner-signed setup before funding", async ({ pa
 
 test("journey 6: treasury separates planned from settled", async ({ page }) => {
   await openSignedIn(page);
+  await page.getByRole("button", { name: "Treasury & controls", exact: true }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("Available", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Plan route" }).click();
@@ -215,7 +225,7 @@ test("expired sessions clear the authenticated workspace", async ({ page }) => {
   await installApiMock(page, { expiredSession: true });
   await page.goto("/");
   await setSession(page, "expired-token");
-  await expect(page.getByRole("button", { name: /Sign in with email/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Enter workspace" })).toBeVisible();
 });
 
 test("basic accessibility landmarks and labels are present", async ({ page }) => {

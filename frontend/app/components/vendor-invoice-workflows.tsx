@@ -226,7 +226,7 @@ export function VendorInvoiceWorkflows({
         then approve and request execution through backend-controlled routes.
       </p>
       <div className="mt-4 grid gap-4 xl:grid-cols-2">
-        <form onSubmit={submitVendor} className="space-y-3 rounded-2xl bg-white p-4">
+        <form onSubmit={submitVendor} className="flex min-w-0 flex-col items-start gap-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">1. Vendor</h4>
           <Input label="Vendor name" value={vendorName} onChange={setVendorName} required />
           <button disabled={pending} className="btn">Create vendor</button>
@@ -236,7 +236,7 @@ export function VendorInvoiceWorkflows({
           <Result value={vendor} />
         </form>
 
-        <form onSubmit={submitAddress} className="space-y-3 rounded-2xl bg-white p-4">
+        <form onSubmit={submitAddress} className="flex min-w-0 flex-col items-start gap-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">2. Payout address</h4>
           <Input label="Arc USDC payout address" value={payoutAddress} onChange={setPayoutAddress} required />
           <button disabled={pending} className="btn">Add address</button>
@@ -246,11 +246,11 @@ export function VendorInvoiceWorkflows({
           <Result value={vendorAddress} />
         </form>
 
-        <form onSubmit={submitDocument} className="space-y-3 rounded-2xl bg-white p-4">
+        <form onSubmit={submitDocument} className="flex min-w-0 flex-col items-start gap-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">3. Invoice evidence</h4>
           <Input label="Invoice number" value={invoiceNumber} onChange={setInvoiceNumber} required />
           <Input label="Invoice amount USDC" value={invoiceAmount} onChange={setInvoiceAmount} required />
-          <label className="block text-sm font-medium text-slate-700">
+          <label className="block w-full text-sm font-medium text-slate-700">
             Invoice file
             <input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} className="mt-2 block w-full text-sm" />
           </label>
@@ -261,9 +261,9 @@ export function VendorInvoiceWorkflows({
           <Result value={document ?? extraction} />
         </form>
 
-        <div className="space-y-3 rounded-2xl bg-white p-4">
+        <div className="flex min-w-0 flex-col items-start gap-3 rounded-2xl bg-white p-4">
           <h4 className="font-semibold">4. Verify, decide, approve</h4>
-          <label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label>
+          <label className="block w-full text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label>
           <button disabled={pending || extraction === null || extraction.reviewStatus !== "CONFIRMED"} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>
           {extraction?.reviewStatus === "PENDING_REVIEW" ? (
             <button disabled={pending} onClick={submitClaimConfirmation} className="btn-secondary">Confirm extracted claims</button>
@@ -280,7 +280,7 @@ export function VendorInvoiceWorkflows({
 
 function Input({ label, value, onChange, required = false }: { label: string; value: string; onChange: (value: string) => void; required?: boolean }) {
   return (
-    <label className="block text-sm font-medium text-slate-700">
+    <label className="block w-full text-sm font-medium text-slate-700">
       {label}
       <input value={value} required={required} onChange={(event) => onChange(event.target.value)} className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 px-4 outline-none ring-cyan-500 focus:ring-2" />
     </label>
@@ -290,5 +290,5 @@ function Input({ label, value, onChange, required = false }: { label: string; va
 function Result({ value }: { value: unknown }) {
   if (value === null || value === undefined) return null;
   const entries = Object.entries(value as Record<string, unknown>).filter(([key, item]) => !["metadata", "providerPayload", "ownerAction", "ownerActions"].includes(key) && item !== null && typeof item !== "object").slice(0, 8);
-  return <dl className="space-y-2 rounded-xl border border-slate-200 p-3 text-sm">{entries.map(([key, item]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-500">{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt><dd className="max-w-[60%] truncate font-medium">{String(item)}</dd></div>)}</dl>;
+  return <dl className="w-full min-w-0 space-y-2 rounded-xl border border-slate-200 p-3 text-sm">{entries.map(([key, item]) => <div key={key} className="flex justify-between gap-3"><dt className="text-slate-500">{key.replace(/([a-z])([A-Z])/g, "$1 $2")}</dt><dd className="max-w-[60%] truncate font-medium">{String(item)}</dd></div>)}</dl>;
 }
