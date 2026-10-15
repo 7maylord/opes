@@ -53,11 +53,23 @@ done
 
 pids=()
 
+terminate_tree() {
+  local process_id="$1"
+  local child_id
+  for child_id in $(pgrep -P "$process_id" 2>/dev/null || true); do
+    terminate_tree "$child_id"
+  done
+  kill "$process_id" 2>/dev/null || true
+}
+
 cleanup() {
+  trap - EXIT INT TERM
   if [ "${#pids[@]}" -gt 0 ]; then
     echo
     echo "Stopping OPES dev processes..."
-    kill "${pids[@]}" 2>/dev/null || true
+    for pid in "${pids[@]}"; do
+      terminate_tree "$pid"
+    done
     wait "${pids[@]}" 2>/dev/null || true
   fi
 }
@@ -113,7 +125,7 @@ fi
 
 echo "Starting frontend on ${FRONTEND_PORT}..."
 NEXT_PUBLIC_OPES_API_URL="$BACKEND_URL" \
-  pnpm --dir "$ROOT_DIR/frontend" dev --hostname 127.0.0.1 --port "$FRONTEND_PORT" &
+  pnpm --dir "$ROOT_DIR/frontend" dev --webpack --hostname 127.0.0.1 --port "$FRONTEND_PORT" &
 pids+=("$!")
 
 echo
@@ -124,4 +136,12 @@ echo "  CORS:     ${BACKEND_ALLOWED_ORIGINS}"
 echo
 echo "Press Ctrl-C to stop everything."
 
-wait -n "${pids[@]}"
+while true; do
+  for pid in "${pids[@]}"; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid"
+      exit $?
+    fi
+  done
+  sleep 1
+done

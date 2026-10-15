@@ -165,4 +165,14 @@ describe('DatabaseService', () => {
       service.withOrganizationScope('', () => Promise.resolve()),
     ).rejects.toThrow('organizationId is required');
   });
+
+  it('closes the pool once when shutdown hooks run more than once', async () => {
+    const end = jest.fn(() => Promise.resolve());
+    const service = new DatabaseService();
+    Reflect.set(service, 'pool', { connect: jest.fn(), end });
+
+    await Promise.all([service.onModuleDestroy(), service.onModuleDestroy()]);
+
+    expect(end).toHaveBeenCalledTimes(1);
+  });
 });

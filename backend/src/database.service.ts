@@ -131,7 +131,9 @@ export class DatabaseService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.pool?.end();
+    const pool = this.pool;
+    this.pool = undefined;
+    await pool?.end();
   }
 
   private getPool(): DatabasePool {
