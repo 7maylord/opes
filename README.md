@@ -2,6 +2,8 @@
 
 OPES is an AI treasury operator for businesses. It ingests invoice evidence, applies tenant policy, records the decision trail, and moves USDC through organization-specific wallets and verified Arc contracts.
 
+Live deployment: [opes.maylord.xyz](https://opes.maylord.xyz) uses the API at [opes.up.railway.app](https://opes.up.railway.app). The API health and database readiness endpoints are `/health` and `/ready`.
+
 ## Verified release scope
 
 - Privy email authentication and isolated organization workspaces
@@ -43,9 +45,10 @@ Contract checks run from `contracts/` with `forge fmt --check`, `forge build --s
 
 ## Deployment
 
-- Vercel project root: `frontend`; configure only `NEXT_PUBLIC_OPES_API_URL` and `NEXT_PUBLIC_PRIVY_APP_ID`.
-- Railway API project root: `backend`; use `railway.api.json` and expose the generated domain.
-- Railway worker project root: `backend`; use `railway.worker.json` without a public domain.
+- Vercel project root: `frontend`; set `NEXT_PUBLIC_OPES_API_URL=https://opes.up.railway.app` and `NEXT_PUBLIC_PRIVY_APP_ID`.
+- Railway API service: `opes-api`, rooted at `backend`, using `railway.api.json` and the `opes.up.railway.app` domain.
+- Railway worker service: `opes-worker`, rooted at `backend`, using `railway.worker.json` without a public domain.
+- Railway data resources: `PostgresOpes` and the private `opesbucket` Storage Bucket.
 - Attach Railway PostgreSQL to both backend services. Attach one private Railway Storage Bucket and its S3-compatible variables to the API and worker only where document processing needs them.
 - Put Circle, DeepSeek, Privy secret, Arc/Base RPC, operations, and optional swap-signer credentials only on backend services that consume them. Set `OPES_ALLOWED_ORIGINS` to the exact Vercel production and preview origins.
 

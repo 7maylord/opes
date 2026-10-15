@@ -34,6 +34,8 @@ Required Railway resources:
 
 The frontend is a separate Vercel project rooted at `frontend/`. Set `NEXT_PUBLIC_OPES_API_URL` to the Railway API origin, set the public Privy app ID, and add the exact Vercel production/preview origins to both `OPES_ALLOWED_ORIGINS` and the Privy application settings.
 
+The current production origins are `https://opes.maylord.xyz` and `https://opes.up.railway.app`. The Railway resources are `opes-api`, `opes-worker`, `PostgresOpes`, and `opesbucket`.
+
 ## Service variable boundaries
 
 - Vercel: `NEXT_PUBLIC_OPES_API_URL`, `NEXT_PUBLIC_PRIVY_APP_ID`
@@ -42,6 +44,40 @@ The frontend is a separate Vercel project rooted at `frontend/`. Set `NEXT_PUBLI
 - PostgreSQL: no application or provider secrets
 
 Generate independent high-entropy values for the runtime database password, operations token, and optional swap-signer token. Rotate one credential at a time, redeploy the consuming service, verify `/ready` and `/operations/outbox`, then revoke the old value. Circle entity-secret recovery material stays outside Railway and the repository.
+
+## Resend inbound email
+
+Create a Resend webhook for `https://opes.up.railway.app/webhooks/resend/inbound` and subscribe it to `email.received`. Set `OPES_RESEND_API_KEY` to the Resend API key and set `OPES_RESEND_WEBHOOK_SECRET` to the signing secret generated for that webhook, which has the form `whsec_...`. Do not invent the webhook secret. Both variables belong on `opes-api`; the worker does not receive Resend webhooks.
+
+## Accounting sandboxes
+
+For Odoo 19, start an [Odoo Online trial](https://www.odoo.com/trial) with Purchase, Inventory, and Accounting/Invoicing. JSON-2 external API access requires Odoo's Custom plan, including for the eventual production tenant. Create a dedicated integration user with access to vendors, purchase orders, receipts, and vendor bills, then create its API key under Preferences, Account Security. The connector's `baseUrl` is the database root such as `https://mycompany.odoo.com`; `databaseName` is the database subdomain/name. OPES appends the `/json/2/...` paths and sends the key as a bearer token. See the [Odoo 19 JSON-2 API](https://www.odoo.com/documentation/19.0/developer/reference/external_api.html).
+
+```json
+{
+  "provider": "ODOO",
+  "label": "Odoo sandbox",
+  "baseUrl": "https://mycompany.odoo.com",
+  "databaseName": "mycompany",
+  "credentials": { "apiKey": "<odoo-api-key>" }
+}
+```
+
+For ERPNext, create a Frappe Cloud site, select the ERPNext app, and complete its setup wizard. Create a dedicated system user with the minimum read permissions for Supplier, Purchase Order, Purchase Receipt, and Purchase Invoice, plus create permission for Comment if settlement writeback will be tested. In that user, open Settings, expand API Access, select Generate Keys, and save the one-time API secret. See [Frappe Cloud site creation](https://docs.frappe.io/cloud/sites/creating-a-new-site) and [Frappe REST authentication](https://docs.frappe.io/framework/user/en/api/rest#authentication).
+
+```json
+{
+  "provider": "ERPNEXT",
+  "label": "ERPNext sandbox",
+  "baseUrl": "https://mycompany.frappe.cloud",
+  "credentials": {
+    "apiKey": "<frappe-api-key>",
+    "apiSecret": "<frappe-api-secret>"
+  }
+}
+```
+
+Send either body to `POST /organizations/:organizationId/accounting-connectors` with an owner or manager OPES session token. Connector credentials are encrypted with `OPES_CONNECTOR_ENCRYPTION_KEY`; synchronization runs in `opes-worker`.
 
 ## Worker queues and dead letters
 

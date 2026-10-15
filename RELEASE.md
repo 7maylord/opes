@@ -17,8 +17,11 @@ Fixtures, sandbox actions, and testnet volume must not be reported as customer t
 
 ## External release evidence still required
 
-- Railway API, worker, PostgreSQL, private bucket, alarms, and public API domain
-- Vercel production deployment and Privy production origins
+- Railway and Vercel infrastructure were observed live on 2026-10-15: `opes-api`, `opes-worker`, `PostgresOpes`, and `opesbucket` exist; `/health`, `/ready`, and `https://opes.maylord.xyz` return HTTP 200; production CORS permits the frontend origin.
+- Push and deploy the six commits after hosted commit `bdb8a17`; the live API and worker do not yet contain the current local `main`.
+- Add `OPES_RESEND_API_KEY` and the Resend-generated `OPES_RESEND_WEBHOOK_SECRET` to `opes-api`, then record a signed `email.received` ingestion.
+- Add the Circle, RPC, CCTP/Gateway, DeepSeek, and signer variables required by its jobs to `opes-worker`; only database and bucket variables were present when checked.
+- Complete one Odoo or ERPNext sandbox synchronization and settlement writeback.
 - Authenticated two-tenant production run with isolation proof
 - Arc payment and matching ledger transaction evidence
 - Arc Testnet → Base Sepolia receipt, reconciliation, and worker restart proof

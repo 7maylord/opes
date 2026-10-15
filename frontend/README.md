@@ -9,3 +9,5 @@ pnpm dev --hostname 127.0.0.1 --port 3005
 ```
 
 Set `NEXT_PUBLIC_OPES_API_URL=http://localhost:3004` and the public Privy app ID. For Vercel, choose `frontend` as the project root; `vercel.json` selects the Next.js framework.
+
+Production is deployed at [opes.maylord.xyz](https://opes.maylord.xyz) with `NEXT_PUBLIC_OPES_API_URL=https://opes.up.railway.app` in both the Vercel Production and Preview environments.
