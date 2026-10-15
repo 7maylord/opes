@@ -1,10 +1,11 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { PrivyClient } from '@privy-io/node';
+import { isEmbeddedWalletLinkedAccount, PrivyClient } from '@privy-io/node';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { SessionService, SessionUser } from './session.service';
 
@@ -23,6 +24,8 @@ interface UserRow {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly database: DatabaseService,
     private readonly sessions: SessionService,
@@ -32,6 +35,9 @@ export class AuthService {
     const appId = process.env.PRIVY_APP_ID?.trim();
     const appSecret = process.env.PRIVY_APP_SECRET?.trim();
     if (!appId || !appSecret) {
+      this.logger.error(
+        'Privy session exchange rejected: server credentials are missing',
+      );
       throw new ServiceUnavailableException(
         'Privy authentication is not configured',
       );
@@ -42,31 +48,43 @@ export class AuthService {
     let email: string | undefined;
     let ownerWalletAddress: string | undefined;
     try {
+      this.logger.log('Privy session exchange started');
       const claims = await privy.utils().auth().verifyAccessToken(accessToken);
       privyUserId = claims.user_id;
       const identity = await privy.users()._get(privyUserId);
       email = identity.linked_accounts.find(
         (account) => account.type === 'email',
       )?.address;
-      ownerWalletAddress = identity.linked_accounts.find(
-        (account) =>
-          account.type === 'wallet' &&
-          account.chain_type === 'ethereum' &&
-          account.wallet_client === 'privy' &&
-          account.connector_type === 'embedded',
-      )?.address;
-    } catch {
+      const embeddedEthereumWallet = identity.linked_accounts
+        .filter(isEmbeddedWalletLinkedAccount)
+        .find((account) => account.chain_type === 'ethereum');
+      if (typeof embeddedEthereumWallet?.address === 'string') {
+        ownerWalletAddress = embeddedEthereumWallet.address;
+      }
+      this.logger.log(
+        `Privy identity verified: email=${Boolean(email)} embeddedEthereumWallet=${Boolean(ownerWalletAddress)}`,
+      );
+    } catch (reason) {
+      this.logger.warn(
+        `Privy token verification failed: ${reason instanceof Error ? reason.message : 'unknown error'}`,
+      );
       throw new UnauthorizedException(
         'Privy access token is invalid or expired',
       );
     }
     if (!email) {
+      this.logger.warn(
+        'Privy session exchange rejected: verified email is missing',
+      );
       throw new UnauthorizedException('A verified Privy email is required');
     }
     if (
       !ownerWalletAddress ||
       !/^0x[0-9a-fA-F]{40}$/.test(ownerWalletAddress)
     ) {
+      this.logger.warn(
+        'Privy session exchange rejected: embedded Ethereum wallet is missing',
+      );
       throw new UnauthorizedException(
         'A Privy embedded Ethereum owner wallet is required',
       );
@@ -79,7 +97,7 @@ export class AuthService {
         email,
         ownerWalletAddress,
       );
-      return {
+      const result = {
         user: {
           id: user.id,
           email: user.email,
@@ -91,6 +109,8 @@ export class AuthService {
           user.id,
         ),
       };
+      this.logger.log(`Privy session exchange completed for user ${user.id}`);
+      return result;
     });
   }
 }

@@ -15,6 +15,7 @@ import {
   acceptInvitation,
   exchangePrivySession,
   getAgent,
+  getApiBaseUrl,
   getSession,
   inviteOrganizationMember,
   listOrganizationMembers,
@@ -100,6 +101,16 @@ export function AuthenticatedShell() {
   const privyExchangePending = useRef(false);
   const isLoading = token !== "" && user === null;
 
+  useEffect(() => {
+    console.info("[OPES auth] state", {
+      privyReady,
+      walletsReady,
+      privyAuthenticated,
+      walletCount: wallets.length,
+      hasOpesSession: token !== "",
+    });
+  }, [privyAuthenticated, privyReady, token, wallets.length, walletsReady]);
+
   const clearBrowserSession = useCallback(() => {
     privyExchangePending.current = false;
     clearTenantCache(localStorage);
@@ -114,6 +125,10 @@ export function AuthenticatedShell() {
   useEffect(() => {
     if (!privyReady || !walletsReady || !privyAuthenticated || token !== "" || privyExchangePending.current) return;
     privyExchangePending.current = true;
+    console.info("[OPES auth] starting Privy session exchange", {
+      apiBaseUrl: getApiBaseUrl(),
+      walletCount: wallets.length,
+    });
     let cancelled = false;
     void (async () => {
       try {
@@ -122,15 +137,23 @@ export function AuthenticatedShell() {
             wallet.type === "ethereum" &&
             (wallet.walletClientType === "privy" || wallet.walletClientType === "privy-v2"),
         );
-        if (!hasEmbeddedEthereumWallet) await createWallet();
+        console.info("[OPES auth] embedded Ethereum wallet check", { found: hasEmbeddedEthereumWallet });
+        if (!hasEmbeddedEthereumWallet) {
+          console.info("[OPES auth] creating embedded Ethereum wallet");
+          await createWallet();
+          console.info("[OPES auth] embedded Ethereum wallet created");
+        }
         const accessToken = await getAccessToken();
         if (!accessToken) throw new Error("Privy session is unavailable");
+        console.info("[OPES auth] Privy access token acquired; exchanging with OPES API");
         const session = await exchangePrivySession(accessToken);
+        console.info("[OPES auth] OPES session exchange succeeded", { userId: session.user.id });
         if (!cancelled) {
           setStoredToken(session.sessionToken);
           toast.success("Workspace opened");
         }
       } catch (reason) {
+        console.error("[OPES auth] session exchange failed", reason);
         privyExchangePending.current = false;
         if (!cancelled) {
           toast.error(reason instanceof Error ? reason.message : "Unable to sign in");
@@ -148,6 +171,10 @@ export function AuthenticatedShell() {
 
     Promise.all([getSession(token), listOrganizations(token)])
       .then(([nextUser, nextOrganizations]) => {
+        console.info("[OPES auth] workspace session loaded", {
+          userId: nextUser.id,
+          organizationCount: nextOrganizations.length,
+        });
         if (cancelled) return;
         setUser(nextUser);
         setOrganizations(nextOrganizations);
@@ -158,6 +185,7 @@ export function AuthenticatedShell() {
         }
       })
       .catch((reason: unknown) => {
+        console.error("[OPES auth] workspace session load failed", reason);
         if (cancelled) return;
         const message =
           reason instanceof Error ? reason.message : "Unable to load session";
@@ -309,14 +337,33 @@ export function AuthenticatedShell() {
     }
   }
 
+  function openPrivyLogin() {
+    console.info("[OPES auth] login requested", {
+      privyReady,
+      privyAuthenticated,
+    });
+    if (!privyReady) {
+      console.warn("[OPES auth] login blocked because Privy is not ready");
+      toast.error("Sign-in is still loading. Please try again.");
+      return;
+    }
+    try {
+      login();
+      console.info("[OPES auth] Privy login modal requested");
+    } catch (reason) {
+      console.error("[OPES auth] Privy login invocation failed", reason);
+      toast.error(reason instanceof Error ? reason.message : "Unable to open sign-in");
+    }
+  }
+
   return (
     <main className={token === "" ? "min-h-screen bg-[#f4f3ed] text-[#20251f]" : "min-h-screen overflow-hidden bg-slate-950 text-slate-100"}>
       <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_15%_20%,rgba(34,211,238,0.24),transparent_32%),radial-gradient(circle_at_86%_6%,rgba(20,184,166,0.20),transparent_30%),linear-gradient(135deg,#020617_0%,#0f172a_48%,#111827_100%)]" />
       <section className={token === "" ? "" : "mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8"}>
         {token === "" ? (
           <LandingExperience
-            onEnterWorkspace={() => login()}
-            openingWorkspace={!privyReady || actionPending || privyAuthenticated}
+            onEnterWorkspace={openPrivyLogin}
+            openingWorkspace={actionPending || privyAuthenticated}
           />
         ) : (
           <>
