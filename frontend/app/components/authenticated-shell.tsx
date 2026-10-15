@@ -23,6 +23,7 @@ import {
   onboardOrganization,
   requestArcTestnetProvisioning,
   revokeSession,
+  type AuthSessionResult,
   type BusinessAgentDetail,
   type MembershipRole,
   type OrganizationMember,
@@ -98,7 +99,7 @@ export function AuthenticatedShell() {
   const [members, setMembers] = useState<OrganizationMember[]>([]);
   const [workspaceView, setWorkspaceView] = useState<"overview" | "inbox" | "integrations">("overview");
   const [actionPending, setActionPending] = useState(false);
-  const privyExchangePending = useRef(false);
+  const privyExchangePending = useRef<Promise<AuthSessionResult> | null>(null);
   const isLoading = token !== "" && user === null;
 
   useEffect(() => {
@@ -112,7 +113,7 @@ export function AuthenticatedShell() {
   }, [privyAuthenticated, privyReady, token, wallets.length, walletsReady]);
 
   const clearBrowserSession = useCallback(() => {
-    privyExchangePending.current = false;
+    privyExchangePending.current = null;
     clearTenantCache(localStorage);
     setStoredToken("");
     setSelectedOrganizationId("");
@@ -123,15 +124,19 @@ export function AuthenticatedShell() {
   }, [setSelectedOrganizationId, setStoredToken]);
 
   useEffect(() => {
-    if (!privyReady || !walletsReady || !privyAuthenticated || token !== "" || privyExchangePending.current) return;
-    privyExchangePending.current = true;
-    console.info("[OPES auth] starting Privy session exchange", {
-      apiBaseUrl: getApiBaseUrl(),
-      walletCount: wallets.length,
-    });
-    let cancelled = false;
-    void (async () => {
-      try {
+    if (!privyAuthenticated) {
+      privyExchangePending.current = null;
+      return;
+    }
+    if (!privyReady || !walletsReady || token !== "") return;
+
+    // Keep the request across SDK updates; only its effect subscriber is cancelled.
+    if (!privyExchangePending.current) {
+      privyExchangePending.current = (async () => {
+        console.info("[OPES auth] starting Privy session exchange", {
+          apiBaseUrl: getApiBaseUrl(),
+          walletCount: wallets.length,
+        });
         const hasEmbeddedEthereumWallet = wallets.some(
           (wallet) =>
             wallet.type === "ethereum" &&
@@ -146,21 +151,22 @@ export function AuthenticatedShell() {
         const accessToken = await getAccessToken();
         if (!accessToken) throw new Error("Privy session is unavailable");
         console.info("[OPES auth] Privy access token acquired; exchanging with OPES API");
-        const session = await exchangePrivySession(accessToken);
-        console.info("[OPES auth] OPES session exchange succeeded", { userId: session.user.id });
-        if (!cancelled) {
-          setStoredToken(session.sessionToken);
-          toast.success("Workspace opened");
-        }
-      } catch (reason) {
-        console.error("[OPES auth] session exchange failed", reason);
-        privyExchangePending.current = false;
-        if (!cancelled) {
-          toast.error(reason instanceof Error ? reason.message : "Unable to sign in");
-          await privyLogout().catch(() => undefined);
-        }
-      }
-    })();
+        return exchangePrivySession(accessToken);
+      })();
+    }
+    const exchange = privyExchangePending.current;
+    let cancelled = false;
+    void exchange.then((session) => {
+      if (cancelled || privyExchangePending.current !== exchange) return;
+      setStoredToken(session.sessionToken);
+      console.info("[OPES auth] OPES session saved; loading workspace");
+      toast.success("Workspace opened");
+    }).catch(async (reason: unknown) => {
+      if (cancelled || privyExchangePending.current !== exchange) return;
+      console.error("[OPES auth] session exchange failed", reason);
+      toast.error(reason instanceof Error ? reason.message : "Unable to sign in");
+      await privyLogout().catch(() => undefined);
+    });
     return () => { cancelled = true; };
   }, [createWallet, getAccessToken, privyAuthenticated, privyLogout, privyReady, setStoredToken, token, wallets, walletsReady]);
 

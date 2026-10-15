@@ -38,6 +38,31 @@ test("Privy email sign-in creates an embedded owner wallet before opening OPES",
   await expect.poll(() => page.evaluate(() => localStorage.getItem("opes:session-token"))).toBe("mock-session-token");
 });
 
+test("Privy session survives a rerender while the backend exchange is pending", async ({ page }) => {
+  await installApiMock(page);
+  let releaseExchange!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseExchange = resolve; });
+  let exchanges = 0;
+  await page.route("http://mock.api/auth/privy/session", async (route) => {
+    exchanges += 1;
+    await gate;
+    await route.fallback();
+  });
+  await page.goto("/?privy-auth=1");
+  await expect.poll(() => exchanges).toBe(1);
+  await page.evaluate(() => {
+    localStorage.setItem("opes:network-label", "Base Sepolia");
+    window.dispatchEvent(new Event("opes-storage"));
+  });
+  await expect.poll(() => page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+  }))).toBe(true);
+  releaseExchange();
+  await expect(page.getByRole("heading", { name: "Alpha Co" })).toBeVisible();
+  expect(exchanges).toBe(1);
+  expect(await page.evaluate(() => localStorage.getItem("opes:session-token"))).toBe("mock-session-token");
+});
+
 test("journey 1: owner creates organization and sees setup checklist", async ({ page }) => {
   await installApiMock(page);
   await page.goto("/");
