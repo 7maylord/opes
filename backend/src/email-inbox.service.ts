@@ -38,6 +38,20 @@ export interface EmailInboxResponse {
   status: string;
 }
 
+export interface InboundEmailEventResponse {
+  id: string;
+  providerEmailId: string;
+  senderAddress: string;
+  subject: string | null;
+  status: string;
+  quarantineReason: string | null;
+  failureReason: string | null;
+  documentCount: number;
+  receivedAt: Date;
+  processedAt: Date | null;
+  documents: Array<{ id: string; filename: string; status: string }>;
+}
+
 export interface ResendWebhookHeaders {
   id: string | undefined;
   timestamp: string | undefined;
@@ -155,6 +169,56 @@ export class EmailInboxService {
       ),
     );
     return result.rows[0] ?? null;
+  }
+
+  async listEvents(
+    context: TenantContext,
+  ): Promise<InboundEmailEventResponse[]> {
+    const result = await this.database.withTenant(context, (database) =>
+      database.query<{
+        id: string;
+        provider_email_id: string;
+        sender_address: string;
+        subject: string | null;
+        status: string;
+        quarantine_reason: string | null;
+        failure_reason: string | null;
+        document_count: number;
+        received_at: Date;
+        processed_at: Date | null;
+        documents: InboundEmailEventResponse['documents'];
+      }>(
+        `SELECT event.id,event.provider_email_id,event.sender_address,
+                event.raw_metadata->>'subject' AS subject,event.status,
+                event.quarantine_reason,event.failure_reason,event.document_count,
+                event.received_at,event.processed_at,
+                COALESCE(jsonb_agg(jsonb_build_object(
+                  'id',document.id,'filename',document.filename,'status',document.status
+                ) ORDER BY document.created_at) FILTER (WHERE document.id IS NOT NULL),'[]'::jsonb) AS documents
+           FROM opes.inbound_email_events event
+           LEFT JOIN opes.evidence_documents document
+             ON document.organization_id=event.organization_id
+            AND document.metadata->>'providerEmailId'=event.provider_email_id
+          WHERE event.organization_id=$1
+          GROUP BY event.id
+          ORDER BY event.received_at DESC
+          LIMIT 100`,
+        [context.organizationId],
+      ),
+    );
+    return result.rows.map((row) => ({
+      id: row.id,
+      providerEmailId: row.provider_email_id,
+      senderAddress: row.sender_address,
+      subject: row.subject,
+      status: row.status,
+      quarantineReason: row.quarantine_reason,
+      failureReason: row.failure_reason,
+      documentCount: row.document_count,
+      receivedAt: row.received_at,
+      processedAt: row.processed_at,
+      documents: row.documents,
+    }));
   }
 
   async ingestWebhook(

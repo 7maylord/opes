@@ -5,6 +5,7 @@ export default defineConfig({
   testIgnore: "fullstack-workspace.spec.ts",
   timeout: 30_000,
   expect: { timeout: 5_000 },
+  workers: 1,
   use: {
     baseURL: "http://127.0.0.1:3100",
     trace: "on-first-retry",

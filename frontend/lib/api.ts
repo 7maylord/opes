@@ -185,6 +185,112 @@ export async function revokeSession(token: string) {
   await request<{ revoked: true }>("/session", token, { method: "DELETE" });
 }
 
+export interface EmailInboxResponse {
+  id: string;
+  address: string;
+  status: string;
+}
+
+export interface InboundEmailEventResponse {
+  id: string;
+  providerEmailId: string;
+  senderAddress: string;
+  subject: string | null;
+  status: string;
+  quarantineReason: string | null;
+  failureReason: string | null;
+  documentCount: number;
+  receivedAt: string;
+  processedAt: string | null;
+  documents: Array<{ id: string; filename: string; status: string }>;
+}
+
+export function getEmailInbox(token: string, organizationId: string) {
+  return request<EmailInboxResponse | null>(
+    `/organizations/${encodeURIComponent(organizationId)}/email-inbox`,
+    token,
+  );
+}
+
+export function configureEmailInbox(token: string, organizationId: string, address: string) {
+  return request<EmailInboxResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/email-inbox`,
+    token,
+    { method: "PUT", body: JSON.stringify({ address }) },
+  );
+}
+
+export function listInboundEmailEvents(token: string, organizationId: string) {
+  return request<InboundEmailEventResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/email-inbox/events`,
+    token,
+  );
+}
+
+export type AccountingProvider = "ODOO" | "ERPNEXT";
+
+export interface AccountingConnectorResponse {
+  id: string;
+  provider: AccountingProvider;
+  label: string;
+  baseUrl: string;
+  databaseName: string | null;
+  status: string;
+  syncCursor: string | null;
+  lastSyncedAt: string | null;
+  lastError: string | null;
+}
+
+export interface AccountingRecordResponse {
+  id: string;
+  connectorId: string;
+  recordType: "VENDOR" | "PURCHASE_ORDER" | "PURCHASE_RECEIPT" | "VENDOR_BILL";
+  externalId: string;
+  providerUpdatedAt: string | null;
+  normalizedData: unknown;
+  fetchedAt: string;
+}
+
+export function listAccountingConnectors(token: string, organizationId: string) {
+  return request<AccountingConnectorResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors`,
+    token,
+  );
+}
+
+export function createAccountingConnector(
+  token: string,
+  organizationId: string,
+  input: {
+    provider: AccountingProvider;
+    label: string;
+    baseUrl: string;
+    databaseName?: string;
+    credentials: { apiKey: string; apiSecret?: string };
+  },
+) {
+  return request<AccountingConnectorResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export function requestAccountingSync(token: string, organizationId: string, connectorId: string) {
+  return request<{ queued: true }>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}/sync`,
+    token,
+    { method: "POST" },
+  );
+}
+
+export function listAccountingRecords(token: string, organizationId: string, connectorId: string) {
+  return request<AccountingRecordResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}/records`,
+    token,
+  );
+}
+
 async function request<T>(
   path: string,
   token: string,

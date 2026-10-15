@@ -54,6 +54,17 @@ export class EmailInboxController {
     );
   }
 
+  @Get('events')
+  async events(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    return this.inboxes.listEvents(
+      await this.context(organizationId, authorization, correlationId),
+    );
+  }
+
   private async context(
     organizationId: string,
     authorization: string | undefined,

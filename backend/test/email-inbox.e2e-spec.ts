@@ -164,6 +164,27 @@ describe('Resend inbound email (e2e)', () => {
     ]);
 
     await request(server)
+      .get(`/organizations/${organizationId}/email-inbox/events`)
+      .set('authorization', `Bearer ${sessionToken}`)
+      .expect(200)
+      .expect(({ body }: { body: unknown }) =>
+        expect(body).toEqual([
+          expect.objectContaining({
+            senderAddress: 'billing@vendor.example',
+            subject: 'Invoice E2E',
+            status: 'PROCESSED',
+            documentCount: 1,
+            documents: [
+              expect.objectContaining({
+                filename: 'invoice.txt',
+                status: 'VERIFIED',
+              }),
+            ],
+          }),
+        ]),
+      );
+
+    await request(server)
       .post('/webhooks/resend/inbound')
       .set({ ...signed.headers, 'svix-signature': 'v1,Zm9yZ2Vk' })
       .send(signed.raw)

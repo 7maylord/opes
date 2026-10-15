@@ -19,9 +19,15 @@ async function installApiMock(page: Page, options: Partial<MockState> = {}) {
 async function openSignedIn(page: Page) {
   await installApiMock(page);
   await page.goto("/");
-  await page.evaluate(() => localStorage.setItem("opes:session-token", "mock-session-token"));
-  await page.reload();
+  await setSession(page, "mock-session-token");
   await expect(page.getByRole("heading", { name: "Alpha Co" })).toBeVisible();
+}
+
+async function setSession(page: Page, token: string) {
+  await page.evaluate((nextToken) => {
+    localStorage.setItem("opes:session-token", nextToken);
+    window.dispatchEvent(new Event("opes-storage"));
+  }, token);
 }
 
 test("Privy email sign-in creates an embedded owner wallet before opening OPES", async ({ page }) => {
@@ -35,8 +41,7 @@ test("Privy email sign-in creates an embedded owner wallet before opening OPES",
 test("journey 1: owner creates organization and sees setup checklist", async ({ page }) => {
   await installApiMock(page);
   await page.goto("/");
-  await page.evaluate(() => localStorage.setItem("opes:session-token", "new-user-token"));
-  await page.reload();
+  await setSession(page, "new-user-token");
   await page.getByLabel("Organization name").fill("Alpha Co");
   await page.getByRole("button", { name: "Create and queue setup" }).click();
   await expect(page.getByText("Organization created. Arc setup is queued.")).toBeVisible();
@@ -51,8 +56,7 @@ test("journey 2: invite and accept member", async ({ page }) => {
   await page.getByRole("button", { name: "Invite" }).click();
   await expect(page.getByText("Invitation token:")).toBeVisible();
   await page.getByRole("button", { name: "Logout" }).click();
-  await page.evaluate(() => localStorage.setItem("opes:session-token", "invitee-token"));
-  await page.reload();
+  await setSession(page, "invitee-token");
   await page.getByLabel("Invitation token").fill("invite-token-123");
   await page.getByRole("button", { name: "Accept invitation" }).click();
   await expect(page.getByText("Invitation accepted. Workspace loaded.")).toBeVisible();
@@ -139,6 +143,30 @@ test("journey 8: keyboard tenant switching and responsive shell", async ({ page 
   await expect(page.getByText("OPES command center")).toBeVisible();
 });
 
+test("workspace email inbox shows deliveries and accepted attachments", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByRole("button", { name: "Email inbox" }).click();
+  await expect(page.getByRole("heading", { name: "Invoice email inbox" })).toBeVisible();
+  await expect(page.locator('input[value="invoices@mail.maylord.xyz"]')).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Invoice INV-200" })).toBeVisible();
+  await expect(page.getByText("invoice-200.pdf")).toBeVisible();
+});
+
+test("owner configures ERPNext and inspects tenant-scoped imports", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByRole("button", { name: "Integrations" }).click();
+  await page.getByLabel("Connection label").fill("Finance sandbox");
+  await page.getByLabel("Base URL").fill("https://erp.example.com");
+  await page.getByLabel("API key").fill("key-id");
+  await page.getByLabel("API secret").fill("secret-value");
+  await page.getByRole("button", { name: "Save and start first sync" }).click();
+  await expect(page.getByText("Integration saved and first sync queued")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Finance sandbox" })).toBeVisible();
+  await page.getByRole("button", { name: "Imported records" }).click();
+  await expect(page.getByText(/4 current records/)).toBeVisible();
+  expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("secret-value");
+});
+
 test("workspace history exposes an error and recovers on retry", async ({ page }) => {
   await installApiMock(page);
   let failing = true;
@@ -151,8 +179,7 @@ test("workspace history exposes an error and recovers on retry", async ({ page }
     await route.fallback();
   });
   await page.goto("/");
-  await page.evaluate(() => localStorage.setItem("opes:session-token", "mock-session-token"));
-  await page.reload();
+  await setSession(page, "mock-session-token");
   await expect(page.getByText("Workspace history is temporarily unavailable")).toBeVisible();
   failing = false;
   await page.getByRole("button", { name: "Retry" }).click();
@@ -162,8 +189,7 @@ test("workspace history exposes an error and recovers on retry", async ({ page }
 test("expired sessions clear the authenticated workspace", async ({ page }) => {
   await installApiMock(page, { expiredSession: true });
   await page.goto("/");
-  await page.evaluate(() => localStorage.setItem("opes:session-token", "expired-token"));
-  await page.reload();
+  await setSession(page, "expired-token");
   await expect(page.getByRole("button", { name: /Sign in with email/i })).toBeVisible();
 });
 
@@ -198,6 +224,13 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (method === "DELETE" && path === "session") return { revoked: true };
   if (method === "GET" && path === "session") return user;
   if (method === "GET" && path === "organizations") return authorization === "Bearer mock-session-token" || state.onboarded ? organizations : [];
+  if (method === "GET" && path.endsWith("/email-inbox")) return { id: "inbox-1", address: "invoices@mail.maylord.xyz", status: "ACTIVE" };
+  if (method === "PUT" && path.endsWith("/email-inbox")) return { id: "inbox-1", address: body.address, status: "ACTIVE" };
+  if (method === "GET" && path.endsWith("/email-inbox/events")) return [{ id: "email-event-1", providerEmailId: "resend-email-1", senderAddress: "vendor@example.com", subject: "Invoice INV-200", status: "PROCESSED", quarantineReason: null, failureReason: null, documentCount: 1, receivedAt: "2026-10-15T12:00:00.000Z", processedAt: "2026-10-15T12:00:01.000Z", documents: [{ id: "email-doc-1", filename: "invoice-200.pdf", status: "VERIFIED" }] }];
+  if (method === "GET" && path.endsWith("/accounting-connectors")) return [];
+  if (method === "POST" && path.endsWith("/accounting-connectors")) return { id: "connector-1", provider: body.provider, label: body.label, baseUrl: body.baseUrl, databaseName: null, status: "ACTIVE", syncCursor: null, lastSyncedAt: null, lastError: null };
+  if (method === "POST" && path.endsWith("/accounting-connectors/connector-1/sync")) return { queued: true };
+  if (method === "GET" && path.endsWith("/accounting-connectors/connector-1/records")) return ["VENDOR", "PURCHASE_ORDER", "PURCHASE_RECEIPT", "VENDOR_BILL"].map((recordType, index) => ({ id: `record-${index}`, connectorId: "connector-1", recordType, externalId: `external-${index}`, providerUpdatedAt: null, normalizedData: {}, fetchedAt: "2026-10-15T12:00:00.000Z" }));
   if (method === "GET" && path.endsWith("/agent")) return { id: "agent-1", lifecycleStatus: "SETUP_REQUIRED", arcTestnetFactory: { environment: "arc-testnet", chainId: 5042002, factoryAddress: "0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", vaultDeployerAddress: "0x0E44C2D694592F50B4f42ACFB9E1E106b15474D8", verification: "fully_verified", explorerUrl: "https://explorer.testnet.arc.io/address/0x6b3aa0d68Fba3Ff8add42071ba82E714b5a6a488", checkedAt: "2026-10-04T00:00:00.000Z" }, resourceBindings: path.startsWith(`organizations/${orgId}`) ? activeBindings() : [] };
   if (method === "GET" && path.endsWith("/members")) return members;
   if ((method === "GET" && path.endsWith("/treasury/position")) || (method === "PUT" && path.endsWith("/treasury/settings"))) return { assetSymbol: "USDC", configured: true, snapshotStatus: "FRESH", snapshotObservedAt: "2026-10-14T00:00:00.000Z", authorizationReady: true, verifiedBalanceAtomic: "10000000", restrictedBalanceAtomic: "1000000", operatingBalanceAtomic: "9000000", reservedAtomic: "500000", committedPayablesAtomic: "2500000", approvedUnsettledPaymentAtomic: "1000000", plannedIncomingAtomic: "500000", inTransitAtomic: "250000", operatingBufferAtomic: "1000000", monthlyBudgetAtomic: "10000000", monthlyBudgetRemainingAtomic: "7500000", forecast30DaysAtomic: "2500000", forecast90DaysAtomic: "4000000", availableLiquidityAtomic: "6500000", supportedNetworks: [{ environment: "arc-testnet", chainId: 5042002, family: "arc", tier: "testnet", cctpContracts: {}, gatewayContracts: {}, gateway: true, cctpExecutable: true, gatewayExecutable: true }, { environment: "base-sepolia", chainId: 84532, family: "base", tier: "testnet", cctpContracts: {}, gatewayContracts: {}, gateway: true, cctpExecutable: true, gatewayExecutable: true }, { environment: "arbitrum-sepolia", chainId: 421614, family: "arbitrum", tier: "testnet", cctpContracts: {}, gatewayContracts: null, gateway: false, cctpExecutable: false, gatewayExecutable: false }] };

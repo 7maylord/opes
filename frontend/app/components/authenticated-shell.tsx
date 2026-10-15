@@ -34,6 +34,8 @@ import { TreasuryAuditViews } from "./treasury-audit-views";
 import { VendorInvoiceWorkflows } from "./vendor-invoice-workflows";
 import { OwnerTreasuryControls } from "./owner-treasury-controls";
 import { WorkspaceHistory } from "./workspace-history";
+import { EmailInboxScreen } from "./email-inbox-screen";
+import { AccountingIntegrations } from "./accounting-integrations";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
@@ -93,6 +95,7 @@ export function AuthenticatedShell() {
   const [organizations, setOrganizations] = useState<UserOrganization[]>([]);
   const [agent, setAgent] = useState<BusinessAgentDetail | null>(null);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
+  const [workspaceView, setWorkspaceView] = useState<"overview" | "inbox" | "integrations">("overview");
   const [actionPending, setActionPending] = useState(false);
   const privyExchangePending = useRef(false);
   const isLoading = token !== "" && user === null;
@@ -374,6 +377,13 @@ export function AuthenticatedShell() {
                 Switching organizations clears tenant-scoped browser cache before
                 loading the next workspace.
               </p>
+              <nav className="mt-6 grid gap-2" aria-label="Workspace views">
+                {([[
+                  "overview", "Overview",
+                ], ["inbox", "Email inbox"], ["integrations", "Integrations"]] as const).map(([value, label]) => (
+                  <button key={value} type="button" onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "rounded-2xl bg-cyan-300 px-4 py-3 text-left font-semibold text-slate-950" : "rounded-2xl px-4 py-3 text-left text-slate-300 hover:bg-white/10"}>{label}</button>
+                ))}
+              </nav>
             </aside>
 
             <section className="space-y-6 rounded-3xl border border-white/10 bg-white p-6 text-slate-950 shadow-xl md:p-8">
@@ -391,6 +401,7 @@ export function AuthenticatedShell() {
 
               {isLoading ? <p className="text-slate-600">Loading...</p> : null}
 
+              {workspaceView === "overview" ? <>
               {organizations.length === 0 && !isLoading ? (
                 <div className="grid gap-6 lg:grid-cols-2">
                   <Panel title="Create organization">
@@ -552,6 +563,10 @@ export function AuthenticatedShell() {
                   ))}
                 </div>
               </Panel>
+              </> : null}
+
+              {workspaceView === "inbox" && selectedOrganizationId !== "" ? <EmailInboxScreen key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
+              {workspaceView === "integrations" && selectedOrganizationId !== "" ? <AccountingIntegrations key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
             </section>
           </div>
           </>
