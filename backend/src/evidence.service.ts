@@ -71,7 +71,7 @@ export interface RecordEvidenceDocumentRequest {
 }
 
 export interface EvidenceSourceOptions {
-  sourceType: 'MANUAL_UPLOAD' | 'EMAIL';
+  sourceType: 'MANUAL_UPLOAD' | 'EMAIL' | 'VENDOR_PORTAL';
   automated?: boolean;
 }
 
@@ -462,7 +462,13 @@ export class EvidenceService {
       throw new BadRequestException('sourceEventId is too long');
     }
 
-    const sourceEventKey = `${source.sourceType === 'EMAIL' ? 'email' : 'manual'}:${sourceEventId}`;
+    const sourcePrefix =
+      source.sourceType === 'MANUAL_UPLOAD'
+        ? 'manual'
+        : source.sourceType === 'VENDOR_PORTAL'
+          ? 'vendor'
+          : 'email';
+    const sourceEventKey = `${sourcePrefix}:${sourceEventId}`;
     const createdByMembershipId = source.automated
       ? null
       : context.membershipId;

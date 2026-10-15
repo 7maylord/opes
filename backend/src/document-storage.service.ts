@@ -9,6 +9,7 @@ import { DatabaseService, TenantDatabase } from './database.service';
 import { assertDocumentContentType } from './document-content';
 import {
   EvidenceDocumentResponse,
+  EvidenceSourceOptions,
   EvidenceService,
   RecordEvidenceDocumentRequest,
 } from './evidence.service';
@@ -55,14 +56,16 @@ export class DocumentStorageService {
   async initiateUpload(
     context: TenantContext,
     input: InitiateDocumentUploadRequest,
+    source?: EvidenceSourceOptions,
   ): Promise<InitiateDocumentUploadResponse> {
     if (!this.bucket.isConfigured())
       throw new ConflictException('Railway Bucket is not configured');
     const stagingKey = `staging/${context.organizationId}/${randomUUID()}`;
-    const document = await this.evidence.recordEvidenceDocument(context, {
-      ...input,
-      storageKey: stagingKey,
-    });
+    const document = await this.evidence.recordEvidenceDocument(
+      context,
+      { ...input, storageKey: stagingKey },
+      source ?? { sourceType: 'MANUAL_UPLOAD' },
+    );
     if (document.status === 'VERIFIED') {
       return {
         document,

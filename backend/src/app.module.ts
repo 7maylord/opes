@@ -57,6 +57,11 @@ import { OwnerTreasuryService } from './owner-treasury.service';
 import { TreasuryReconciliationService } from './treasury-reconciliation.service';
 import { WorkspaceController } from './workspace.controller';
 import { WorkspaceService } from './workspace.service';
+import {
+  VendorPortalAdminController,
+  VendorPortalController,
+} from './vendor-portal.controller';
+import { VendorPortalService } from './vendor-portal.service';
 
 @Module({
   imports: [],
@@ -82,6 +87,8 @@ import { WorkspaceService } from './workspace.service';
     SessionController,
     OwnerTreasuryController,
     WorkspaceController,
+    VendorPortalAdminController,
+    VendorPortalController,
   ],
   providers: [
     AccountingConnectorService,
@@ -119,6 +126,7 @@ import { WorkspaceService } from './workspace.service';
     OwnerTreasuryService,
     TreasuryReconciliationService,
     WorkspaceService,
+    VendorPortalService,
   ],
 })
 export class AppModule {}

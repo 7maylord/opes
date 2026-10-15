@@ -6,6 +6,7 @@ import {
   addVendorAddress,
   approveDecision,
   createVendor,
+  createVendorPortalAccess,
   evaluateInvoicePaymentWithAgent,
   executeDecision,
   extractInvoiceDocument,
@@ -22,6 +23,7 @@ import {
   type PaymentExecutionResponse,
   type VendorAddressResponse,
   type VendorResponse,
+  type VendorPortalAccessResponse,
 } from "@/lib/api";
 
 const arcUsdc = "0x3600000000000000000000000000000000000000";
@@ -46,6 +48,8 @@ export function VendorInvoiceWorkflows({
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const [paymentRoute, setPaymentRoute] = useState(paymentRoutes[0].value);
   const [vendor, setVendor] = useState<VendorResponse | null>(null);
+  const [vendorEmail, setVendorEmail] = useState("");
+  const [portalAccess, setPortalAccess] = useState<VendorPortalAccessResponse | null>(null);
   const [vendorAddress, setVendorAddress] = useState<VendorAddressResponse | null>(null);
   const [document, setDocument] = useState<EvidenceDocumentResponse | null>(null);
   const [extraction, setExtraction] = useState<DocumentExtractionResponse | null>(null);
@@ -77,6 +81,13 @@ export function VendorInvoiceWorkflows({
           payoutAddress,
         }),
       );
+    });
+  }
+
+  async function createPortalAccess() {
+    if (vendor === null) return setError("Create a vendor first.");
+    await run("Vendor portal access created", async () => {
+      setPortalAccess(await createVendorPortalAccess(token, organizationId, vendor.id, vendorEmail));
     });
   }
 
@@ -225,6 +236,9 @@ export function VendorInvoiceWorkflows({
           <h4 className="font-semibold">1. Vendor</h4>
           <Input label="Vendor name" value={vendorName} onChange={setVendorName} required />
           <button disabled={pending} className="btn">Create vendor</button>
+          <Input label="Portal contact" value={vendorEmail} onChange={setVendorEmail} />
+          <button type="button" disabled={pending || vendor === null || vendorEmail === ""} onClick={createPortalAccess} className="btn-secondary">Generate portal link</button>
+          {portalAccess ? <a className="block break-all text-sm text-cyan-700 underline" href={`/vendor/${portalAccess.token}`}>Open one-time displayed portal link</a> : null}
           <Result value={vendor} />
         </form>
 

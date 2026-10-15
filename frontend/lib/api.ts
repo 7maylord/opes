@@ -252,6 +252,58 @@ export interface VendorAddressResponse {
   replacesAddressId: string | null;
 }
 
+export interface VendorPortalAccessResponse {
+  id: string;
+  vendorId: string;
+  contactEmail: string;
+  expiresAt: string;
+  token: string;
+}
+
+export interface VendorPortalSubmission {
+  id: string;
+  documentId: string;
+  rootSubmissionId: string;
+  version: number;
+  status: string;
+  vendorNote: string | null;
+  documentType: string;
+  filename: string;
+  createdAt: string;
+  submittedAt: string | null;
+}
+
+export async function createVendorPortalAccess(token: string, organizationId: string, vendorId: string, contactEmail: string) {
+  return request<VendorPortalAccessResponse>(`/organizations/${encodeURIComponent(organizationId)}/vendors/${encodeURIComponent(vendorId)}/portal-access`, token, {
+    method: "POST",
+    body: JSON.stringify({ contactEmail, expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString() }),
+  });
+}
+
+export async function getVendorPortal(token: string) {
+  return fetchJson<{ organizationName: string; vendorName: string; contactEmail: string; expiresAt: string }>(`/vendor-portal/${encodeURIComponent(token)}`, {});
+}
+
+export async function listVendorPortalSubmissions(token: string) {
+  return fetchJson<VendorPortalSubmission[]>(`/vendor-portal/${encodeURIComponent(token)}/submissions`, {});
+}
+
+export async function submitVendorPortalDocument(token: string, file: File, vendorNote: string, replacesSubmissionId?: string) {
+  if (!file.type) throw new Error("Document file type is missing");
+  const bytes = await file.arrayBuffer();
+  const sha256Hex = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((value) => value.toString(16).padStart(2, "0")).join("");
+  const initiated = await fetchJson<{ submission: VendorPortalSubmission; upload: { document: EvidenceDocumentResponse; uploadUrl: string; uploadHeaders: Record<string, string> } }>(`/vendor-portal/${encodeURIComponent(token)}/submissions/uploads`, {
+    method: "POST",
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({ documentType: "INVOICE", filename: file.name, contentType: file.type, sizeBytes: file.size, sha256Hex, vendorNote, replacesSubmissionId }),
+  });
+  if (initiated.upload.document.status !== "VERIFIED") {
+    const uploaded = await fetch(initiated.upload.uploadUrl, { method: "PUT", headers: initiated.upload.uploadHeaders, body: file });
+    if (!uploaded.ok) throw new Error(`Document upload failed (${uploaded.status})`);
+  }
+  return fetchJson<VendorPortalSubmission>(`/vendor-portal/${encodeURIComponent(token)}/submissions/${encodeURIComponent(initiated.submission.id)}/finalize`, { method: "POST" });
+}
+
 export interface EvidenceDocumentResponse {
   id: string;
   documentType: string;
