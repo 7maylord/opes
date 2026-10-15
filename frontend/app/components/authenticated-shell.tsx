@@ -314,21 +314,10 @@ export function AuthenticatedShell() {
       <div className="pointer-events-none fixed inset-0 -z-10 bg-[radial-gradient(circle_at_15%_20%,rgba(34,211,238,0.24),transparent_32%),radial-gradient(circle_at_86%_6%,rgba(20,184,166,0.20),transparent_30%),linear-gradient(135deg,#020617_0%,#0f172a_48%,#111827_100%)]" />
       <section className={token === "" ? "" : "mx-auto flex w-full max-w-7xl flex-col gap-8 px-5 py-6 sm:px-6 lg:px-8"}>
         {token === "" ? (
-          <LandingExperience>
-            <div className="grid gap-6">
-            <AuthCard title="Access OPES">
-              <p className="mb-4 text-sm text-slate-600">Use a one-time email code to open your workspace.</p>
-              <button
-                type="button"
-                disabled={!privyReady || actionPending}
-                onClick={login}
-                className="min-h-12 w-full rounded-2xl bg-slate-950 px-6 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-              >
-                {privyAuthenticated ? "Opening workspace…" : "Sign in with email"}
-              </button>
-            </AuthCard>
-          </div>
-          </LandingExperience>
+          <LandingExperience
+            onEnterWorkspace={() => login()}
+            openingWorkspace={!privyReady || actionPending || privyAuthenticated}
+          />
         ) : (
           <>
             <CommandHeader
@@ -648,23 +637,6 @@ function subscribeToStorage(onStoreChange: () => void) {
     window.removeEventListener("storage", onStoreChange);
     window.removeEventListener(storageEventName, onStoreChange);
   };
-}
-
-function AuthCard({
-  title,
-  className = "",
-  children,
-}: {
-  title: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={`rounded-3xl border border-white/10 bg-white p-6 text-slate-950 shadow-xl ${className}`}>
-      <h2 className="text-2xl font-semibold">{title}</h2>
-      <div className="mt-5">{children}</div>
-    </section>
-  );
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {

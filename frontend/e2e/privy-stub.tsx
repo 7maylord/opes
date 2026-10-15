@@ -14,7 +14,7 @@ export function usePrivy() {
     ready: true,
     authenticated,
     getAccessToken: async () => "privy-access-token",
-    login: () => undefined,
+    login: () => localStorage.setItem("opes:e2e-login-opened", "1"),
     logout: async () => undefined,
   };
 }

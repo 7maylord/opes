@@ -97,6 +97,9 @@
   text-decoration: underline;
 }
 .navCta {
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
   border: 1px solid #afb4a9;
   padding: 13px 19px;
   border-radius: 4px;
@@ -201,6 +204,8 @@
   color: white;
   background: var(--blue);
   border-radius: 4px;
+  border: 0;
+  font-family: inherit;
   transition:
     background 0.2s,
     transform 0.2s;
@@ -673,32 +678,20 @@
   margin-top: 25px;
   font-size: clamp(34px, 3.5vw, 53px);
 }
-.access > div > section {
-  border-radius: 4px;
-  box-shadow: none;
-  background: #fcfbf5;
-  border: 1px solid #d1d8c6;
+.evidenceGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid #cbd2c0;
+  border-bottom: 1px solid #cbd2c0;
 }
-.access > div > section h2 {
-  font-size: 22px;
-  letter-spacing: -0.6px;
+.evidenceGrid article {
+  padding: 30px;
+  border-right: 1px solid #cbd2c0;
 }
-.access input {
-  border-radius: 3px;
-  background: #fffefb;
-  border-color: #c6ceba;
-}
-.access form button {
-  border-radius: 3px;
-  background: var(--blue);
-  font-size: 13px;
-}
-.access form button:hover {
-  background: #1735bf;
-}
-.access form button:disabled {
-  cursor: wait;
-}
+.evidenceGrid article:last-child { border-right: 0; }
+.evidenceGrid span { color: #68705f; font: 10px Consolas, monospace; letter-spacing: 1px; }
+.evidenceGrid h3 { margin-top: 18px; font-size: 21px; font-weight: 400; }
+.evidenceGrid p { margin-top: 12px; color: #68705f; font-size: 13px; line-height: 1.8; }
 .footer {
   padding-top: 35px;
   padding-bottom: 35px;
@@ -985,6 +978,9 @@
   .accessHeading > p {
     margin-top: 18px;
   }
+  .evidenceGrid { grid-template-columns: 1fr; }
+  .evidenceGrid article { border-right: 0; border-bottom: 1px solid #cbd2c0; }
+  .evidenceGrid article:last-child { border-bottom: 0; }
   .footer {
     flex-wrap: wrap;
     gap: 20px;

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("visitors can trace an illustrative payment and still reach workspace access", async ({
+test("visitors can trace an illustrative payment and open Privy from either primary action", async ({
   page,
 }) => {
   await page.goto("/");
@@ -23,8 +23,11 @@ test("visitors can trace an illustrative payment and still reach workspace acces
   await expect(
     page.getByText("EXAMPLE ONLY / NOT A TRANSACTION"),
   ).toBeVisible();
-  await page.getByRole("link", { name: "Make your first move" }).click();
-  await expect(page.getByRole("button", { name: "Sign in with email" })).toBeInViewport();
+  await page.getByRole("button", { name: "Make your next move" }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("opes:e2e-login-opened"))).toBe("1");
+  await page.evaluate(() => localStorage.removeItem("opes:e2e-login-opened"));
+  await page.getByRole("button", { name: "Enter workspace" }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("opes:e2e-login-opened"))).toBe("1");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

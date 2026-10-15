@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useRef, useState, type PointerEvent } from "react";
 import styles from "./landing-experience.module.css";
 
 const stages = [
@@ -42,7 +42,13 @@ const stages = [
   },
 ] as const;
 
-export function LandingExperience({ children }: { children: ReactNode }) {
+export function LandingExperience({
+  onEnterWorkspace,
+  openingWorkspace,
+}: {
+  onEnterWorkspace: () => void;
+  openingWorkspace: boolean;
+}) {
   const [stage, setStage] = useState(0);
   const [asset, setAsset] = useState("USDC");
   const [paused, setPaused] = useState(false);
@@ -82,9 +88,9 @@ export function LandingExperience({ children }: { children: ReactNode }) {
 
   return (
     <div className={styles.landing} data-paused={paused}>
-      <a className={styles.skip} href="#access">
-        Skip to workspace access
-      </a>
+      <button className={styles.skip} type="button" onClick={onEnterWorkspace}>
+        Sign in to OPES
+      </button>
       <header className={styles.header}>
         <a href="#" className={styles.brand} aria-label="OPES home">
           <span className={styles.brandMark} aria-hidden="true" />
@@ -95,9 +101,9 @@ export function LandingExperience({ children }: { children: ReactNode }) {
           <a href="#payment-trace">How it works</a>
           <a href="#principles">Built on trust</a>
         </nav>
-        <a className={styles.navCta} href="#access">
-          Enter workspace <span aria-hidden="true">↗</span>
-        </a>
+        <button className={styles.navCta} type="button" disabled={openingWorkspace} onClick={onEnterWorkspace}>
+          {openingWorkspace ? "Opening workspace…" : "Enter workspace"} <span aria-hidden="true">↗</span>
+        </button>
       </header>
 
       <section
@@ -125,9 +131,9 @@ export function LandingExperience({ children }: { children: ReactNode }) {
             invoice to the final ledger entry, every move stays accountable.
           </p>
           <div className={styles.heroActions}>
-            <a href="#access" className={styles.primary}>
-              Make your first move <span aria-hidden="true">↗</span>
-            </a>
+            <button className={styles.primary} type="button" disabled={openingWorkspace} onClick={onEnterWorkspace}>
+              {openingWorkspace ? "Opening workspace…" : "Make your next move"} <span aria-hidden="true">↗</span>
+            </button>
             <a href="#payment-trace" className={styles.textLink}>
               Follow a payment <span aria-hidden="true">↘</span>
             </a>
@@ -236,7 +242,7 @@ export function LandingExperience({ children }: { children: ReactNode }) {
         aria-labelledby="trace-title"
       >
         <div className={styles.sectionHeading}>
-          <p className={styles.eyebrow}>01 / FOLLOW THE MONEY</p>
+          <p className={styles.eyebrow}>FOLLOW THE MONEY</p>
           <span className={styles.demoBadge}>
             INTERACTIVE EXAMPLE · NO FUNDS MOVE
           </span>
@@ -342,7 +348,7 @@ export function LandingExperience({ children }: { children: ReactNode }) {
         aria-labelledby="principles-title"
       >
         <div>
-          <p className={styles.eyebrow}>02 / FREEDOM, WITH FOUNDATIONS</p>
+          <p className={styles.eyebrow}>FREEDOM, WITH FOUNDATIONS</p>
           <h2 id="principles-title">
             Let it work.
             <br />
@@ -355,17 +361,17 @@ export function LandingExperience({ children }: { children: ReactNode }) {
         <div className={styles.principleList}>
           {[
             [
-              "01",
+              "VAULT",
               "Your business. Your vault.",
               "A dedicated contract vault for every organization. Defined roles and spending policies keep your treasury in your hands.",
             ],
             [
-              "02",
+              "POLICY",
               "Autonomy within boundaries.",
               "Agents coordinate the work. Your policies and approval requirements define what can happen next.",
             ],
             [
-              "03",
+              "LEDGER",
               "A trail you can follow.",
               "Invoices, approvals and settlement evidence stay connected. Every ledger entry has a story you can verify.",
             ],
@@ -383,24 +389,28 @@ export function LandingExperience({ children }: { children: ReactNode }) {
       </section>
 
       <section
-        id="access"
+        id="evidence"
         className={styles.access}
         aria-labelledby="access-title"
       >
         <div className={styles.accessHeading}>
           <div>
-            <p className={styles.eyebrow}>03 / YOUR NEXT MOVE</p>
+            <p className={styles.eyebrow}>EVIDENCE, END TO END</p>
             <h2 id="access-title">
-              Put intent <span className={styles.serif}>into motion.</span>
+              Every payment can <span className={styles.serif}>explain itself.</span>
             </h2>
           </div>
           <p>
-            Create your organization, join your team,
+            From the document that created the obligation
             <br />
-            or pick up where you left off.
+            to the transaction that closed it.
           </p>
         </div>
-        {children}
+        <div className={styles.evidenceGrid}>
+          <article><span>BEFORE</span><h3>Source preserved</h3><p>Invoice, order, receipt and vendor identity stay attached to the obligation.</p></article>
+          <article><span>DURING</span><h3>Authority visible</h3><p>Policy checks, approvals and route limits show why money was allowed to move.</p></article>
+          <article><span>AFTER</span><h3>Settlement reconciled</h3><p>Chain confirmation and balanced ledger entries close the loop without losing context.</p></article>
+        </div>
       </section>
       <footer className={styles.footer}>
         <a className={styles.brand} href="#" aria-label="OPES back to top">
