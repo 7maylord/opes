@@ -113,6 +113,10 @@ test("journey 7: persisted invoice opens with its audit timeline", async ({ page
   await page.getByRole("button", { name: "View detail" }).first().click();
   await expect(page.getByRole("complementary").getByRole("heading", { name: "Invoice INV-100" })).toBeVisible();
   await expect(page.getByText("invoice verified")).toBeVisible();
+  const blockers = page.getByRole("heading", { name: "Payment blockers and exceptions" }).locator("..");
+  await expect(blockers).toContainText("payout address changed");
+  await expect(page.getByRole("heading", { name: "Evidence and authorization lineage" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export lineage" })).toBeVisible();
 });
 
 test("journey 8: keyboard tenant switching and responsive shell", async ({ page }) => {
@@ -254,11 +258,19 @@ function workspaceResponse(path: string) {
     invoice: [workspaceRecord("invoice-version-1", "invoice", "Invoice INV-100", "Canteen Supplies", "ACCEPTED", "100000000", "USDC", { invoiceNumber: "INV-100", vendorId: "vendor-1" })],
     decision: [],
     execution: [workspaceRecord("execution-1", "execution", "Payment execution", "arc-testnet", "CONFIRMED", "100000000", "USDC", {})],
-    subscription: [], escrow: [], ledger: [], audit: [],
+    subscription: [], escrow: [], ledger: [], audit: [], connector: [],
   };
   const items = path.includes(secondOrgId) ? [] : records[kind ?? ""] ?? [];
   const isDetail = parts.at(-3) === "workspace";
-  return isDetail ? { record: items.find((item) => item.id === parts.at(-1)), history: [{ id: "audit-1", eventType: "invoice.verified", status: "RECORDED", transactionHash: null, createdAt: "2026-10-04T00:00:00.000Z", details: {} }] } : { items, nextCursor: null };
+  return isDetail ? {
+    record: items.find((item) => item.id === parts.at(-1)),
+    history: [{ id: "audit-1", eventType: "invoice.verified", status: "RECORDED", transactionHash: null, createdAt: "2026-10-04T00:00:00.000Z", details: {} }],
+    lineage: [
+      { id: "doc-1", type: "evidence", label: "invoice.txt", status: "VERIFIED", transactionHash: null, createdAt: "2026-10-04T00:00:00.000Z", details: { sha256Hex: "abc" } },
+      { id: "decision-1", type: "policy_decision", label: "Policy decision", status: "BLOCK", transactionHash: null, createdAt: "2026-10-04T00:01:00.000Z", details: { checks: [{ message: "payout address changed" }] } },
+    ],
+    blockers: [{ code: "POLICY_DECISION:BLOCK", message: "Policy decision: payout address changed", sourceId: "decision-1" }],
+  } : { items, nextCursor: null };
 }
 
 function workspaceRecord(id: string, kind: string, title: string, subtitle: string, status: string, amountAtomic: string | null, assetSymbol: string | null, details: Record<string, unknown>) {

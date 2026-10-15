@@ -30,7 +30,7 @@
   },
   "components": {
     "schemas": {
-      "WorkspaceKind": { "type": "string", "enum": ["vendor", "evidence", "invoice", "decision", "execution", "subscription", "escrow", "ledger", "audit"] },
+      "WorkspaceKind": { "type": "string", "enum": ["vendor", "evidence", "invoice", "decision", "execution", "subscription", "escrow", "ledger", "audit", "connector"] },
       "WorkspaceRecord": {
         "type": "object",
         "required": ["id", "kind", "title", "subtitle", "status", "amountAtomic", "assetSymbol", "chainId", "transactionHash", "createdAt", "updatedAt", "details"],
@@ -69,12 +69,36 @@
           "details": { "type": "object", "additionalProperties": true }
         }
       },
+      "WorkspaceLineageNode": {
+        "type": "object",
+        "required": ["id", "type", "label", "status", "transactionHash", "createdAt", "details"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "type": { "type": "string" },
+          "label": { "type": "string" },
+          "status": { "type": "string" },
+          "transactionHash": { "type": ["string", "null"] },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "details": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "WorkspaceBlocker": {
+        "type": "object",
+        "required": ["code", "message", "sourceId"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "sourceId": { "type": "string", "format": "uuid" }
+        }
+      },
       "WorkspaceDetail": {
         "type": "object",
-        "required": ["record", "history"],
+        "required": ["record", "history", "lineage", "blockers"],
         "properties": {
           "record": { "$ref": "#/components/schemas/WorkspaceRecord" },
-          "history": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceHistoryEvent" } }
+          "history": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceHistoryEvent" } },
+          "lineage": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceLineageNode" } },
+          "blockers": { "type": "array", "items": { "$ref": "#/components/schemas/WorkspaceBlocker" } }
         }
       }
     }

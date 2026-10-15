@@ -1,6 +1,6 @@
 // Generated from backend/openapi.workspace.json. Do not edit.
 
-export type WorkspaceKind = "vendor" | "evidence" | "invoice" | "decision" | "execution" | "subscription" | "escrow" | "ledger" | "audit";
+export type WorkspaceKind = "vendor" | "evidence" | "invoice" | "decision" | "execution" | "subscription" | "escrow" | "ledger" | "audit" | "connector";
 
 export type WorkspaceRecord = {
   id: string;
@@ -31,8 +31,26 @@ export type WorkspaceHistoryEvent = {
   details: Record<string, unknown>;
 };
 
+export type WorkspaceLineageNode = {
+  id: string;
+  type: string;
+  label: string;
+  status: string;
+  transactionHash: string | null;
+  createdAt: string;
+  details: Record<string, unknown>;
+};
+
+export type WorkspaceBlocker = {
+  code: string;
+  message: string;
+  sourceId: string;
+};
+
 export type WorkspaceDetail = {
   record: WorkspaceRecord;
   history: Array<WorkspaceHistoryEvent> ;
+  lineage: Array<WorkspaceLineageNode> ;
+  blockers: Array<WorkspaceBlocker> ;
 };
 

@@ -36,6 +36,8 @@ describe('Workspace read models (e2e)', () => {
   const stagedInvoiceId = randomUUID();
   const orderDocumentId = randomUUID();
   const receiptDocumentId = randomUUID();
+  const connectorId = randomUUID();
+  let paymentExecutionId!: string;
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -390,6 +392,7 @@ describe('Workspace read models (e2e)', () => {
       )
       .set('Authorization', authorization)
       .expect(201);
+    paymentExecutionId = (execution.body as { id: string }).id;
     const originalFetch = global.fetch;
     const originalRpc = process.env.OPES_RPC_ARC_TESTNET;
     process.env.OPES_RPC_ARC_TESTNET = 'https://rpc.test.invalid';
@@ -519,6 +522,87 @@ describe('Workspace read models (e2e)', () => {
       );
   });
 
+  it('exposes settled payable lineage, blockers, and redacted connector health', async () => {
+    const server = app.getHttpAdapter().getInstance() as App;
+    const authorization = `Bearer ${sessionToken}`;
+    const transactionHash = `0x${'d'.repeat(64)}`;
+    await database.withOrganizationScope(organizationId, async (sql) => {
+      await sql.query(
+        `UPDATE opes.payment_executions
+            SET status='CONFIRMED',transaction_hash=$3,failure_reason=NULL,confirmed_at=now()
+          WHERE organization_id=$1 AND id=$2`,
+        [organizationId, paymentExecutionId, transactionHash],
+      );
+      await sql.query(
+        `INSERT INTO opes.payment_reconciliation_events
+          (organization_id,provider,external_event_id,execution_id,transaction_hash,payload_hash)
+         VALUES ($1,'circle','workspace-settlement',$2,$3,$4)`,
+        [organizationId, paymentExecutionId, transactionHash, 'e'.repeat(64)],
+      );
+      await sql.query(
+        `INSERT INTO opes.accounting_connector_bindings
+          (id,organization_id,provider,label,base_url,encrypted_credentials,status,last_error,created_by_membership_id)
+         VALUES ($1,$2,'ODOO','Odoo payable sync','https://private.invalid','secret-ciphertext','FAILED','Authentication failed',$3)`,
+        [connectorId, organizationId, membershipId],
+      );
+    });
+    await request(server)
+      .post(
+        `/organizations/${organizationId}/ledger/payment-executions/${paymentExecutionId}/settle`,
+      )
+      .set('Authorization', authorization)
+      .expect(201);
+
+    const detail = await request(server)
+      .get(
+        `/organizations/${organizationId}/workspace/invoice/${invoiceVersionId}`,
+      )
+      .set('Authorization', authorization)
+      .expect(200);
+    const detailBody = detail.body as unknown as {
+      lineage: Array<{ type: string; transactionHash: string | null }>;
+      blockers: Array<{ code: string }>;
+    };
+    expect(detailBody.lineage.map((node) => node.type)).toEqual(
+      expect.arrayContaining([
+        'evidence',
+        'evidence_match',
+        'procurement_evidence',
+        'policy_decision',
+        'reservation',
+        'approval',
+        'execution',
+        'preflight',
+        'reconciliation',
+        'ledger',
+      ]),
+    );
+    expect(
+      detailBody.lineage.some(
+        (node) => node.transactionHash === transactionHash,
+      ),
+    ).toBe(true);
+    expect(detailBody.blockers.map((blocker) => blocker.code)).toEqual(
+      expect.arrayContaining(['APPROVAL:REVOKED', 'APPROVAL:EXPIRED']),
+    );
+
+    const connectors = await request(server)
+      .get(`/organizations/${organizationId}/workspace/connector`)
+      .set('Authorization', authorization)
+      .expect(200);
+    expect(connectors.body).toMatchObject({
+      items: [
+        {
+          id: connectorId,
+          status: 'FAILED',
+          details: { lastError: 'Authentication failed' },
+        },
+      ],
+    });
+    expect(JSON.stringify(connectors.body)).not.toContain('secret-ciphertext');
+    expect(JSON.stringify(connectors.body)).not.toContain('private.invalid');
+  });
+
   afterAll(async () => {
     for (const id of [organizationId, otherOrganizationId]) {
       await database.withOrganizationScope(id, async (sql) => {
@@ -528,6 +612,18 @@ describe('Workspace read models (e2e)', () => {
         );
         await sql.query(
           'DELETE FROM opes.ledger_entries WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.accounting_settlement_writebacks WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.external_accounting_records WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.accounting_connector_bindings WHERE organization_id = $1',
           [id],
         );
         await sql.query(
@@ -556,6 +652,10 @@ describe('Workspace read models (e2e)', () => {
         );
         await sql.query(
           'DELETE FROM opes.treasury_balance_snapshots WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.payment_reconciliation_events WHERE organization_id = $1',
           [id],
         );
         await sql.query(

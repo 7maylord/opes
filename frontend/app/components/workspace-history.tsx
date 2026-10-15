@@ -19,6 +19,7 @@ const kinds: Array<{ value: WorkspaceKind; label: string }> = [
   { value: "ledger", label: "Ledger" },
   { value: "evidence", label: "Evidence" },
   { value: "audit", label: "Audit" },
+  { value: "connector", label: "Connectors" },
 ];
 
 export function WorkspaceHistory({ token, organizationId }: { token: string; organizationId: string }) {
@@ -149,14 +150,26 @@ function RecordCard({ record, selected, onOpen }: { record: WorkspaceRecord; sel
 function DetailPanel({ detail }: { detail: WorkspaceDetail | null }) {
   if (!detail) return <aside className="rounded-2xl border border-dashed border-slate-300 p-6 text-sm text-slate-600">Choose a record to inspect its stored fields and activity.</aside>;
   const visibleDetails = Object.entries(detail.record.details).filter(([, value]) => value !== null && value !== "");
+  const exportPayload = detail;
+  function exportLineage() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `opes-${exportPayload.record.kind}-${exportPayload.record.id}-lineage.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
   return (
     <aside className="rounded-2xl border border-slate-200 bg-slate-950 p-5 text-slate-100">
-      <h4 className="text-lg font-semibold">{detail.record.title}</h4>
+      <div className="flex items-start justify-between gap-3"><h4 className="text-lg font-semibold">{detail.record.title}</h4><button type="button" onClick={exportLineage} className="text-sm font-semibold text-cyan-300 underline">Export lineage</button></div>
+      {detail.blockers.length > 0 ? <section className="mt-5 rounded-2xl border border-red-400/40 bg-red-950/40 p-4" aria-labelledby="workspace-blockers"><h5 id="workspace-blockers" className="font-semibold text-red-200">Payment blockers and exceptions</h5><ul className="mt-3 space-y-2 text-sm text-red-100">{detail.blockers.map((blocker) => <li key={`${blocker.code}-${blocker.sourceId}`}><strong>{humanize(blocker.code)}:</strong> {blocker.message}</li>)}</ul></section> : <p className="mt-5 rounded-xl border border-emerald-400/30 bg-emerald-950/30 p-3 text-sm text-emerald-200">No stored blockers in this lineage.</p>}
       <dl className="mt-4 space-y-3 text-sm">
         {visibleDetails.map(([key, value]) => <div key={key} className="border-b border-white/10 pb-3"><dt className="text-slate-400">{humanize(key)}</dt><dd className="mt-1 break-words">{renderValue(value)}</dd></div>)}
       </dl>
       <h5 className="mt-6 font-semibold">Timeline</h5>
       {detail.history.length === 0 ? <p className="mt-3 text-sm text-slate-400">No linked activity yet.</p> : <ol className="mt-3 space-y-3">{detail.history.map((event) => <li key={event.id} className="rounded-xl bg-white/5 p-3 text-sm"><div className="flex justify-between gap-3"><span>{humanize(event.eventType)}</span><Status value={event.status} /></div><time className="mt-2 block text-xs text-slate-400">{new Date(event.createdAt).toLocaleString()}</time></li>)}</ol>}
+      <h5 className="mt-6 font-semibold">Evidence and authorization lineage</h5>
+      {detail.lineage.length === 0 ? <p className="mt-3 text-sm text-slate-400">This record has no invoice payment lineage.</p> : <ol className="mt-3 space-y-3">{detail.lineage.map((node) => { const chainId = typeof node.details.chainId === "number" ? node.details.chainId : detail.record.chainId; const explorer = transactionUrl(chainId, node.transactionHash); return <li key={`${node.type}-${node.id}`} className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm"><div className="flex justify-between gap-3"><div><p className="font-semibold">{node.label}</p><p className="mt-1 text-xs text-slate-400">{humanize(node.type)} · {new Date(node.createdAt).toLocaleString()}</p></div><Status value={node.status} /></div>{Object.keys(node.details).length ? <details className="mt-3"><summary className="cursor-pointer text-cyan-300">Stored evidence</summary><pre className="mt-2 overflow-auto whitespace-pre-wrap break-words text-xs text-slate-300">{JSON.stringify(node.details, null, 2)}</pre></details> : null}{explorer ? <a href={explorer} target="_blank" rel="noreferrer" className="mt-3 inline-block text-cyan-300 underline">Transaction evidence</a> : null}</li>; })}</ol>}
     </aside>
   );
 }

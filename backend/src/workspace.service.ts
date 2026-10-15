@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DatabaseService } from './database.service';
+import { DatabaseService, TenantDatabase } from './database.service';
 import { TenantContext } from './tenant-context';
 
 export const workspaceKinds = [
@@ -16,6 +16,7 @@ export const workspaceKinds = [
   'escrow',
   'ledger',
   'audit',
+  'connector',
 ] as const;
 
 export type WorkspaceKind = (typeof workspaceKinds)[number];
@@ -52,6 +53,24 @@ export interface WorkspaceHistoryEvent {
 export interface WorkspaceDetail {
   record: WorkspaceRecord;
   history: WorkspaceHistoryEvent[];
+  lineage: WorkspaceLineageNode[];
+  blockers: WorkspaceBlocker[];
+}
+
+export interface WorkspaceLineageNode {
+  id: string;
+  type: string;
+  label: string;
+  status: string;
+  transactionHash: string | null;
+  createdAt: string;
+  details: Record<string, unknown>;
+}
+
+export interface WorkspaceBlocker {
+  code: string;
+  message: string;
+  sourceId: string;
 }
 
 export interface WorkspaceListQuery {
@@ -88,6 +107,16 @@ interface HistoryRow {
 interface Cursor {
   createdAt: string;
   id: string;
+}
+
+interface LineageRow {
+  id: string;
+  node_type: string;
+  label: string;
+  status: string;
+  transaction_hash: string | null;
+  created_at: Date;
+  details: Record<string, unknown>;
 }
 
 @Injectable()
@@ -190,9 +219,17 @@ export class WorkspaceService {
         `,
         [context.organizationId, id],
       );
+      const lineage = await loadLineage(
+        database,
+        context.organizationId,
+        kind,
+        id,
+      );
       return {
         record: mapRecord(record),
         history: history.rows.map(mapHistory),
+        lineage: lineage.map(mapLineage),
+        blockers: blockersFromLineage(lineage),
       };
     });
   }
@@ -291,7 +328,182 @@ function recordsSql(): string {
              'RECORDED', NULL, NULL, NULL, NULL, a.created_at, a.created_at,
              jsonb_build_object('subjectId', a.subject_id, 'payload', a.payload)
         FROM opes.audit_events a
+      UNION ALL
+      SELECT c.organization_id, c.id, 'connector', c.label, c.provider, c.status,
+             NULL, NULL, NULL, NULL, c.created_at, c.updated_at,
+             jsonb_build_object('provider',c.provider,'lastSyncedAt',c.last_synced_at,
+               'syncCursor',c.sync_cursor,'lastError',c.last_error,
+               'recordCount',(SELECT count(*) FROM opes.external_accounting_records r
+                 WHERE r.organization_id=c.organization_id AND r.connector_id=c.id),
+               'writebacks',COALESCE((SELECT jsonb_object_agg(status,total) FROM (
+                 SELECT status,count(*) AS total FROM opes.accounting_settlement_writebacks w
+                 WHERE w.organization_id=c.organization_id AND w.connector_id=c.id GROUP BY status
+               ) counts),'{}'::jsonb))
+        FROM opes.accounting_connector_bindings c
     )`;
+}
+
+async function loadLineage(
+  database: TenantDatabase,
+  organizationId: string,
+  kind: WorkspaceKind,
+  id: string,
+): Promise<LineageRow[]> {
+  let invoiceVersionId: string | undefined;
+  if (kind === 'invoice') invoiceVersionId = id;
+  if (kind === 'decision') {
+    const result = await database.query<{ source_version_id: string }>(
+      `SELECT source_version_id FROM opes.payment_decisions WHERE organization_id=$1 AND id=$2`,
+      [organizationId, id],
+    );
+    invoiceVersionId = result.rows[0]?.source_version_id;
+  }
+  if (kind === 'execution') {
+    const result = await database.query<{ source_version_id: string }>(
+      `SELECT source_version_id FROM opes.payment_executions WHERE organization_id=$1 AND id=$2`,
+      [organizationId, id],
+    );
+    invoiceVersionId = result.rows[0]?.source_version_id;
+  }
+  if (!invoiceVersionId) return [];
+  const result = await database.query<LineageRow>(lineageSql, [
+    organizationId,
+    invoiceVersionId,
+  ]);
+  return result.rows;
+}
+
+const lineageSql = `
+WITH invoice AS (
+  SELECT * FROM opes.payable_obligation_versions WHERE organization_id=$1 AND id=$2
+), executions AS (
+  SELECT id FROM opes.payment_executions WHERE organization_id=$1 AND source_version_id=$2
+), lineage AS (
+  SELECT document.id, 'evidence'::text node_type, document.filename label, document.status,
+    NULL::text transaction_hash,document.created_at,
+    jsonb_build_object('documentType',document.document_type,'sha256Hex',document.sha256_hex,
+      'contentType',document.content_type,'metadata',document.metadata,
+      'intake',(SELECT jsonb_build_object('sourceType',source_type,'status',status,'quarantineReason',quarantine_reason)
+        FROM opes.intake_envelopes WHERE organization_id=$1 AND document_id=document.id ORDER BY received_at DESC LIMIT 1)) details
+  FROM invoice JOIN opes.evidence_documents document ON document.organization_id=$1 AND document.id=invoice.evidence_document_id
+  UNION ALL
+  SELECT claim.id,'claim_review','Extracted invoice claims',claim.status,NULL,claim.created_at,
+    jsonb_build_object('version',claim.version,'claims',claim.claims,'provenance',claim.provenance) FROM invoice
+    JOIN opes.document_claim_versions claim ON claim.organization_id=$1 AND claim.document_id=invoice.evidence_document_id
+  UNION ALL
+  SELECT match.id,'evidence_match','Invoice · order · delivery match',match.status,NULL,match.created_at,
+    jsonb_build_object('reasons',match.reasons,'calculation',match.calculation_snapshot,
+      'governingEvidenceVersionId',match.governing_evidence_version_id,'deliveryEvidenceVersionId',match.delivery_evidence_version_id)
+    FROM opes.payable_evidence_matches match WHERE match.organization_id=$1 AND match.invoice_version_id=$2
+  UNION ALL
+  SELECT version.id,'procurement_evidence',source.evidence_type || ' · ' || source.source_reference,version.status,NULL,version.created_at,
+    jsonb_build_object('sourceId',source.id,'version',version.version,'amountAtomic',version.total_amount_atomic::text,
+      'currency',version.currency,'evidenceDocumentId',version.evidence_document_id,'externalRecordId',version.external_accounting_record_id)
+    FROM opes.payable_evidence_matches match
+    JOIN opes.procurement_evidence_versions version ON version.organization_id=match.organization_id
+      AND version.id IN (match.governing_evidence_version_id,match.delivery_evidence_version_id)
+    JOIN opes.procurement_evidence_sources source ON source.organization_id=version.organization_id AND source.id=version.source_id
+    WHERE match.organization_id=$1 AND match.invoice_version_id=$2
+  UNION ALL
+  SELECT decision.id,'policy_decision','Policy decision · ' || decision.derived_action,decision.derived_action,NULL,decision.created_at,
+    jsonb_build_object('checks',decision.checks,'policyVersionId',decision.policy_version_id,'route',decision.liquidity_route,
+      'environment',decision.route_environment,'assetSymbol',decision.route_asset_symbol,'expiresAt',decision.expires_at,
+      'modelAction',decision.model_action,'modelRationale',decision.model_rationale)
+    FROM opes.payment_decisions decision WHERE decision.organization_id=$1 AND decision.source_version_id=$2
+  UNION ALL
+  SELECT reservation.id,'reservation','Treasury reservation',reservation.status,NULL,reservation.created_at,
+    jsonb_build_object('decisionId',reservation.decision_id,'amountAtomic',reservation.amount_atomic::text,'expiresAt',reservation.expires_at)
+    FROM opes.treasury_reservations reservation WHERE reservation.organization_id=$1 AND reservation.source_version_id=$2
+  UNION ALL
+  SELECT approval.id,'approval','Payment approval',CASE WHEN approval.expires_at<=now() THEN 'EXPIRED' ELSE approval.status END,NULL,approval.approved_at,
+    jsonb_build_object('decisionId',approval.decision_id,'approvedByMembershipId',approval.approved_by_membership_id,'expiresAt',approval.expires_at)
+    FROM opes.payment_decision_approvals approval JOIN opes.payment_decisions decision
+      ON decision.organization_id=approval.organization_id AND decision.id=approval.decision_id
+    WHERE approval.organization_id=$1 AND decision.source_version_id=$2
+  UNION ALL
+  SELECT execution.id,'execution','Payment execution',execution.status,execution.transaction_hash,execution.requested_at,
+    jsonb_build_object('decisionId',execution.decision_id,'approvalId',execution.approval_id,'failureReason',execution.failure_reason,
+      'destinationAddress',execution.destination_address,'environment',execution.route_environment,'chainId',execution.route_chain_id,
+      'assetSymbol',execution.route_asset_symbol,'amountAtomic',execution.amount_atomic::text)
+    FROM opes.payment_executions execution WHERE execution.organization_id=$1 AND execution.source_version_id=$2
+  UNION ALL
+  SELECT preflight.id,'preflight','Execution preflight',preflight.status,NULL,preflight.created_at,
+    jsonb_build_object('executionId',preflight.execution_id,'checks',preflight.checks,'blockNumber',preflight.observed_block_number,
+      'balanceAtomic',preflight.observed_balance_atomic::text,'pendingNonce',preflight.observed_pending_nonce)
+    FROM opes.payment_execution_preflights preflight WHERE preflight.organization_id=$1 AND preflight.execution_id IN (SELECT id FROM executions)
+  UNION ALL
+  SELECT attempt.id,'execution_attempt','Provider submission · ' || attempt.provider,attempt.status,attempt.transaction_hash,attempt.created_at,
+    jsonb_build_object('executionId',attempt.execution_id,'attemptNumber',attempt.attempt_number,'failureReason',attempt.failure_reason)
+    FROM opes.payment_execution_attempts attempt WHERE attempt.organization_id=$1 AND attempt.execution_id IN (SELECT id FROM executions)
+  UNION ALL
+  SELECT reconciliation.id,'reconciliation','Payment reconciliation',reconciliation.status,reconciliation.transaction_hash,reconciliation.created_at,
+    jsonb_build_object('executionId',reconciliation.execution_id,'provider',reconciliation.provider,'externalEventId',reconciliation.external_event_id)
+    FROM opes.payment_reconciliation_events reconciliation WHERE reconciliation.organization_id=$1 AND reconciliation.execution_id IN (SELECT id FROM executions)
+  UNION ALL
+  SELECT ledger.id,'ledger',replace(ledger.ledger_event_type,'_',' ') || ' · ' || ledger.account,ledger.direction,ledger.transaction_hash,ledger.created_at,
+    jsonb_build_object('eventId',ledger.ledger_event_id,'amountAtomic',ledger.amount_atomic::text,'assetSymbol',ledger.asset_symbol,
+      'sourceId',ledger.source_id,'sourceVersionId',ledger.source_version_id,'counterpartyId',ledger.counterparty_id)
+    FROM opes.ledger_entries ledger WHERE ledger.organization_id=$1
+      AND (ledger.source_version_id=$2 OR ledger.source_id IN (SELECT id FROM executions))
+  UNION ALL
+  SELECT writeback.id,'accounting_writeback','Accounting settlement writeback',writeback.status,NULL,writeback.created_at,
+    jsonb_build_object('executionId',writeback.payment_execution_id,'connectorId',writeback.connector_id,
+      'externalBillId',writeback.external_bill_id,'providerReference',writeback.provider_reference,'failureReason',writeback.failure_reason)
+    FROM opes.accounting_settlement_writebacks writeback WHERE writeback.organization_id=$1
+      AND writeback.payment_execution_id IN (SELECT id FROM executions)
+)
+SELECT * FROM lineage ORDER BY created_at,id`;
+
+function mapLineage(row: LineageRow): WorkspaceLineageNode {
+  return {
+    id: row.id,
+    type: row.node_type,
+    label: row.label,
+    status: row.status,
+    transactionHash: row.transaction_hash,
+    createdAt: row.created_at.toISOString(),
+    details: row.details,
+  };
+}
+
+function blockersFromLineage(rows: LineageRow[]): WorkspaceBlocker[] {
+  const blocking = new Set([
+    'BLOCK',
+    'BLOCKED',
+    'FAILED',
+    'UNKNOWN',
+    'REJECT',
+    'REJECTED',
+    'REVOKED',
+    'EXPIRED',
+    'PENDING_REVIEW',
+  ]);
+  return rows
+    .filter((row) => blocking.has(row.status))
+    .map((row) => {
+      const reason =
+        row.details.failureReason ?? row.details.reasons ?? row.details.checks;
+      return {
+        code: `${row.node_type}:${row.status}`.toUpperCase(),
+        message: reason
+          ? `${row.label}: ${stringifyReason(reason)}`
+          : `${row.label} is ${row.status.toLowerCase()}`,
+        sourceId: row.id,
+      };
+    });
+}
+
+function stringifyReason(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value))
+    return (value as unknown[])
+      .map((item) =>
+        typeof item === 'object' && item && 'message' in item
+          ? String(item.message)
+          : String(item),
+      )
+      .join('; ');
+  return JSON.stringify(value);
 }
 
 function parseKind(value: string): WorkspaceKind {
