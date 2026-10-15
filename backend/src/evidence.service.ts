@@ -70,6 +70,11 @@ export interface RecordEvidenceDocumentRequest {
   metadata?: unknown;
 }
 
+export interface EvidenceSourceOptions {
+  sourceType: 'MANUAL_UPLOAD' | 'EMAIL';
+  automated?: boolean;
+}
+
 export interface EvidenceDocumentResponse {
   id: string;
   documentType: string;
@@ -428,6 +433,7 @@ export class EvidenceService {
   async recordEvidenceDocument(
     context: TenantContext,
     input: RecordEvidenceDocumentRequest,
+    source: EvidenceSourceOptions = { sourceType: 'MANUAL_UPLOAD' },
   ): Promise<EvidenceDocumentResponse> {
     const documentType = validateDocumentType(input.documentType);
     const filename = requireText(input.filename, 'filename');
@@ -456,6 +462,10 @@ export class EvidenceService {
       throw new BadRequestException('sourceEventId is too long');
     }
 
+    const sourceEventKey = `${source.sourceType === 'EMAIL' ? 'email' : 'manual'}:${sourceEventId}`;
+    const createdByMembershipId = source.automated
+      ? null
+      : context.membershipId;
     const recorded = await this.database.withTenant(
       context,
       async (database) => {
@@ -463,23 +473,24 @@ export class EvidenceService {
           `INSERT INTO opes.intake_envelopes (
              organization_id, source_type, source_event_id, payload_hash,
              raw_metadata, created_by_membership_id
-           ) VALUES ($1, 'MANUAL_UPLOAD', $2, $3, $4::jsonb, $5)
+           ) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
            ON CONFLICT (organization_id, source_type, source_event_id) DO NOTHING`,
           [
             context.organizationId,
-            `manual:${sourceEventId}`,
+            source.sourceType,
+            sourceEventKey,
             payloadHash,
             JSON.stringify({ documentType, filename, contentType, sizeBytes }),
-            context.membershipId,
+            createdByMembershipId,
           ],
         );
         const envelopeResult = await database.query<IntakeEnvelopeRow>(
           `SELECT id, payload_hash, document_id, status
-             FROM opes.intake_envelopes
-            WHERE organization_id = $1 AND source_type = 'MANUAL_UPLOAD'
-              AND source_event_id = $2
+            FROM opes.intake_envelopes
+            WHERE organization_id = $1 AND source_type = $2
+              AND source_event_id = $3
             FOR UPDATE`,
-          [context.organizationId, `manual:${sourceEventId}`],
+          [context.organizationId, source.sourceType, sourceEventKey],
         );
         const envelope = requireRow(envelopeResult.rows[0], 'intake envelope');
         if (envelope.payload_hash !== payloadHash) {
@@ -544,7 +555,7 @@ export class EvidenceService {
             sha256Hex,
             storageKey,
             JSON.stringify(input.metadata ?? {}),
-            context.membershipId,
+            createdByMembershipId,
           ],
         );
         const document = inserted.rows[0];
@@ -581,7 +592,8 @@ export class EvidenceService {
           'evidence.intake_recorded',
           'evidence_document',
           document.id,
-          { envelopeId: envelope.id, sourceType: 'MANUAL_UPLOAD' },
+          { envelopeId: envelope.id, sourceType: source.sourceType },
+          source.automated,
         );
         return { conflict: false as const, document };
       },
@@ -597,6 +609,7 @@ export class EvidenceService {
     context: TenantContext,
     documentId: string,
     input: RecordDocumentExtractionRequest,
+    automated = false,
   ): Promise<DocumentExtractionResponse> {
     const evidenceDocumentId = requireUuid(documentId, 'documentId');
     const schemaName = requireText(input.schemaName, 'schemaName');
@@ -672,7 +685,7 @@ export class EvidenceService {
             providerResponseId,
             promptVersion,
             requestHash,
-            context.membershipId,
+            automated ? null : context.membershipId,
           ],
         );
         const extraction = requireRow(result.rows[0], 'document extraction');
@@ -718,7 +731,7 @@ export class EvidenceService {
               JSON.stringify(payload.claims),
               JSON.stringify(payload.provenance),
               payload.status,
-              context.membershipId,
+              automated ? null : context.membershipId,
             ],
           );
           claim = requireRow(insertedClaim.rows[0], 'document claim');
@@ -882,6 +895,7 @@ async function audit(
   subjectType: string,
   subjectId: string,
   payload: unknown,
+  automated = false,
 ): Promise<void> {
   await database.query(
     `
@@ -898,8 +912,8 @@ async function audit(
     `,
     [
       context.organizationId,
-      context.userId,
-      context.membershipId,
+      automated ? null : context.userId,
+      automated ? null : context.membershipId,
       eventType,
       subjectType,
       subjectId,

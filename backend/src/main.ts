@@ -5,7 +5,7 @@ import { loadRuntimeConfig } from './runtime.config';
 
 async function bootstrap() {
   const config = loadRuntimeConfig();
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   useCorrelationIds(app);
   app.enableCors({
     origin: config.allowedOrigins,

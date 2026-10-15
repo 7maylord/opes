@@ -16,6 +16,11 @@ import { DecisionController } from './decision.controller';
 import { DecisionService } from './decision.service';
 import { EvidenceController } from './evidence.controller';
 import { EvidenceService } from './evidence.service';
+import {
+  EmailInboxController,
+  ResendInboundController,
+} from './email-inbox.controller';
+import { EmailInboxService } from './email-inbox.service';
 import { FactoryManifestService } from './factory-manifest.service';
 import { InvoiceController } from './invoice.controller';
 import { LedgerController } from './ledger.controller';
@@ -61,6 +66,7 @@ import { WorkspaceService } from './workspace.service';
     AppController,
     AuthController,
     DecisionController,
+    EmailInboxController,
     EvidenceController,
     InvoiceController,
     LedgerController,
@@ -70,6 +76,7 @@ import { WorkspaceService } from './workspace.service';
     OperationsController,
     PaymentWebhookController,
     ProcurementEvidenceController,
+    ResendInboundController,
     OrganizationInvitationController,
     OrganizationController,
     SessionController,
@@ -87,6 +94,7 @@ import { WorkspaceService } from './workspace.service';
     DecisionService,
     DocumentExtractionService,
     DocumentStorageService,
+    EmailInboxService,
     EvidenceService,
     FactoryManifestService,
     InvoiceService,

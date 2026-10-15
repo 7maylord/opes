@@ -47,7 +47,7 @@ describe('EvidenceService', () => {
         values?: readonly unknown[],
       ): Promise<{ rows: unknown[] }> => {
         if (text.includes('INSERT INTO opes.intake_envelopes')) {
-          intakeHash = String(values?.[2]);
+          intakeHash = String(values?.[3]);
           return Promise.resolve({ rows: [] });
         }
         if (text.includes('FROM opes.intake_envelopes')) {
@@ -148,7 +148,7 @@ describe('EvidenceService', () => {
     let intakeHash = '';
     const query = jest.fn((text: string, values?: readonly unknown[]) => {
       if (text.includes('INSERT INTO opes.intake_envelopes')) {
-        intakeHash = String(values?.[2]);
+        intakeHash = String(values?.[3]);
         return Promise.resolve({ rows: [] });
       }
       if (text.includes('FROM opes.intake_envelopes')) {

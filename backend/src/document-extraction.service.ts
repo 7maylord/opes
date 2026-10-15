@@ -20,6 +20,7 @@ export class DocumentExtractionService {
   async extractInvoice(
     context: TenantContext,
     documentId: string,
+    automated = false,
   ): Promise<DocumentExtractionResponse> {
     const existing = await this.findExisting(context, documentId);
     if (existing) return existing;
@@ -35,17 +36,22 @@ export class DocumentExtractionService {
       bytes,
       sourceSha256Hex: document.sha256Hex,
     });
-    return this.evidence.recordDocumentExtraction(context, documentId, {
-      schemaName: 'invoice',
-      schemaVersion: '2',
-      modelProvider: result.provider,
-      modelName: result.model,
-      sourceSha256Hex: document.sha256Hex,
-      output: result.output,
-      providerResponseId: result.responseId,
-      promptVersion: result.promptVersion,
-      requestHash: result.requestHash,
-    });
+    return this.evidence.recordDocumentExtraction(
+      context,
+      documentId,
+      {
+        schemaName: 'invoice',
+        schemaVersion: '2',
+        modelProvider: result.provider,
+        modelName: result.model,
+        sourceSha256Hex: document.sha256Hex,
+        output: result.output,
+        providerResponseId: result.responseId,
+        promptVersion: result.promptVersion,
+        requestHash: result.requestHash,
+      },
+      automated,
+    );
   }
 
   private async findExisting(

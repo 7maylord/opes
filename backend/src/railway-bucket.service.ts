@@ -86,6 +86,24 @@ export class RailwayBucketService {
     };
   }
 
+  async write(
+    key: string,
+    bytes: Uint8Array,
+    contentType: string,
+    sha256Hex: string,
+  ): Promise<void> {
+    const { client, bucket } = this.requireConfigured();
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: bytes,
+        ContentType: contentType,
+        Metadata: { sha256: sha256Hex },
+      }),
+    );
+  }
+
   async finalize(stagingKey: string, finalKey: string): Promise<void> {
     const { client, bucket } = this.requireConfigured();
     await client.send(
