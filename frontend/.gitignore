@@ -17,6 +17,8 @@
 
 # next.js
 /.next/
+/.next-local/
+/.next-e2e/
 /.next-test/
 /out/
 

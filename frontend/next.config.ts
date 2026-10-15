@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import path from "node:path";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 
 const nextConfig: NextConfig = {
   webpack(config) {
@@ -13,4 +14,11 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default function config(phase: string): NextConfig {
+  return {
+    ...nextConfig,
+    distDir: phase === PHASE_DEVELOPMENT_SERVER
+      ? process.env.OPES_E2E_AUTH_STUB === "1" ? ".next-e2e" : ".next-local"
+      : ".next",
+  };
+}

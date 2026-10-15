@@ -124,7 +124,7 @@ if [ "$RUN_WORKER" = "1" ]; then
 fi
 
 echo "Starting frontend on ${FRONTEND_PORT}..."
-NEXT_PUBLIC_OPES_API_URL="$BACKEND_URL" \
+OPES_E2E_AUTH_STUB=0 NEXT_PUBLIC_OPES_API_URL="$BACKEND_URL" \
   pnpm --dir "$ROOT_DIR/frontend" dev --webpack --hostname 127.0.0.1 --port "$FRONTEND_PORT" &
 pids+=("$!")
 
