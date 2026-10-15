@@ -62,6 +62,7 @@ import {
   VendorPortalController,
 } from './vendor-portal.controller';
 import { VendorPortalService } from './vendor-portal.service';
+import { WatchedBucketService } from './watched-bucket.service';
 
 @Module({
   imports: [],
@@ -127,6 +128,7 @@ import { VendorPortalService } from './vendor-portal.service';
     TreasuryReconciliationService,
     WorkspaceService,
     VendorPortalService,
+    WatchedBucketService,
   ],
 })
 export class AppModule {}

@@ -71,7 +71,7 @@ export interface RecordEvidenceDocumentRequest {
 }
 
 export interface EvidenceSourceOptions {
-  sourceType: 'MANUAL_UPLOAD' | 'EMAIL' | 'VENDOR_PORTAL';
+  sourceType: 'MANUAL_UPLOAD' | 'EMAIL' | 'VENDOR_PORTAL' | 'WATCHED_BUCKET';
   automated?: boolean;
 }
 
@@ -467,7 +467,9 @@ export class EvidenceService {
         ? 'manual'
         : source.sourceType === 'VENDOR_PORTAL'
           ? 'vendor'
-          : 'email';
+          : source.sourceType === 'WATCHED_BUCKET'
+            ? 'bucket'
+            : 'email';
     const sourceEventKey = `${sourcePrefix}:${sourceEventId}`;
     const createdByMembershipId = source.automated
       ? null

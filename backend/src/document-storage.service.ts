@@ -90,6 +90,8 @@ export class DocumentStorageService {
   async finalizeUpload(
     context: TenantContext,
     documentId: string,
+    sourceEtag?: string,
+    deleteSource = true,
   ): Promise<EvidenceDocumentResponse> {
     const document = await this.getDocument(context, documentId);
     if (document.status === 'VERIFIED') return mapDocument(document);
@@ -109,7 +111,9 @@ export class DocumentStorageService {
       throw new BadRequestException('Uploaded document hash does not match');
 
     const finalKey = `documents/${context.organizationId}/${document.id}/${document.sha256_hex}`;
-    await this.bucket.finalize(document.storage_key, finalKey);
+    if (sourceEtag)
+      await this.bucket.finalize(document.storage_key, finalKey, sourceEtag);
+    else await this.bucket.finalize(document.storage_key, finalKey);
     const finalized = await this.database.withTenant(
       context,
       async (database) => {
@@ -133,7 +137,8 @@ export class DocumentStorageService {
     const row = finalized.rows[0];
     if (!row)
       throw new ConflictException('Evidence document was already finalized');
-    await this.bucket.delete(document.storage_key).catch(() => undefined);
+    if (deleteSource)
+      await this.bucket.delete(document.storage_key).catch(() => undefined);
     return mapDocument(row);
   }
 

@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -14,6 +15,14 @@ export interface StoredObject {
   bytes: Uint8Array;
   contentType: string | undefined;
   sizeBytes: number;
+}
+
+export interface BucketObject {
+  key: string;
+  etag: string;
+  sizeBytes: number;
+  lastModified: Date;
+  contentType?: string;
 }
 
 @Injectable()
@@ -86,6 +95,54 @@ export class RailwayBucketService {
     };
   }
 
+  async stat(key: string): Promise<BucketObject> {
+    const { client, bucket } = this.requireConfigured();
+    const head = await client.send(
+      new HeadObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    if (head.ContentLength === undefined || !head.ETag || !head.LastModified)
+      throw new Error('Stored object metadata is incomplete');
+    return {
+      key,
+      etag: head.ETag.replaceAll('"', ''),
+      sizeBytes: head.ContentLength,
+      lastModified: head.LastModified,
+      contentType: head.ContentType,
+    };
+  }
+
+  async list(
+    prefix: string,
+    continuationToken?: string,
+  ): Promise<{ objects: BucketObject[]; continuationToken?: string }> {
+    const { client, bucket } = this.requireConfigured();
+    const result = await client.send(
+      new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+        MaxKeys: 100,
+      }),
+    );
+    return {
+      objects: (result.Contents ?? []).flatMap((item) =>
+        item.Key && item.ETag && item.Size !== undefined && item.LastModified
+          ? [
+              {
+                key: item.Key,
+                etag: item.ETag.replaceAll('"', ''),
+                sizeBytes: item.Size,
+                lastModified: item.LastModified,
+              },
+            ]
+          : [],
+      ),
+      continuationToken: result.IsTruncated
+        ? result.NextContinuationToken
+        : undefined,
+    };
+  }
+
   async write(
     key: string,
     bytes: Uint8Array,
@@ -104,15 +161,25 @@ export class RailwayBucketService {
     );
   }
 
-  async finalize(stagingKey: string, finalKey: string): Promise<void> {
+  async finalize(
+    stagingKey: string,
+    finalKey: string,
+    sourceEtag?: string,
+  ): Promise<void> {
     const { client, bucket } = this.requireConfigured();
     await client.send(
       new CopyObjectCommand({
         Bucket: bucket,
         Key: finalKey,
         CopySource: `${bucket}/${stagingKey}`,
+        CopySourceIfMatch: sourceEtag,
       }),
     );
+  }
+
+  async move(sourceKey: string, destinationKey: string): Promise<void> {
+    await this.finalize(sourceKey, destinationKey);
+    await this.delete(sourceKey);
   }
 
   async delete(key: string): Promise<void> {
