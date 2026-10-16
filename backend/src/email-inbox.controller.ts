@@ -8,10 +8,11 @@ import {
   Post,
   Put,
   Req,
+  Res,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { parseBearerToken } from './auth-header';
 import { resolveCorrelationId } from './correlation-id';
 import { EmailInboxService } from './email-inbox.service';
@@ -48,10 +49,13 @@ export class EmailInboxController {
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
-  ): Promise<EmailInboxResponse | null> {
-    return this.inboxes.getInbox(
+    @Res() response: Response,
+  ): Promise<void> {
+    const inbox = await this.inboxes.getInbox(
       await this.context(organizationId, authorization, correlationId),
     );
+    // Nest sends a bare null as an empty body; the API contract requires JSON null.
+    response.json(inbox);
   }
 
   @Get('events')
