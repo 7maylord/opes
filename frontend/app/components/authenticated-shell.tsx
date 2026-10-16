@@ -467,14 +467,12 @@ export function AuthenticatedShell() {
                 </div>
               ) : null}
 
-              <div className="grid gap-4 md:grid-cols-4">
-                <InfoCard label="Role" value={selectedOrganization?.role} />
-                <InfoCard label="Agent" value={agent?.lifecycleStatus ?? selectedOrganization?.agentLifecycleStatus} />
-                <InfoCard label="Network" value={networkLabel} />
-                <InfoCard label="Execution" value={setupComplete ? executionLabel : "Locked"} />
-              </div>
+              {selectedOrganizationId ? <section className="overflow-hidden rounded-3xl bg-slate-950 text-white">
+                <div className="grid gap-6 p-6 lg:grid-cols-[1fr_auto] lg:items-end lg:p-8"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Today’s focus</p><h3 className="mt-3 text-3xl font-semibold">{setupComplete ? "Your treasury is ready to act" : "Finish the controls behind every payment"}</h3><p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">{setupComplete ? "Review incoming obligations, evidence and available liquidity from one operating view." : "Complete the wallet, contract and policy steps before the agent can authorize execution."}</p></div><button className="btn bg-[#dce8c6] text-slate-950 hover:bg-white" onClick={() => setWorkspaceView(setupComplete ? "invoices" : "setup")}>{setupComplete ? "Review invoices" : "Continue setup"}</button></div>
+                <div className="grid border-t border-white/10 sm:grid-cols-2 xl:grid-cols-4"><OverviewStat label="Your role" value={selectedOrganization?.role} /><OverviewStat label="Agent state" value={agent?.lifecycleStatus ?? selectedOrganization?.agentLifecycleStatus} /><OverviewStat label="Settlement network" value={networkLabel} /><OverviewStat label="Execution" value={setupComplete ? executionLabel : "Locked"} /></div>
+              </section> : null}
 
-              {selectedOrganizationId ? <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-[#edf1e5] p-6"><div><h3 className="text-xl font-semibold">{setupComplete ? "Your contracts are ready" : "Finish setting up your workspace"}</h3><p className="mt-2 text-sm text-slate-600">{setupComplete ? "Review funding and spending rules before your first payment." : "Follow wallet creation, fund your treasury and configure your payment rules."}</p></div><button className="btn" onClick={() => setWorkspaceView(setupComplete ? "invoices" : "setup")}>{setupComplete ? "Open invoices" : "Continue setup"}</button></div> : null}
+              {selectedOrganizationId ? <div className="grid gap-3 md:grid-cols-3"><QuickAction title="Capture an obligation" detail="Add a vendor and verify an invoice." onClick={() => setWorkspaceView("invoices")} /><QuickAction title="Inspect treasury" detail="See liquidity, budget and reserved funds." onClick={() => setWorkspaceView("treasury")} /><QuickAction title="Connect a source" detail="Receive email or accounting records." onClick={() => setWorkspaceView("inbox")} /></div> : null}
 
               {selectedOrganizationId !== "" ? (
                 <WorkspaceHistory
@@ -489,16 +487,18 @@ export function AuthenticatedShell() {
               {workspaceView === "invoices" && selectedOrganizationId ? <VendorInvoiceWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
               {workspaceView === "agreements" && selectedOrganizationId ? <LifecycleWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
               {workspaceView === "treasury" && selectedOrganizationId ? <><TreasuryAuditViews key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /><Panel title="Owner controls">{setupComplete && selectedOrganization?.role === "OWNER" ? <OwnerTreasuryControls key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : <p className="text-sm text-slate-600">Owner controls unlock after contract setup completes.</p>}</Panel></> : null}
-              {workspaceView === "team" ? <>
-              <Panel title="Members and invitations">
+              {workspaceView === "team" ? <section className="space-y-5" aria-labelledby="team-title">
+                <div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-700">Access and authority</p><h3 id="team-title" className="mt-2 text-3xl font-semibold">Team</h3><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Assign operational roles without sharing wallets or credentials. Every member action remains tied to this workspace.</p></div>
+                <div className="grid gap-4 xl:grid-cols-2">
                 {organizations.length > 0 ? (
-                  <form onSubmit={submitInvitation} className="mb-6 flex flex-col gap-3 border-b border-slate-200 pb-6 sm:flex-row">
-                    <div className="flex-1"><TextInput label="Invitation token" value={invitationToken} onChange={setInvitationToken} required /></div>
-                    <button disabled={actionPending} className="min-h-11 self-end rounded-2xl bg-slate-950 px-5 font-semibold text-white disabled:opacity-50">Accept invitation</button>
+                  <form onSubmit={submitInvitation} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                    <h4 className="font-semibold">Join another workspace</h4><p className="mt-1 text-sm text-slate-500">Paste the one-time token shared by its owner.</p><div className="mt-4"><TextInput label="Invitation token" value={invitationToken} onChange={setInvitationToken} required /></div>
+                    <button disabled={actionPending} className="btn mt-4">Accept invitation</button>
                   </form>
                 ) : null}
                 {canManageMembers ? (
-                  <form onSubmit={submitInvite} className="grid gap-3 md:grid-cols-[1fr_1fr_180px_auto]">
+                  <form onSubmit={submitInvite} className="grid gap-3 rounded-3xl bg-[#edf1e5] p-5 sm:grid-cols-2">
+                    <div className="sm:col-span-2"><h4 className="font-semibold">Invite a teammate</h4><p className="mt-1 text-sm text-slate-600">Choose the narrowest role they need.</p></div>
                     <TextInput
                       label="Email"
                       type="email"
@@ -525,10 +525,7 @@ export function AuthenticatedShell() {
                       }
                       light
                     />
-                    <button
-                      disabled={actionPending}
-                      className="min-h-11 self-end rounded-2xl bg-slate-950 px-5 font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
-                    >
+                    <button disabled={actionPending} className="btn self-end sm:col-span-2">
                       Invite
                     </button>
                   </form>
@@ -537,7 +534,7 @@ export function AuthenticatedShell() {
                     Only owners and admins can invite members. The backend enforces
                     this for every request.
                   </p>
-                )}
+                )}</div>
 
                 {latestInvitationToken !== "" ? (
                   <p className="mt-4 rounded-2xl border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-900">
@@ -545,7 +542,7 @@ export function AuthenticatedShell() {
                   </p>
                 ) : null}
 
-                <div className="mt-5 overflow-hidden rounded-2xl border border-slate-200">
+                <div><div className="flex items-end justify-between"><div><h4 className="text-lg font-semibold">Workspace members</h4><p className="mt-1 text-sm text-slate-500">{members.length} people with access</p></div></div><div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
                   {members.map((member) => (
                     <div
                       key={member.id}
@@ -555,13 +552,12 @@ export function AuthenticatedShell() {
                         <p className="font-semibold">{member.displayName}</p>
                         <p className="text-slate-600">{member.email}</p>
                       </div>
-                      <p>{member.role}</p>
-                      <p>{member.status}</p>
+                      <p className="font-medium">{member.role.replaceAll("_", " ")}</p>
+                      <StatusBadge label={member.status} />
                     </div>
                   ))}
-                </div>
-              </Panel>
-              </> : null}
+                </div></div>
+              </section> : null}
 
               {workspaceView === "inbox" && selectedOrganizationId !== "" ? <EmailInboxScreen key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
               {workspaceView === "integrations" && selectedOrganizationId !== "" ? <AccountingIntegrations key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
@@ -720,14 +716,8 @@ function LabelSelect({
   );
 }
 
-function InfoCard({ label, value }: { label: string; value?: string }) {
-  return (
-    <div className="rounded-2xl border border-slate-200 p-4">
-      <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="mt-2 font-semibold text-slate-950">{value ?? "—"}</p>
-    </div>
-  );
-}
+function OverviewStat({ label, value }: { label: string; value?: string }) { return <div className="border-white/10 p-5 sm:border-r last:border-r-0"><p className="text-xs uppercase tracking-[0.18em] text-slate-400">{label}</p><p className="mt-2 font-semibold text-white">{value?.replaceAll("_", " ") ?? "—"}</p></div>; }
+function QuickAction({ title, detail, onClick }: { title: string; detail: string; onClick: () => void }) { return <button type="button" onClick={onClick} className="group rounded-2xl border border-slate-200 p-5 text-left transition hover:border-cyan-400 hover:bg-cyan-50"><span className="font-semibold">{title} <span className="transition group-hover:translate-x-1">→</span></span><span className="mt-2 block text-sm leading-6 text-slate-500">{detail}</span></button>; }
 
 function StatusBadge({ label }: { label?: string }) {
   return (

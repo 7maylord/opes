@@ -15,6 +15,8 @@ export function EmailInboxScreen({ token, organizationId, canManage }: { token: 
   const [events, setEvents] = useState<InboundEmailEventResponse[]>([]);
   const [address, setAddress] = useState("");
   const [pending, setPending] = useState(false);
+  const attachmentCount = events.reduce((total, item) => total + item.documents.length, 0);
+  const attentionCount = events.filter((item) => item.status === "FAILED" || item.status === "QUARANTINED").length;
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +61,7 @@ export function EmailInboxScreen({ token, organizationId, canManage }: { token: 
   }
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-8" aria-labelledby="email-inbox-title">
+    <section className="space-y-6" aria-labelledby="email-inbox-title">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-700">Automatic intake</p>
@@ -69,23 +71,22 @@ export function EmailInboxScreen({ token, organizationId, canManage }: { token: 
         <button type="button" onClick={() => void refresh()} disabled={pending} className="btn-secondary">Refresh</button>
       </div>
 
-      <form onSubmit={save} className="mt-6 grid gap-3 rounded-2xl bg-slate-50 p-4 md:grid-cols-[1fr_auto]">
-        <label className="text-sm font-medium text-slate-700">
-          Workspace inbox
-          <input type="email" required disabled={!canManage} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="invoices@mail.maylord.xyz" className="mt-2 min-h-11 w-full rounded-2xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500 disabled:bg-slate-100" />
-        </label>
-        <button disabled={!canManage || pending} className="btn self-end">{inbox ? "Update inbox" : "Activate inbox"}</button>
-      </form>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <div className="rounded-3xl bg-slate-950 p-6 text-white"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Receiving address</p><p className="mt-4 break-all text-2xl font-semibold">{inbox?.address || "Not activated"}</p><p className="mt-3 text-sm leading-6 text-slate-300">Forward vendor invoices here. OPES records the message, validates attachments and places accepted evidence into review.</p><div className="mt-5 flex items-center gap-2 text-sm"><span className={`size-2.5 rounded-full ${inbox ? "bg-emerald-400" : "bg-amber-400"}`} />{inbox ? "Active and receiving" : "Setup required"}</div></div>
+        <form onSubmit={save} className="rounded-3xl border border-slate-200 bg-slate-50 p-5"><h4 className="font-semibold">Inbox settings</h4><p className="mt-1 text-sm text-slate-500">One inbound address per workspace.</p><label className="mt-4 block text-sm font-medium text-slate-700">Workspace inbox<input type="email" required disabled={!canManage} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="invoices@mail.maylord.xyz" className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500 disabled:bg-slate-100" /></label><button disabled={!canManage || pending} className="btn mt-4 w-full">{inbox ? "Update inbox" : "Activate inbox"}</button></form>
+      </div>
       {!canManage ? <p className="mt-3 text-sm text-slate-500">Only workspace owners and admins can change the inbound address.</p> : null}
 
-      <div className="mt-8 space-y-3">
+      <div className="grid gap-3 sm:grid-cols-3"><Metric label="Messages" value={events.length} /><Metric label="Attachments accepted" value={attachmentCount} /><Metric label="Needs attention" value={attentionCount} alert={attentionCount > 0} /></div>
+
+      <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h4 className="text-lg font-semibold">Delivery history</h4>
           <span className="text-sm text-slate-500">Latest 100</span>
         </div>
         {events.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600">No email has reached this workspace inbox yet.</p> : null}
         {events.map((item) => (
-          <article key={item.id} className="rounded-2xl border border-slate-200 p-4">
+          <article key={item.id} className="rounded-2xl border border-slate-200 p-5 transition hover:border-slate-300">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h5 className="font-semibold">{item.subject || "No subject"}</h5>
@@ -106,5 +107,7 @@ function Status({ value }: { value: string }) {
   const tone = value === "PROCESSED" ? "bg-emerald-100 text-emerald-800" : value === "FAILED" || value === "QUARANTINED" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800";
   return <span className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${tone}`}>{humanize(value)}</span>;
 }
+
+function Metric({ label, value, alert = false }: { label: string; value: number; alert?: boolean }) { return <div className={`rounded-2xl p-4 ${alert ? "bg-red-50" : "bg-slate-50"}`}><p className="text-xs uppercase tracking-[0.16em] text-slate-500">{label}</p><p className={`mt-2 text-2xl font-semibold ${alert ? "text-red-700" : "text-slate-950"}`}>{value}</p></div>; }
 
 function humanize(value: string) { return value.replaceAll("_", " ").toLowerCase(); }

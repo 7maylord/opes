@@ -87,13 +87,14 @@ export function AccountingIntegrations({ token, organizationId, canManage }: { t
   }
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-8" aria-labelledby="integrations-title">
+    <section className="space-y-6" aria-labelledby="integrations-title">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-700">Workspace settings</p><h3 id="integrations-title" className="mt-2 text-3xl font-semibold">Accounting integrations</h3><p className="mt-2 max-w-2xl text-sm text-slate-600">Connect Odoo 19 or ERPNext with dedicated least-privilege API credentials. Secrets are encrypted and never returned.</p></div>
         <button type="button" onClick={() => void refresh()} disabled={pending} className="btn-secondary">Refresh status</button>
       </div>
 
-      {canManage ? <form onSubmit={create} className="mt-6 grid gap-4 rounded-2xl bg-slate-50 p-4 md:grid-cols-2">
+      {canManage ? <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]"><form onSubmit={create} className="grid gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5 md:grid-cols-2">
+        <div className="md:col-span-2"><h4 className="font-semibold">Add a connection</h4><p className="mt-1 text-sm text-slate-500">Credentials are encrypted when saved and never displayed again.</p></div>
         <Select label="Provider" value={provider} onChange={(value) => setProvider(value as AccountingProvider)} options={[{ value: "ERPNEXT", label: "ERPNext" }, { value: "ODOO", label: "Odoo 19" }]} />
         <Input label="Connection label" value={label} onChange={setLabel} placeholder="Finance production" />
         <Input label="Base URL" type="url" value={baseUrl} onChange={setBaseUrl} placeholder={provider === "ODOO" ? "https://company.odoo.com" : "https://erp.company.com"} />
@@ -101,13 +102,13 @@ export function AccountingIntegrations({ token, organizationId, canManage }: { t
         <Input label="API key" type="password" value={apiKey} onChange={setApiKey} autoComplete="new-password" />
         {provider === "ERPNEXT" ? <Input label="API secret" type="password" value={apiSecret} onChange={setApiSecret} autoComplete="new-password" /> : null}
         <button disabled={pending} className="btn md:col-span-2">Save and start first sync</button>
-      </form> : <p className="mt-6 rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Only workspace owners and admins can add or sync integrations.</p>}
+      </form><aside className="rounded-3xl bg-slate-950 p-6 text-white"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">{provider === "ODOO" ? "Odoo 19" : "ERPNext"}</p><h4 className="mt-3 text-xl font-semibold">Bring purchasing evidence into context</h4><p className="mt-3 text-sm leading-6 text-slate-300">{provider === "ODOO" ? "OPES reads vendors, purchase orders, receipts and vendor bills through JSON-2." : "OPES reads suppliers, purchase orders, purchase receipts and purchase invoices through the Frappe REST API."}</p><ul className="mt-5 space-y-3 text-sm text-slate-300"><li>✓ Tenant-scoped records</li><li>✓ Sync status and failures</li><li>✓ No credentials in browser storage</li></ul></aside></div> : <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Only workspace owners and admins can add or sync integrations.</p>}
 
-      <div className="mt-8 grid gap-4">
+      <div className="grid gap-4"><div><h4 className="text-lg font-semibold">Connected systems</h4><p className="mt-1 text-sm text-slate-500">Sync on demand and inspect the records available to the evidence engine.</p></div>
         {connectors.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600">No accounting integration configured.</p> : null}
         {connectors.map((connector) => {
           const imported = records[connector.id];
-          return <article key={connector.id} className="rounded-2xl border border-slate-200 p-4">
+          return <article key={connector.id} className="rounded-2xl border border-slate-200 p-5">
             <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><h4 className="font-semibold">{connector.label}</h4><Status value={!connector.lastSyncedAt && connector.status === "ACTIVE" ? "SYNC_QUEUED" : connector.status} /></div><p className="mt-1 break-all text-sm text-slate-600">{connector.provider === "ODOO" ? "Odoo 19" : "ERPNext"} · {connector.baseUrl}</p><p className="mt-1 text-xs text-slate-500">Last synced: {connector.lastSyncedAt ? new Date(connector.lastSyncedAt).toLocaleString() : "Not yet"}</p></div><div className="flex gap-2"><button type="button" disabled={!canManage || pending} onClick={() => void sync(connector)} className="btn-secondary">Sync now</button><button type="button" onClick={() => void inspect(connector)} className="btn-secondary">Imported records</button></div></div>
             {connector.lastError ? <p className="mt-3 text-sm text-red-700">{connector.lastError}</p> : null}
             {imported ? <p className="mt-3 text-sm text-slate-600">{imported.length} current records · {summarize(imported)}</p> : null}

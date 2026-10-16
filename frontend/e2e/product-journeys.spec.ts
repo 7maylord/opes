@@ -118,23 +118,24 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
   await openSignedIn(page);
   await page.getByRole("button", { name: "Agreements", exact: true }).click();
-  const subscription = page.getByRole("heading", { name: "Subscription", exact: true }).locator("..");
+  const subscription = page.getByRole("heading", { name: "Subscription", exact: true }).locator("xpath=ancestor::form");
   await subscription.getByRole("combobox").nth(0).selectOption("vendor-1");
   await subscription.getByRole("combobox").nth(1).selectOption("address-1");
-  await page.getByRole("button", { name: "Create subscription" }).click();
-  await expect(page.getByText("Subscription status:")).toBeVisible();
+  await page.getByRole("button", { name: "Create recurring agreement" }).click();
+  await expect(page.getByText("Recurring agreement created")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign and activate mandate" })).toBeEnabled();
 });
 
 test("journey 5: escrow requires owner-signed setup before funding", async ({ page }) => {
   await openSignedIn(page);
   await page.getByRole("button", { name: "Agreements", exact: true }).click();
-  const escrow = page.getByRole("heading", { name: "Escrow agreement", exact: true }).locator("..");
+  await page.getByRole("tab", { name: "Milestone escrow" }).click();
+  const escrow = page.getByRole("heading", { name: "Escrow agreement", exact: true }).locator("xpath=ancestor::form");
   await escrow.getByRole("combobox").nth(0).selectOption("vendor-1");
   await escrow.getByRole("combobox").nth(1).selectOption("address-1");
   await escrow.getByRole("combobox").nth(2).selectOption("doc-1");
-  await page.getByRole("button", { name: "Create escrow" }).click();
-  await expect(page.getByText("Escrow agreement created")).toBeVisible();
+  await page.getByRole("button", { name: "Create milestone agreement" }).click();
+  await expect(page.getByText("Milestone agreement created")).toBeVisible();
   await expect(page.getByRole("button", { name: "Sign escrow setup" })).toBeEnabled();
 });
 
@@ -142,7 +143,7 @@ test("journey 6: treasury separates planned from settled", async ({ page }) => {
   await openSignedIn(page);
   await page.getByRole("button", { name: "Treasury & controls", exact: true }).click();
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Available", { exact: true })).toBeVisible();
+  await expect(page.getByText("Available to spend", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Plan route" }).click();
   await expect(page.getByText("PLANNED", { exact: true })).toBeVisible();
   const projection = page.getByRole("heading", { name: "Ledger projection" }).locator("..");
