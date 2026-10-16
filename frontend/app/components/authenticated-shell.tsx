@@ -398,12 +398,6 @@ export function AuthenticatedShell() {
                   <p className="mt-2 font-semibold">{user?.displayName ?? "Loading..."}</p>
                   <p className="text-sm text-slate-400">{user?.email}</p>
                 </div>
-                <button
-                  onClick={logout}
-                  className="rounded-full border border-white/15 px-3 py-1 text-sm text-slate-200 hover:bg-white/10"
-                >
-                  Logout
-                </button>
               </div>
 
               <label
@@ -432,6 +426,11 @@ export function AuthenticatedShell() {
                   <button key={value} type="button" aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "shrink-0 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "shrink-0 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}>{label}</button>
                 ))}
               </nav>
+              <div className="mt-6 border-t border-white/15 pt-4">
+                <button type="button" onClick={logout} className="w-full rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10">
+                  Logout
+                </button>
+              </div>
             </aside>
 
             <section className="min-w-0 space-y-6 rounded-2xl border border-[#dedfd5] bg-white p-6 text-slate-950 md:p-8">
