@@ -58,6 +58,57 @@ describe('OnboardingService', () => {
     ]);
   });
 
+  it('reuses an active operator wallet without queuing another provisioning job', async () => {
+    const query = jest.fn((sql: string) => {
+      if (sql.includes('INSERT INTO opes.organizations')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'organization-1',
+              slug: 'acme-design',
+              display_name: 'Acme Design',
+              lifecycle_status: 'PROVISIONING',
+            },
+          ],
+        });
+      }
+      if (
+        sql.includes('FROM opes.organization_memberships') &&
+        sql.includes('user_id')
+      ) {
+        return Promise.resolve({
+          rows: [{ id: 'membership-1', role: 'OWNER', status: 'ACTIVE' }],
+        });
+      }
+      if (sql.includes('INSERT INTO opes.business_agents')) {
+        return Promise.resolve({
+          rows: [{ id: 'agent-1', lifecycle_status: 'SETUP_REQUIRED' }],
+        });
+      }
+      if (sql.includes('WITH existing AS')) {
+        return Promise.resolve({
+          rows: [{ id: 'wallet-binding-1', status: 'ACTIVE' }],
+        });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const database = {
+      withTransaction: jest.fn((work: (db: TenantDatabase) => unknown) =>
+        work({ query }),
+      ),
+    } as unknown as DatabaseService;
+
+    await new OnboardingService(database).onboard(user, {
+      organizationName: 'Acme Design',
+    });
+
+    expect(
+      query.mock.calls.some(([sql]) =>
+        String(sql).includes('agent.wallet.provision.arc_testnet'),
+      ),
+    ).toBe(false);
+  });
+
   it('rejects taking an existing organization slug owned by another user', async () => {
     const query = jest
       .fn()

@@ -232,6 +232,25 @@ export class RecurringExecutionService {
          WHERE organization_id = $1 AND id = $2`,
         [context.organizationId, actionId, transactionHash.toLowerCase()],
       );
+      if (
+        row.action_type === 'PAUSE_VAULT' ||
+        row.action_type === 'RESUME_VAULT'
+      ) {
+        const lifecycleStatus =
+          row.action_type === 'PAUSE_VAULT' ? 'PAUSED' : 'ACTIVE';
+        await database.query(
+          `WITH organization_update AS (
+             UPDATE opes.organizations
+                SET lifecycle_status = $2, updated_at = now()
+              WHERE id = $1
+              RETURNING id
+           )
+           UPDATE opes.business_agents
+              SET lifecycle_status = $2, updated_at = now()
+            WHERE organization_id = $1 AND is_primary = true`,
+          [context.organizationId, lifecycleStatus],
+        );
+      }
       if (row.action_type === 'CREATE_RECURRING_MANDATE') {
         await database.query(
           `UPDATE opes.subscriptions SET status = 'ACTIVE', transaction_hash = $3, updated_at = now()

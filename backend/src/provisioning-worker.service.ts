@@ -449,7 +449,7 @@ export class ProvisioningWorkerService {
         'milestone_escrow_contract',
         result.escrowAddress,
       );
-      await markPrimaryAgentSetupRequired(database, result.organizationId);
+      await markSetupRequired(database, result.organizationId);
     });
   }
 
@@ -542,6 +542,36 @@ export class ProvisioningWorkerService {
   }
 
   private async provisionWallet(event: OutboxEventRow): Promise<void> {
+    const duplicateReconciled = await this.database.withWorker(
+      async (database) => {
+        const result = await database.query<{ active_binding_id: string }>(
+          `UPDATE opes.tenant_resource_bindings pending
+              SET status = 'DISABLED',
+                  metadata = pending.metadata || jsonb_build_object(
+                    'replacedByBindingId', active.id::text,
+                    'disabledAt', now()
+                  ),
+                  updated_at = now()
+             FROM opes.tenant_resource_bindings active
+            WHERE pending.id = $1
+              AND pending.organization_id = $2
+              AND pending.status = 'PENDING'
+              AND active.organization_id = pending.organization_id
+              AND active.provider = 'circle'
+              AND active.environment = 'arc-testnet'
+              AND active.resource_type = 'operator_wallet'
+              AND active.status = 'ACTIVE'
+              AND active.id <> pending.id
+          RETURNING active.id AS active_binding_id`,
+          [event.aggregate_id, event.organization_id],
+        );
+        if (!result.rows[0]) return false;
+        await markOutboxProcessed(database, event.id);
+        return true;
+      },
+    );
+    if (duplicateReconciled) return;
+
     const walletSetId = await this.ensureWalletSet();
     await this.ensurePlatformProvisioner(walletSetId);
     const binding = await this.getBinding(event);
@@ -1125,12 +1155,20 @@ async function upsertContractBinding(
   }
 }
 
-async function markPrimaryAgentSetupRequired(
+async function markSetupRequired(
   database: TenantDatabase,
   organizationId: string,
 ): Promise<void> {
   await database.query(
     `
+      WITH organization_update AS (
+        UPDATE opes.organizations
+           SET lifecycle_status = 'SETUP_REQUIRED',
+               updated_at = now()
+         WHERE id = $1
+           AND lifecycle_status = 'PROVISIONING'
+         RETURNING id
+      )
       UPDATE opes.business_agents
          SET lifecycle_status = 'SETUP_REQUIRED',
              updated_at = now()

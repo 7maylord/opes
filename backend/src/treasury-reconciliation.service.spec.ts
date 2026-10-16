@@ -1,6 +1,7 @@
 import {
   hex,
   recordMovement,
+  suggestedLogRangeEnd,
   topicAddress,
 } from './treasury-reconciliation.service';
 
@@ -44,5 +45,17 @@ describe('treasury reconciliation parsing', () => {
       'ON CONFLICT(organization_id,chain_id,transaction_hash,log_index)',
     );
     expect(calls[2][0]).toContain('UNMATCHED_ONCHAIN_MOVEMENT');
+    expect(calls[2][0]).toContain('$4::text');
+  });
+  it('uses a provider-suggested log range without skipping blocks', () => {
+    expect(
+      suggestedLogRangeEnd(
+        new Error('request too large; range should work: [0x64, 0x6d]'),
+        100,
+      ),
+    ).toBe(109);
+    expect(
+      suggestedLogRangeEnd(new Error('range should work: [0x65, 0x6e]'), 100),
+    ).toBeNull();
   });
 });

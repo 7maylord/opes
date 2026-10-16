@@ -1099,7 +1099,7 @@ async function readTreasuryPosition(
        SELECT environment,lower(address) AS address,resource_type
        FROM opes.tenant_resource_bindings
        WHERE organization_id=$1 AND status='ACTIVE' AND address IS NOT NULL
-         AND resource_type IN ('operator_wallet','business_policy_vault_contract','milestone_escrow_contract')
+         AND resource_type IN ('business_policy_vault_contract','milestone_escrow_contract')
      ), balances AS (
        SELECT binding.resource_type,snapshot.balance_atomic,snapshot.created_at
        FROM bindings binding

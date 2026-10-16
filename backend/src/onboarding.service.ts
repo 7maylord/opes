@@ -357,35 +357,37 @@ async function ensureArcOperatorWalletProvisioning(
   database: TenantDatabase,
   organizationId: string,
 ): Promise<void> {
-  const binding = await database.query<{ id: string }>(
+  const binding = await database.query<{ id: string; status: string }>(
     `
-      INSERT INTO opes.tenant_resource_bindings (
-        organization_id,
-        environment,
-        chain_id,
-        provider,
-        resource_type,
-        resource_id,
-        status,
-        metadata
+      WITH existing AS (
+        SELECT id, status
+          FROM opes.tenant_resource_bindings
+         WHERE organization_id = $1
+           AND provider = 'circle'
+           AND environment = 'arc-testnet'
+           AND resource_type = 'operator_wallet'
+           AND status IN ('PENDING', 'ACTIVE')
+         ORDER BY (status = 'ACTIVE') DESC, created_at
+         LIMIT 1
+      ), inserted AS (
+        INSERT INTO opes.tenant_resource_bindings (
+          organization_id, environment, chain_id, provider, resource_type,
+          resource_id, status, metadata
+        )
+        SELECT $1::uuid, 'arc-testnet', 5042002, 'circle', 'operator_wallet',
+               $1::text, 'PENDING', '{"purpose":"tenant_operator"}'::jsonb
+         WHERE NOT EXISTS (SELECT 1 FROM existing)
+        RETURNING id, status
       )
-      VALUES (
-        $1::uuid,
-        'arc-testnet',
-        5042002,
-        'circle',
-        'operator_wallet',
-        $1::text,
-        'PENDING',
-        '{"purpose":"tenant_operator"}'::jsonb
-      )
-      ON CONFLICT (provider, environment, resource_type, resource_id)
-      DO UPDATE SET updated_at = opes.tenant_resource_bindings.updated_at
-      RETURNING id
+      SELECT id, status FROM existing
+      UNION ALL
+      SELECT id, status FROM inserted
+      LIMIT 1
     `,
     [organizationId],
   );
   const row = requireRow(binding.rows[0], 'operator wallet binding');
+  if (row.status === 'ACTIVE') return;
 
   await database.query(
     `

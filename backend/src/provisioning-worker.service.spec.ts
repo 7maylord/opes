@@ -129,6 +129,43 @@ describe('ProvisioningWorkerService', () => {
     );
   });
 
+  it('disables a duplicate pending operator binding when an active wallet exists', async () => {
+    const query = jest.fn((sql: string) => {
+      if (sql.includes('RETURNING id, organization_id, aggregate_id')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'event-1',
+              organization_id: 'organization-1',
+              aggregate_id: 'duplicate-binding-1',
+              event_type: 'agent.wallet.provision.arc_testnet',
+            },
+          ],
+        });
+      }
+      if (sql.includes('RETURNING active.id AS active_binding_id')) {
+        return Promise.resolve({
+          rows: [{ active_binding_id: 'active-binding-1' }],
+        });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+    const circle = {
+      isConfigured: () => true,
+      findWallet: jest.fn(),
+      createWallet: jest.fn(),
+    };
+    const { service } = serviceWithWorker(query, circle);
+
+    await expect(service.processDueArcProvisioning(1)).resolves.toBe(1);
+    expect(circle.findWallet).not.toHaveBeenCalled();
+    expect(circle.createWallet).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("SET status = 'PROCESSED'"),
+      ['event-1'],
+    );
+  });
+
   it('reconciles and activates one Circle operator wallet before factory provisioning', async () => {
     const operator = {
       id: 'circle-operator-1',
@@ -184,7 +221,7 @@ describe('ProvisioningWorkerService', () => {
       ) {
         return Promise.resolve({ rows: [{ id: 'factory-binding-1' }] });
       }
-      if (sql.includes("resource_type = 'operator_wallet'")) {
+      if (sql.includes('SET resource_id = $3')) {
         return Promise.resolve({ rows: [{ id: 'binding-1' }] });
       }
       return Promise.resolve({ rows: [] });
@@ -259,6 +296,8 @@ describe('ProvisioningWorkerService', () => {
     expect(queries[1]?.values?.[1]).toBe('business_policy_vault_contract');
     expect(queries[2]?.values?.[1]).toBe('milestone_escrow_contract');
     expect(queries[3]?.text).toContain("lifecycle_status = 'SETUP_REQUIRED'");
+    expect(queries[3]?.text).toContain('UPDATE opes.organizations');
+    expect(queries[3]?.text).toContain('UPDATE opes.business_agents');
   });
 
   it('rejects unverified Arc provisioning results before writing', async () => {

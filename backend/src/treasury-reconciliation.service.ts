@@ -142,15 +142,17 @@ export class TreasuryReconciliationService {
           from = rewind + 1;
         }
       }
-      if (from <= finalized) {
-        const logs = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
-          {
-            address: tokenAddress,
-            fromBlock: hex(from),
-            toBlock: hex(finalized),
-            topics: [TRANSFER_TOPIC],
-          },
-        ]);
+      let scanTo = finalized;
+      if (from <= scanTo) {
+        let logs: RpcLog[];
+        try {
+          logs = await transferLogs(environment, tokenAddress, from, scanTo);
+        } catch (error) {
+          const providerLimit = suggestedLogRangeEnd(error, from);
+          if (providerLimit === null || providerLimit >= scanTo) throw error;
+          scanTo = providerLimit;
+          logs = await transferLogs(environment, tokenAddress, from, scanTo);
+        }
         for (const log of logs) {
           const fromAddress = topicAddress(log.topics[1]);
           const toAddress = topicAddress(log.topics[2]);
@@ -175,23 +177,23 @@ export class TreasuryReconciliationService {
         environment,
         addresses,
         from,
-        finalized,
+        scanTo,
         tokenAddress,
       );
       await db.query(
         `INSERT INTO opes.treasury_balance_reads
           (organization_id,environment,status,block_number)
          VALUES ($1,$2,'SUCCESS',$3)`,
-        [organizationId, environment, finalized],
+        [organizationId, environment, scanTo],
       );
       const block = await rpc<{ hash: string }>(
         environment,
         'eth_getBlockByNumber',
-        [hex(finalized), false],
+        [hex(scanTo), false],
       );
       await db.query(
         `INSERT INTO opes.chain_reconciliation_cursors(organization_id,environment,chain_id,last_finalized_block,last_finalized_block_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT(organization_id,environment) DO UPDATE SET last_finalized_block=EXCLUDED.last_finalized_block,last_finalized_block_hash=EXCLUDED.last_finalized_block_hash,updated_at=now()`,
-        [organizationId, environment, chainId, finalized, block.hash],
+        [organizationId, environment, chainId, scanTo, block.hash],
       );
       await postControlLedger(db, organizationId);
       await postSponsorLedger(db, organizationId);
@@ -243,7 +245,7 @@ export async function recordMovement(
     );
   } else
     await db.query(
-      `INSERT INTO opes.treasury_exceptions(organization_id,exception_type,movement_id,dedupe_key,details) VALUES($1,'UNMATCHED_ONCHAIN_MOVEMENT',$2,$3,jsonb_build_object('transactionHash',$4,'amountAtomic',$5)) ON CONFLICT(organization_id,exception_type,dedupe_key) DO NOTHING`,
+      `INSERT INTO opes.treasury_exceptions(organization_id,exception_type,movement_id,dedupe_key,details) VALUES($1,'UNMATCHED_ONCHAIN_MOVEMENT',$2,$3,jsonb_build_object('transactionHash',$4::text,'amountAtomic',$5::text)) ON CONFLICT(organization_id,exception_type,dedupe_key) DO NOTHING`,
       [
         input.organizationId,
         movement.id,
@@ -325,7 +327,7 @@ async function checkBalances(
         BigInt(flow?.outgoing ?? '0');
       if (expected !== balance)
         await db.query(
-          `INSERT INTO opes.treasury_exceptions(organization_id,exception_type,dedupe_key,details) VALUES($1,'BALANCE_MISMATCH',$2,jsonb_build_object('address',$3,'expectedAtomic',$4,'observedAtomic',$5,'blockNumber',$6)) ON CONFLICT(organization_id,exception_type,dedupe_key) DO NOTHING`,
+          `INSERT INTO opes.treasury_exceptions(organization_id,exception_type,dedupe_key,details) VALUES($1,'BALANCE_MISMATCH',$2,jsonb_build_object('address',$3::text,'expectedAtomic',$4::text,'observedAtomic',$5::text,'blockNumber',$6::bigint)) ON CONFLICT(organization_id,exception_type,dedupe_key) DO NOTHING`,
           [
             organizationId,
             `${address}:${to}`,
@@ -381,6 +383,32 @@ export function topicAddress(topic: string) {
 }
 export function hex(value: number) {
   return `0x${value.toString(16)}`;
+}
+
+export function suggestedLogRangeEnd(error: unknown, expectedFrom: number) {
+  if (!(error instanceof Error)) return null;
+  const match = error.message.match(
+    /range should work:\s*\[(0x[\da-f]+),\s*(0x[\da-f]+)\]/i,
+  );
+  if (!match || Number(BigInt(match[1])) !== expectedFrom) return null;
+  const end = Number(BigInt(match[2]));
+  return Number.isSafeInteger(end) && end >= expectedFrom ? end : null;
+}
+
+function transferLogs(
+  environment: string,
+  tokenAddress: string,
+  from: number,
+  to: number,
+) {
+  return rpc<RpcLog[]>(environment, 'eth_getLogs', [
+    {
+      address: tokenAddress,
+      fromBlock: hex(from),
+      toBlock: hex(to),
+      topics: [TRANSFER_TOPIC],
+    },
+  ]);
 }
 async function rpc<T>(
   environment: string,
