@@ -1,5 +1,7 @@
 import { useSyncExternalStore, type ReactNode } from "react";
 
+export const SUPPORTED_CHAINS: never[] = [];
+
 export function PrivyProvider({ children }: { children: ReactNode }) {
   return children;
 }
