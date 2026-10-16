@@ -10,6 +10,10 @@ import {
 import { isEvmAddress } from './evm-decision-hash';
 import { FactoryManifestService } from './factory-manifest.service';
 import { projectPaymentSettlementInDatabase } from './ledger.service';
+import {
+  recordNotification,
+  recordPaymentSettlementCommunications,
+} from './notification.service';
 
 interface OutboxEventRow {
   id: string;
@@ -765,6 +769,11 @@ export class PaymentExecutionWorkerService {
         event.organization_id,
         event.aggregate_id,
       );
+      await recordPaymentSettlementCommunications(
+        database,
+        event.organization_id,
+        event.aggregate_id,
+      );
       await markOutboxProcessed(database, event.id);
     });
   }
@@ -786,6 +795,17 @@ export class PaymentExecutionWorkerService {
           WHERE organization_id = $1 AND id = $2`,
         [event.organization_id, event.aggregate_id, reason],
       );
+      await recordNotification(database, {
+        organizationId: event.organization_id,
+        type: 'PAYMENT_FAILED',
+        priority: 'WARNING',
+        title: 'Payment execution failed',
+        body: reason.slice(0, 500),
+        subjectType: 'payment_execution',
+        subjectId: event.aggregate_id,
+        actionView: 'treasury',
+        dedupeKey: `payment-failed:${event.aggregate_id}`,
+      });
       await markOutboxFailed(database, event.id, reason);
     });
     this.logger.warn(`payment execution job ${event.id} failed: ${reason}`);

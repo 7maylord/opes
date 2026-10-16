@@ -63,6 +63,9 @@ import {
 } from './vendor-portal.controller';
 import { VendorPortalService } from './vendor-portal.service';
 import { WatchedBucketService } from './watched-bucket.service';
+import { NotificationController } from './notification.controller';
+import { NotificationService } from './notification.service';
+import { NotificationEmailWorkerService } from './notification-email-worker.service';
 
 @Module({
   imports: [],
@@ -79,6 +82,7 @@ import { WatchedBucketService } from './watched-bucket.service';
     LifecycleController,
     LiquidityController,
     OnboardingController,
+    NotificationController,
     OperationsController,
     PaymentWebhookController,
     ProcurementEvidenceController,
@@ -112,6 +116,8 @@ import { WatchedBucketService } from './watched-bucket.service';
     LiquidityService,
     LiquidityExecutionWorkerService,
     OnboardingService,
+    NotificationService,
+    NotificationEmailWorkerService,
     OperationsService,
     PaymentExecutionService,
     PaymentExecutionWorkerService,

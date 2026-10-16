@@ -203,6 +203,16 @@ test("owner configures ERPNext and inspects tenant-scoped imports", async ({ pag
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("secret-value");
 });
 
+test("workspace notifications surface approvals and open the affected workflow", async ({ page }) => {
+  await openSignedIn(page);
+  await expect(page.getByLabel("2 unread notifications")).toBeVisible();
+  await page.getByRole("navigation", { name: "Workspace views" }).getByRole("button", { name: /Notifications/ }).click();
+  await expect(page.getByRole("heading", { name: "Invoice INV-200 received" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Invoice payment needs approval" })).toBeVisible();
+  await page.getByRole("article").filter({ hasText: "Invoice payment needs approval" }).getByRole("button", { name: "Open" }).click();
+  await expect(page.getByRole("heading", { name: "From invoice to authorized payment" })).toBeVisible();
+});
+
 test("workspace history exposes an error and recovers on retry", async ({ page }) => {
   await installApiMock(page);
   let failing = true;
@@ -263,6 +273,12 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (method === "GET" && path.endsWith("/email-inbox")) return { id: "inbox-1", address: "invoices@mail.maylord.xyz", status: "ACTIVE" };
   if (method === "PUT" && path.endsWith("/email-inbox")) return { id: "inbox-1", address: body.address, status: "ACTIVE" };
   if (method === "GET" && path.endsWith("/email-inbox/events")) return [{ id: "email-event-1", providerEmailId: "resend-email-1", senderAddress: "vendor@example.com", subject: "Invoice INV-200", status: "PROCESSED", quarantineReason: null, failureReason: null, documentCount: 1, receivedAt: "2026-10-15T12:00:00.000Z", processedAt: "2026-10-15T12:00:01.000Z", documents: [{ id: "email-doc-1", filename: "invoice-200.pdf", status: "VERIFIED" }] }];
+  if (method === "GET" && path.endsWith("/notifications/unread-count")) return { unread: 2 };
+  if (method === "GET" && path.endsWith("/notifications")) return [
+    { id: "notification-approval", type: "PAYMENT_APPROVAL_REQUIRED", priority: "ACTION", title: "Invoice payment needs approval", body: "INV-200 is above the autonomous payment limit.", subjectType: "payment_decision", subjectId: "decision-1", actionView: "invoices", metadata: {}, readAt: null, createdAt: "2026-10-16T09:00:00.000Z" },
+    { id: "notification-invoice", type: "INVOICE_RECEIVED", priority: "INFO", title: "Invoice INV-200 received", body: "The invoice is ready for review.", subjectType: "payable_obligation", subjectId: "obligation-1", actionView: "invoices", metadata: {}, readAt: null, createdAt: "2026-10-16T08:00:00.000Z" },
+  ];
+  if (method === "POST" && path.includes("/notifications/")) return { read: true };
   if (method === "GET" && path.endsWith("/accounting-connectors")) return [];
   if (method === "POST" && path.endsWith("/accounting-connectors")) return { id: "connector-1", provider: body.provider, label: body.label, baseUrl: body.baseUrl, databaseName: null, status: "ACTIVE", syncCursor: null, lastSyncedAt: null, lastError: null };
   if (method === "POST" && path.endsWith("/accounting-connectors/connector-1/sync")) return { queued: true };

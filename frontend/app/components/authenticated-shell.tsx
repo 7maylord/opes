@@ -16,6 +16,7 @@ import {
   exchangePrivySession,
   getAgent,
   getApiBaseUrl,
+  getUnreadNotificationCount,
   getSession,
   inviteOrganizationMember,
   listOrganizationMembers,
@@ -29,6 +30,7 @@ import {
   type OrganizationMember,
   type SessionUser,
   type UserOrganization,
+  type NotificationView,
 } from "@/lib/api";
 import { LandingExperience } from "./landing-experience";
 import { LifecycleWorkflows } from "./lifecycle-workflows";
@@ -39,6 +41,7 @@ import { WorkspaceSetup } from "./workspace-setup";
 import { WorkspaceHistory } from "./workspace-history";
 import { EmailInboxScreen } from "./email-inbox-screen";
 import { AccountingIntegrations } from "./accounting-integrations";
+import { NotificationCenter } from "./notification-center";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
@@ -98,7 +101,8 @@ export function AuthenticatedShell() {
   const [organizations, setOrganizations] = useState<UserOrganization[]>([]);
   const [agent, setAgent] = useState<BusinessAgentDetail | null>(null);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
-  const [workspaceView, setWorkspaceView] = useState<"overview" | "setup" | "invoices" | "agreements" | "treasury" | "team" | "inbox" | "integrations">("overview");
+  const [workspaceView, setWorkspaceView] = useState<NotificationView>("overview");
+  const [notificationUnread, setNotificationUnread] = useState(0);
   const [actionPending, setActionPending] = useState(false);
   const privyExchangePending = useRef<Promise<AuthSessionResult> | null>(null);
   const isLoading = token !== "" && user === null;
@@ -122,6 +126,7 @@ export function AuthenticatedShell() {
     setOrganizations([]);
     setAgent(null);
     setMembers([]);
+    setNotificationUnread(0);
   }, [setSelectedOrganizationId, setStoredToken]);
 
   useEffect(() => {
@@ -241,6 +246,17 @@ export function AuthenticatedShell() {
     };
   }, [selectedOrganizationId, token]);
 
+  useEffect(() => {
+    if (!token || !selectedOrganizationId) return;
+    let cancelled = false;
+    const refresh = () => getUnreadNotificationCount(token, selectedOrganizationId)
+      .then((result) => { if (!cancelled) setNotificationUnread(result.unread); })
+      .catch(() => undefined);
+    void refresh();
+    const timer = setInterval(() => { void refresh(); }, 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [selectedOrganizationId, token]);
+
   const selectedOrganization = useMemo(
     () => organizations.find((org) => org.id === selectedOrganizationId),
     [organizations, selectedOrganizationId],
@@ -284,6 +300,7 @@ export function AuthenticatedShell() {
       setAgent(null);
       setMembers([]);
       setLatestInvitationToken("");
+      setNotificationUnread(0);
     }
     setSelectedOrganizationId(nextOrganizationId);
     setWorkspaceView("overview");
@@ -422,8 +439,8 @@ export function AuthenticatedShell() {
                 One workspace. Every obligation accounted for.
               </p>
               <nav className="mt-6 flex gap-2 overflow-x-auto lg:grid" aria-label="Workspace views">
-                {([ ["overview", "Overview"], ["setup", "Getting started"], ["invoices", "Invoices & vendors"], ["agreements", "Agreements"], ["treasury", "Treasury & controls"], ["inbox", "Email inbox"], ["integrations", "Integrations"], ["team", "Team"] ] as const).map(([value, label]) => (
-                  <button key={value} type="button" aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "shrink-0 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "shrink-0 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}>{label}</button>
+                {([ ["overview", "Overview"], ["notifications", "Notifications"], ["setup", "Getting started"], ["invoices", "Invoices & vendors"], ["agreements", "Agreements"], ["treasury", "Treasury & controls"], ["inbox", "Email inbox"], ["integrations", "Integrations"], ["team", "Team"] ] as const).map(([value, label]) => (
+                  <button key={value} type="button" aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "flex shrink-0 items-center justify-between gap-2 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "flex shrink-0 items-center justify-between gap-2 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}><span>{label}</span>{value === "notifications" && notificationUnread > 0 ? <span className="rounded-full bg-cyan-400 px-2 py-0.5 text-xs font-bold text-slate-950">{notificationUnread > 99 ? "99+" : notificationUnread}</span> : null}</button>
                 ))}
               </nav>
               <div className="mt-6 border-t border-white/15 pt-4">
@@ -443,7 +460,7 @@ export function AuthenticatedShell() {
                     {selectedOrganization?.displayName ?? "No organization"}
                   </h2>
                 </div>
-                <StatusBadge label={selectedOrganization?.lifecycleStatus} />
+                <div className="flex items-center gap-2"><button type="button" aria-label={`${notificationUnread} unread notifications`} onClick={() => setWorkspaceView("notifications")} className="relative flex size-11 items-center justify-center rounded-full border border-slate-200 text-slate-700 hover:bg-slate-50"><BellIcon />{notificationUnread > 0 ? <span className="absolute -right-1 -top-1 flex min-w-5 items-center justify-center rounded-full bg-cyan-600 px-1 text-[10px] font-bold text-white">{notificationUnread > 99 ? "99+" : notificationUnread}</span> : null}</button><StatusBadge label={selectedOrganization?.lifecycleStatus} /></div>
               </div>
 
               {isLoading ? <p className="text-slate-600">Loading...</p> : null}
@@ -561,6 +578,7 @@ export function AuthenticatedShell() {
 
               {workspaceView === "inbox" && selectedOrganizationId !== "" ? <EmailInboxScreen key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
               {workspaceView === "integrations" && selectedOrganizationId !== "" ? <AccountingIntegrations key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
+              {workspaceView === "notifications" && selectedOrganizationId !== "" ? <NotificationCenter key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} onNavigate={setWorkspaceView} onUnreadChange={setNotificationUnread} /> : null}
             </section>
           </div>
           </>
@@ -726,3 +744,5 @@ function StatusBadge({ label }: { label?: string }) {
     </span>
   );
 }
+
+function BellIcon() { return <svg aria-hidden="true" viewBox="0 0 24 24" className="size-5 fill-none stroke-current" strokeWidth="1.8"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" /><path d="M10 21h4" /></svg>; }

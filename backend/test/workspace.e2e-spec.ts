@@ -37,6 +37,9 @@ describe('Workspace read models (e2e)', () => {
   const orderDocumentId = randomUUID();
   const receiptDocumentId = randomUUID();
   const connectorId = randomUUID();
+  const vaultAddress = `0x${randomUUID().replaceAll('-', '').padStart(40, '0')}`;
+  const operatorAddress = `0x${randomUUID().replaceAll('-', '').padStart(40, '0')}`;
+  const settlementEventId = `workspace-settlement-${randomUUID()}`;
   let paymentExecutionId!: string;
 
   beforeAll(async () => {
@@ -299,7 +302,7 @@ describe('Workspace read models (e2e)', () => {
         `INSERT INTO opes.treasury_balance_snapshots
           (organization_id,environment,address,asset_symbol,block_number,balance_atomic)
          VALUES ($1,'arc-testnet',$2,'USDC',100,1500000)`,
-        [organizationId, '0x3000000000000000000000000000000000000003'],
+        [organizationId, vaultAddress],
       );
       await sql.query(
         `INSERT INTO opes.treasury_balance_reads
@@ -379,11 +382,7 @@ describe('Workspace read models (e2e)', () => {
         `INSERT INTO opes.tenant_resource_bindings
           (organization_id,environment,chain_id,provider,resource_type,resource_id,address,status)
          VALUES ($1,'arc-testnet',5042002,'circle','operator_wallet',$2,$3,'ACTIVE')`,
-        [
-          organizationId,
-          `wallet-${organizationId}`,
-          '0x5000000000000000000000000000000000000005',
-        ],
+        [organizationId, `wallet-${organizationId}`, operatorAddress],
       ),
     );
     const execution = await request(server)
@@ -536,8 +535,14 @@ describe('Workspace read models (e2e)', () => {
       await sql.query(
         `INSERT INTO opes.payment_reconciliation_events
           (organization_id,provider,external_event_id,execution_id,transaction_hash,payload_hash)
-         VALUES ($1,'circle','workspace-settlement',$2,$3,$4)`,
-        [organizationId, paymentExecutionId, transactionHash, 'e'.repeat(64)],
+         VALUES ($1,'circle',$2,$3,$4,$5)`,
+        [
+          organizationId,
+          settlementEventId,
+          paymentExecutionId,
+          transactionHash,
+          'e'.repeat(64),
+        ],
       );
       await sql.query(
         `INSERT INTO opes.accounting_connector_bindings
@@ -667,6 +672,18 @@ describe('Workspace read models (e2e)', () => {
           [id],
         );
         await sql.query(
+          'DELETE FROM opes.workspace_notification_reads WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.workspace_notifications WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
+          'DELETE FROM opes.outbound_email_deliveries WHERE organization_id = $1',
+          [id],
+        );
+        await sql.query(
           'DELETE FROM opes.payment_executions WHERE organization_id = $1',
           [id],
         );
@@ -766,7 +783,7 @@ describe('Workspace read models (e2e)', () => {
           `INSERT INTO opes.tenant_resource_bindings
             (organization_id,environment,chain_id,provider,resource_type,resource_id,address,status)
            VALUES ($1,'arc-testnet',5042002,'arc','business_policy_vault_contract',$2,$3,'ACTIVE')`,
-          [id, `vault-${id}`, '0x3000000000000000000000000000000000000003'],
+          [id, `vault-${id}`, vaultAddress],
         );
       }
     });

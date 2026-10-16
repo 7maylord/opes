@@ -10,6 +10,7 @@ import { EscrowExecutionService } from './escrow-execution.service';
 import { TreasuryReconciliationService } from './treasury-reconciliation.service';
 import { AccountingConnectorService } from './accounting-connector.service';
 import { WatchedBucketService } from './watched-bucket.service';
+import { NotificationEmailWorkerService } from './notification-email-worker.service';
 
 async function bootstrapWorker() {
   const config = loadRuntimeConfig();
@@ -29,6 +30,7 @@ async function bootstrapWorker() {
   const reconciliation = app.get(TreasuryReconciliationService);
   const accounting = app.get(AccountingConnectorService);
   const watchedBucket = app.get(WatchedBucketService);
+  const notificationEmails = app.get(NotificationEmailWorkerService);
   const runProvisioning = async () => {
     try {
       await provisioning.processDueArcProvisioning();
@@ -85,6 +87,13 @@ async function bootstrapWorker() {
       logger.error('watched bucket worker failed', error);
     }
   };
+  const runNotificationEmails = async () => {
+    try {
+      await notificationEmails.processDue();
+    } catch (error) {
+      logger.error('notification email worker failed', error);
+    }
+  };
 
   await runProvisioning();
   await runPayments();
@@ -94,6 +103,7 @@ async function bootstrapWorker() {
   await runReconciliation();
   await runAccounting();
   await runWatchedBucket();
+  await runNotificationEmails();
   const interval = setInterval(() => {
     void runProvisioning();
     void runPayments();
@@ -103,6 +113,7 @@ async function bootstrapWorker() {
     void runReconciliation();
     void runAccounting();
     void runWatchedBucket();
+    void runNotificationEmails();
   }, 10_000);
 
   await new Promise<void>((resolve) => {

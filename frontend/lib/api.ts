@@ -227,6 +227,33 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "treasury" | "inbox" | "integrations" | "team" | "notifications";
+export interface WorkspaceNotificationResponse {
+  id: string;
+  type: string;
+  priority: "INFO" | "ACTION" | "WARNING" | "SUCCESS";
+  title: string;
+  body: string;
+  subjectType: string;
+  subjectId: string | null;
+  actionView: NotificationView | null;
+  metadata: unknown;
+  readAt: string | null;
+  createdAt: string;
+}
+export function listNotifications(token: string, organizationId: string) {
+  return request<WorkspaceNotificationResponse[]>(`/organizations/${encodeURIComponent(organizationId)}/notifications`, token);
+}
+export function getUnreadNotificationCount(token: string, organizationId: string) {
+  return request<{ unread: number }>(`/organizations/${encodeURIComponent(organizationId)}/notifications/unread-count`, token);
+}
+export function markNotificationRead(token: string, organizationId: string, notificationId: string) {
+  return request<{ read: true }>(`/organizations/${encodeURIComponent(organizationId)}/notifications/${encodeURIComponent(notificationId)}/read`, token, { method: "POST" });
+}
+export function markAllNotificationsRead(token: string, organizationId: string) {
+  return request<{ read: true }>(`/organizations/${encodeURIComponent(organizationId)}/notifications/read-all`, token, { method: "POST" });
+}
+
 export type AccountingProvider = "ODOO" | "ERPNEXT";
 
 export interface AccountingConnectorResponse {

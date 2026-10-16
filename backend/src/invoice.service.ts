@@ -8,6 +8,7 @@ import {
 import { createHash } from 'node:crypto';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { TenantContext } from './tenant-context';
+import { recordNotification } from './notification.service';
 
 const USDC_DECIMALS = 6;
 
@@ -292,6 +293,23 @@ export class InvoiceService {
             semanticDuplicateResolutionId,
           },
         );
+        await recordNotification(database, {
+          organizationId: context.organizationId,
+          type: 'INVOICE_RECEIVED',
+          priority: 'INFO',
+          title: `Invoice ${invoiceNumber} received`,
+          body: `${vendor.display_name} submitted ${input.amount} ${currency}. The invoice is ready for evidence matching and a payment decision.`,
+          subjectType: 'payable_obligation',
+          subjectId: obligation.id,
+          actionView: 'invoices',
+          dedupeKey: `invoice-received:${version.id}`,
+          metadata: {
+            versionId: version.id,
+            vendorId,
+            amountAtomic: amountAtomic.toString(),
+            currency,
+          },
+        });
         return {
           id: obligation.id,
           versionId: version.id,

@@ -20,6 +20,7 @@ import {
 } from './liquidity.service';
 import { TenantContext } from './tenant-context';
 import { PaymentRouteQuote, planPayment } from './payment-planner';
+import { recordNotification } from './notification.service';
 
 type DecisionAction = 'PAY' | 'DELAY' | 'ESCALATE' | 'REJECT';
 type CheckStatus = 'PASS' | 'BLOCK' | 'REQUIRES_APPROVAL';
@@ -565,6 +566,63 @@ export class DecisionService {
             expiresAt,
           ],
         );
+      }
+      const approvalCheck = checks.find(
+        (item) => item.status === 'REQUIRES_APPROVAL',
+      );
+      const blockedChecks = checks.filter((item) => item.status === 'BLOCK');
+      if (approvalCheck) {
+        await recordNotification(database, {
+          organizationId: context.organizationId,
+          type: 'PAYMENT_APPROVAL_REQUIRED',
+          priority: 'ACTION',
+          title: `Invoice payment needs approval`,
+          body: `${invoice.invoice_number} is above the autonomous payment limit and is waiting for an owner, admin or approver.`,
+          subjectType: 'payment_decision',
+          subjectId: decision.id,
+          actionView: 'invoices',
+          dedupeKey: `approval-required:${decision.id}`,
+          metadata: {
+            invoiceVersionId: invoice.id,
+            amountAtomic: invoice.amount_atomic,
+            checkCode: approvalCheck.code,
+          },
+        });
+      } else if (
+        decision.derived_action === 'DELAY' &&
+        decision.proposed_execution_at
+      ) {
+        await recordNotification(database, {
+          organizationId: context.organizationId,
+          type: 'PAYMENT_SCHEDULED',
+          priority: 'INFO',
+          title: `Payment scheduled for invoice ${invoice.invoice_number}`,
+          body: `The agent scheduled this payment for ${decision.proposed_execution_at.toISOString()} based on its due date and treasury plan.`,
+          subjectType: 'payment_decision',
+          subjectId: decision.id,
+          actionView: 'invoices',
+          dedupeKey: `payment-scheduled:${decision.id}`,
+          metadata: {
+            invoiceVersionId: invoice.id,
+            proposedExecutionAt: decision.proposed_execution_at.toISOString(),
+          },
+        });
+      } else if (blockedChecks.length) {
+        await recordNotification(database, {
+          organizationId: context.organizationId,
+          type: 'PAYMENT_BLOCKED',
+          priority: 'WARNING',
+          title: `Payment blocked for invoice ${invoice.invoice_number}`,
+          body: blockedChecks.map((item) => item.message).join('; '),
+          subjectType: 'payment_decision',
+          subjectId: decision.id,
+          actionView: 'treasury',
+          dedupeKey: `payment-blocked:${decision.id}`,
+          metadata: {
+            invoiceVersionId: invoice.id,
+            checks: blockedChecks.map((item) => item.code),
+          },
+        });
       }
       return mapDecision(decision);
     });
