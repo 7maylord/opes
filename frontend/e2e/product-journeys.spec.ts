@@ -107,7 +107,7 @@ test("journey 2: invite and accept member", async ({ page }) => {
   await expect(page.getByText("Invitation accepted. Workspace loaded.")).toBeVisible();
 });
 
-test("journey 3: invoice decision reaches owner-signature approval", async ({ page }) => {
+test("journey 3: invoice decision reaches autonomous payment", async ({ page }) => {
   await openSignedIn(page);
   await page.getByRole("button", { name: "Invoices & vendors", exact: true }).click();
   await page.getByLabel("Vendor name").fill("Canteen Supplies");
@@ -142,7 +142,12 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   await page.getByRole("button", { name: "Match evidence" }).click();
   await page.getByRole("button", { name: "Generate agent decision" }).click();
   await expect(page.getByText("Decision dry run completed")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
+  await expect(page.getByRole("heading", { name: "Ready for autonomous payment" })).toBeVisible();
+  await expect(page.getByText("1/1 passed")).toBeVisible();
+  await expect(page.getByText("Not required")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve payment" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Request payment" }).click();
+  await expect(page.getByText("Execution requested")).toBeVisible();
 });
 
 test("existing vendor can continue directly to invoice evidence", async ({ page }) => {

@@ -527,6 +527,7 @@ export interface PaymentDecisionResponse {
   contextHash: string;
   decisionHash: string | null;
   checks: Array<{ code: string; status: string; message: string }>;
+  proposedExecutionAt: string | null;
   expiresAt: string;
 }
 
