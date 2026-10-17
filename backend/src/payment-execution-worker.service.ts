@@ -818,10 +818,22 @@ function preflightCheck(code: string, passes: boolean) {
 
 function circleErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
-  const code = (error as { code?: unknown }).code;
+  const response = (error as { error?: { response?: { data?: unknown } } })
+    .error?.response?.data;
+  const detail =
+    response !== null && typeof response === 'object' && 'data' in response
+      ? (response as { data?: unknown }).data
+      : response;
+  const provider =
+    detail !== null && typeof detail === 'object'
+      ? (detail as { code?: unknown; message?: unknown })
+      : undefined;
+  const code = provider?.code ?? (error as { code?: unknown }).code;
+  const message =
+    typeof provider?.message === 'string' ? provider.message : error.message;
   return typeof code === 'number' && code !== 400
-    ? `${error.message} (Circle code ${code})`
-    : error.message;
+    ? `${message} (Circle code ${code})`
+    : message;
 }
 
 function balanceOfCalldata(address: string): string {

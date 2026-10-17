@@ -119,7 +119,7 @@ pids+=("$!")
 if [ "$RUN_WORKER" = "1" ]; then
   echo "Starting backend worker..."
   PORT="$BACKEND_PORT" OPES_ALLOWED_ORIGINS="$BACKEND_ALLOWED_ORIGINS" \
-    pnpm --dir "$ROOT_DIR/backend" start:worker &
+    pnpm --dir "$ROOT_DIR/backend" start:worker:dev &
   pids+=("$!")
 fi
 
