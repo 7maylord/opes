@@ -43,6 +43,7 @@ export interface InboundEmailEventResponse {
   providerEmailId: string;
   senderAddress: string;
   subject: string | null;
+  previewText: string | null;
   status: string;
   quarantineReason: string | null;
   failureReason: string | null;
@@ -108,6 +109,7 @@ interface ResendReceivedEmail {
   to: string[];
   message_id: string;
   subject?: string | null;
+  text?: string | null;
   received_for?: string[];
   headers?: Record<string, string> | null;
   attachments?: ResendAttachment[];
@@ -133,7 +135,7 @@ export class EmailInboxService {
     input: ConfigureEmailInboxRequest,
   ): Promise<EmailInboxResponse> {
     requireManager(context);
-    const address = normalizeEmail(input.address, 'address');
+    const address = workspaceInboxAddress(input.address);
     try {
       return await this.database.withTenant(context, async (database) => {
         const result = await database.query<{
@@ -180,6 +182,7 @@ export class EmailInboxService {
         provider_email_id: string;
         sender_address: string;
         subject: string | null;
+        preview_text: string | null;
         status: string;
         quarantine_reason: string | null;
         failure_reason: string | null;
@@ -189,7 +192,8 @@ export class EmailInboxService {
         documents: InboundEmailEventResponse['documents'];
       }>(
         `SELECT event.id,event.provider_email_id,event.sender_address,
-                event.raw_metadata->>'subject' AS subject,event.status,
+                event.raw_metadata->>'subject' AS subject,
+                event.raw_metadata->>'previewText' AS preview_text,event.status,
                 event.quarantine_reason,event.failure_reason,event.document_count,
                 event.received_at,event.processed_at,
                 COALESCE(jsonb_agg(jsonb_build_object(
@@ -211,6 +215,7 @@ export class EmailInboxService {
       providerEmailId: row.provider_email_id,
       senderAddress: row.sender_address,
       subject: row.subject,
+      previewText: row.preview_text,
       status: row.status,
       quarantineReason: row.quarantine_reason,
       failureReason: row.failure_reason,
@@ -279,6 +284,7 @@ export class EmailInboxService {
         );
         return { status: 'QUARANTINED', documents: 0, replay: false };
       }
+      await this.recordPreview(claimed.id, received.text);
 
       const attachments = (received.attachments ?? event.data.attachments ?? [])
         .filter((attachment) => attachment.content_disposition !== 'inline')
@@ -580,6 +586,21 @@ export class EmailInboxService {
     );
   }
 
+  private async recordPreview(
+    eventId: string,
+    text: string | null | undefined,
+  ): Promise<void> {
+    const preview = text?.trim().slice(0, 8000) || null;
+    await this.database.withWorker((database) =>
+      database.query(
+        `UPDATE opes.inbound_email_events SET
+           raw_metadata=raw_metadata || jsonb_build_object('previewText',$2::text),
+           updated_at=now() WHERE id=$1`,
+        [eventId, preview],
+      ),
+    );
+  }
+
   private async failEvent(eventId: string, error: unknown): Promise<void> {
     const reason =
       error instanceof Error ? error.message : 'Email intake failed';
@@ -591,6 +612,19 @@ export class EmailInboxService {
       ),
     );
   }
+}
+
+export function workspaceInboxAddress(value: string): string {
+  const address = normalizeEmail(value, 'address');
+  const domain = (process.env.OPES_INBOUND_EMAIL_DOMAIN || 'mail.maylord.xyz')
+    .trim()
+    .toLowerCase()
+    .replace(/^@/, '');
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain))
+    throw new ServiceUnavailableException('Inbound email domain is invalid');
+  if (!address.endsWith(`@${domain}`))
+    throw new BadRequestException(`address must use ${domain}`);
+  return address;
 }
 
 export function verifyResendSignature(
@@ -831,6 +865,9 @@ function validateReceivedEmail(value: ResendReceivedEmail): void {
     !Array.isArray(value.to) ||
     !value.to.every((item) => typeof item === 'string') ||
     typeof value.message_id !== 'string' ||
+    (value.text !== undefined &&
+      value.text !== null &&
+      typeof value.text !== 'string') ||
     !Array.isArray(value.attachments ?? []) ||
     !(value.attachments ?? []).every(validAttachment)
   )

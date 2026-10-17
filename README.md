@@ -49,6 +49,7 @@ Contract checks run from `contracts/` with `forge fmt --check`, `forge build --s
 - Railway API service: `opes-api`, rooted at `backend`, using `railway.json` and the `opes.up.railway.app` domain.
 - Railway worker service: `opes-worker`, rooted at `backend`, using the same `railway.json`, with `OPES_PROCESS=worker` and no public domain.
 - Railway data resources: `PostgresOpes` and the private `opesbucket` Storage Bucket.
+- Configure one Resend `email.received` webhook for `https://opes.up.railway.app/webhooks/resend/inbound`. Each workspace chooses an available address under `OPES_INBOUND_EMAIL_DOMAIN`; customers do not create webhooks.
 - Attach Railway PostgreSQL to both backend services. Attach one private Railway Storage Bucket and its S3-compatible variables to the API and worker only where document processing needs them.
 - Put Circle, DeepSeek, Privy secret, Arc/Base RPC, operations, and optional swap-signer credentials only on backend services that consume them. Set `OPES_ALLOWED_ORIGINS` to the exact Vercel production and preview origins.
 

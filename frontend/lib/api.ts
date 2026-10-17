@@ -196,6 +196,7 @@ export interface InboundEmailEventResponse {
   providerEmailId: string;
   senderAddress: string;
   subject: string | null;
+  previewText: string | null;
   status: string;
   quarantineReason: string | null;
   failureReason: string | null;

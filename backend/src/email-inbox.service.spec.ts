@@ -6,6 +6,7 @@ import { DocumentStorageService } from './document-storage.service';
 import {
   EmailInboxService,
   verifyResendSignature,
+  workspaceInboxAddress,
 } from './email-inbox.service';
 import { EvidenceService } from './evidence.service';
 import { RailwayBucketService } from './railway-bucket.service';
@@ -160,6 +161,7 @@ describe('EmailInboxService', () => {
   const originalFetch = global.fetch;
   const originalSecret = process.env.OPES_RESEND_WEBHOOK_SECRET;
   const originalApiKey = process.env.OPES_RESEND_API_KEY;
+  const originalInboundDomain = process.env.OPES_INBOUND_EMAIL_DOMAIN;
 
   beforeEach(() => {
     process.env.OPES_RESEND_WEBHOOK_SECRET = secret;
@@ -173,6 +175,19 @@ describe('EmailInboxService', () => {
     else process.env.OPES_RESEND_WEBHOOK_SECRET = originalSecret;
     if (originalApiKey === undefined) delete process.env.OPES_RESEND_API_KEY;
     else process.env.OPES_RESEND_API_KEY = originalApiKey;
+    if (originalInboundDomain === undefined)
+      delete process.env.OPES_INBOUND_EMAIL_DOMAIN;
+    else process.env.OPES_INBOUND_EMAIL_DOMAIN = originalInboundDomain;
+  });
+
+  it('accepts a preferred address only on the inbound domain', () => {
+    process.env.OPES_INBOUND_EMAIL_DOMAIN = 'mail.maylord.xyz';
+    expect(workspaceInboxAddress(' Accounts@MAIL.MAYLORD.XYZ ')).toBe(
+      'accounts@mail.maylord.xyz',
+    );
+    expect(() => workspaceInboxAddress('accounts@gmail.com')).toThrow(
+      'address must use mail.maylord.xyz',
+    );
   });
 
   it('rejects forged webhook signatures before database access', () => {
@@ -228,6 +243,7 @@ describe('EmailInboxService', () => {
     expect(recorded?.[2]).toEqual({ sourceType: 'EMAIL', automated: true });
     expect(queries.some((text) => text.includes('opes.vendors'))).toBe(false);
     expect(queries.some((text) => text.includes('vendor_payout'))).toBe(false);
+    expect(queries.some((text) => text.includes("'previewText'"))).toBe(true);
   });
 
   it('reuses the same attachment hash after extraction failure and retry', async () => {
@@ -284,6 +300,7 @@ function mockResendFetch(ids = ['attachment-a', 'attachment-b']) {
         to: received.to,
         message_id: received.message_id,
         subject: received.subject,
+        text: 'Please review the attached invoice.',
         headers: {
           'Authentication-Results': 'spf=pass; dkim=pass',
           'Return-Path': '<billing@vendor.example>',

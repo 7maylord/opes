@@ -198,7 +198,13 @@ test("workspace email inbox shows deliveries and accepted attachments", async ({
   await openSignedIn(page);
   await page.getByRole("button", { name: "Email inbox" }).click();
   await expect(page.getByRole("heading", { name: "Invoice email inbox" })).toBeVisible();
-  await expect(page.locator('input[value="invoices@mail.maylord.xyz"]')).toBeVisible();
+  await expect(page.getByText("invoices@mail.maylord.xyz", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Keep using your existing Gmail address" })).toBeVisible();
+  const address = page.getByLabel("Preferred address");
+  await expect(address).toHaveValue("invoices@mail.maylord.xyz");
+  await address.fill("accounts@mail.maylord.xyz");
+  await page.getByRole("button", { name: "Save address" }).click();
+  await expect(page.getByText("accounts@mail.maylord.xyz", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Invoice INV-200" })).toBeVisible();
   await expect(page.getByText("invoice-200.pdf")).toBeVisible();
 });
@@ -286,7 +292,7 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (method === "GET" && path === "organizations") return authorization === "Bearer mock-session-token" || state.onboarded ? organizations : [];
   if (method === "GET" && path.endsWith("/email-inbox")) return { id: "inbox-1", address: "invoices@mail.maylord.xyz", status: "ACTIVE" };
   if (method === "PUT" && path.endsWith("/email-inbox")) return { id: "inbox-1", address: body.address, status: "ACTIVE" };
-  if (method === "GET" && path.endsWith("/email-inbox/events")) return [{ id: "email-event-1", providerEmailId: "resend-email-1", senderAddress: "vendor@example.com", subject: "Invoice INV-200", status: "PROCESSED", quarantineReason: null, failureReason: null, documentCount: 1, receivedAt: "2026-10-15T12:00:00.000Z", processedAt: "2026-10-15T12:00:01.000Z", documents: [{ id: "email-doc-1", filename: "invoice-200.pdf", status: "VERIFIED" }] }];
+  if (method === "GET" && path.endsWith("/email-inbox/events")) return [{ id: "email-event-1", providerEmailId: "resend-email-1", senderAddress: "vendor@example.com", subject: "Invoice INV-200", previewText: "Please review the attached invoice.", status: "PROCESSED", quarantineReason: null, failureReason: null, documentCount: 1, receivedAt: "2026-10-15T12:00:00.000Z", processedAt: "2026-10-15T12:00:01.000Z", documents: [{ id: "email-doc-1", filename: "invoice-200.pdf", status: "VERIFIED" }] }];
   if (method === "GET" && path.endsWith("/notifications/unread-count")) return { unread: 2 };
   if (method === "GET" && path.endsWith("/notifications")) return [
     { id: "notification-approval", type: "PAYMENT_APPROVAL_REQUIRED", priority: "ACTION", title: "Invoice payment needs approval", body: "INV-200 is above the autonomous payment limit.", subjectType: "payment_decision", subjectId: "decision-1", actionView: "invoices", metadata: {}, readAt: null, createdAt: "2026-10-16T09:00:00.000Z" },
