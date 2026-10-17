@@ -115,15 +115,19 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   await page.getByLabel("Arc USDC payout address").fill("0x4000000000000000000000000000000000000004");
   await page.getByRole("button", { name: "Add address" }).click();
   await page.getByRole("button", { name: "Verify address" }).click();
-  await page.getByRole("button", { name: "Authorize vendor" }).click();
-  await page.getByLabel("Invoice number").fill("INV-100");
+  await page.getByRole("button", { name: "Authorize for payment" }).click();
   await page.getByLabel("Invoice file").setInputFiles({
     name: "invoice.txt",
     mimeType: "text/plain",
     buffer: Buffer.from("Invoice INV-100 for 100 USDC"),
   });
-  await page.getByRole("button", { name: "Upload and verify document" }).click();
+  await page.getByRole("button", { name: "Upload evidence" }).click();
   await page.getByRole("button", { name: "Extract invoice" }).click();
+  await page.getByLabel("Invoice number").fill("INV-100");
+  await page.getByLabel("Due date (optional)").fill("2026-11-30");
+  const confirmedClaims = page.waitForRequest((request) => request.url().endsWith("/confirm"));
+  await page.getByRole("button", { name: "Save reviewed claims" }).click();
+  expect(((await confirmedClaims).postDataJSON() as { claims: { dueDate: string } }).claims.dueDate).toBe("2026-11-30");
   await page.getByRole("button", { name: "Verify invoice" }).click();
   await page.getByRole("button", { name: "Generate agent decision" }).click();
   await expect(page.getByText("Decision dry run completed")).toBeVisible();

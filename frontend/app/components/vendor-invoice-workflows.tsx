@@ -53,6 +53,7 @@ export function VendorInvoiceWorkflows({
   const [vendorDailyLimit, setVendorDailyLimit] = useState("100");
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceAmount, setInvoiceAmount] = useState("100.00");
+  const [invoiceDueDate, setInvoiceDueDate] = useState("");
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const [paymentRoute, setPaymentRoute] = useState(paymentRoutes[0].value);
   const [vendor, setVendor] = useState<VendorResponse | null>(null);
@@ -62,6 +63,7 @@ export function VendorInvoiceWorkflows({
   const [vendorAuthorized, setVendorAuthorized] = useState(false);
   const [document, setDocument] = useState<EvidenceDocumentResponse | null>(null);
   const [extraction, setExtraction] = useState<DocumentExtractionResponse | null>(null);
+  const [claimsReviewed, setClaimsReviewed] = useState(false);
   const [obligation, setObligation] = useState<PayableObligationResponse | null>(null);
   const [decision, setDecision] = useState<PaymentDecisionResponse | null>(null);
   const [approval, setApproval] = useState<DecisionApprovalResponse | null>(null);
@@ -88,9 +90,11 @@ export function VendorInvoiceWorkflows({
     }
     const details = record.details as { version?: number };
     setVendor({ id: record.id, displayName: record.title, status: record.status, version: details.version ?? 1, metadata: details });
-    setVendorAddress(readVendorAddresses(record).find((item) => item.status === "VERIFIED_ACTIVE") ?? readVendorAddresses(record)[0] ?? null);
+    const address = readVendorAddresses(record).find((item) => item.status === "VERIFIED_ACTIVE") ?? readVendorAddresses(record)[0] ?? null;
+    setVendorAddress(address);
     setVendorAuthorized(false);
     setPortalAccess(null);
+    if (address?.status === "VERIFIED_ACTIVE") setStage("invoice");
   }
 
   async function submitVendor(event: FormEvent<HTMLFormElement>) {
@@ -180,11 +184,14 @@ export function VendorInvoiceWorkflows({
       const output = extracted.output as {
         invoiceNumber?: string | null;
         amount?: string | null;
+        dueDate?: string | null;
         payoutAddress?: string | null;
       };
       if (output.invoiceNumber) setInvoiceNumber(output.invoiceNumber);
       if (output.amount) setInvoiceAmount(output.amount);
+      setInvoiceDueDate(/^\d{4}-\d{2}-\d{2}$/.test(output.dueDate ?? "") ? output.dueDate! : "");
       if (output.payoutAddress) setPayoutAddress(output.payoutAddress);
+      setClaimsReviewed(false);
     });
   }
 
@@ -223,11 +230,13 @@ export function VendorInvoiceWorkflows({
           ...output,
           invoiceNumber,
           amount: invoiceAmount,
+          dueDate: invoiceDueDate || null,
           payoutAddress,
           currency: "USDC",
         },
       );
       setExtraction({ ...extraction, reviewStatus: "CONFIRMED" });
+      setClaimsReviewed(true);
     });
   }
 
@@ -292,11 +301,11 @@ export function VendorInvoiceWorkflows({
 
       {stage === "vendor" ? <div className="grid gap-4 xl:grid-cols-2">
         <form onSubmit={submitVendor} className="space-y-4 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Vendor identity</h4><p className="mt-1 text-sm text-slate-500">Select an existing vendor or create a new counterparty.</p></div>{vendors.length > 0 ? <label className="block text-sm font-medium text-slate-700">Existing vendor<select value={selectedVendorId} onChange={(event) => selectVendor(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500"><option value="">Choose a vendor</option>{vendors.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label> : null}<div className="flex items-center gap-3 text-xs uppercase tracking-widest text-slate-400"><span className="h-px flex-1 bg-slate-200" />or create new<span className="h-px flex-1 bg-slate-200" /></div><Input label="Vendor name" value={vendorName} onChange={setVendorName} required={vendor === null} /><button disabled={pending || vendor !== null || !vendorName.trim()} className="btn">Create vendor</button>{vendor ? <StateCard label={vendor.displayName} status={vendor.status} /> : null}<div className="border-t border-slate-200 pt-4"><Input label="Vendor portal email" value={vendorEmail} onChange={setVendorEmail} /><p className="mt-2 text-xs text-slate-500">Creates a secure submission link for this vendor only.</p><button type="button" disabled={pending || vendor === null || !vendorEmail} onClick={createPortalAccess} className="btn-secondary mt-3">Generate portal link</button>{portalAccess ? <a className="mt-3 block break-all rounded-xl bg-cyan-50 p-3 text-sm font-semibold text-cyan-800" href={`/vendor/${portalAccess.token}`}>Open vendor portal ↗</a> : null}</div></form>
-        <form onSubmit={submitAddress} className="space-y-4 rounded-2xl bg-white p-5" title="Verify a vendor wallet, then authorize its Arc USDC payment limit onchain."><div><h4 className="font-semibold">Payout destination</h4><p className="mt-1 text-sm text-slate-500">Verify the vendor wallet, then authorize how much it may receive each day.</p></div><Input label="Arc USDC payout address" value={payoutAddress} onChange={setPayoutAddress} required /><Input label="Vendor daily limit" suffix="USDC" value={vendorDailyLimit} onChange={setVendorDailyLimit} required /><div className="flex flex-wrap gap-2"><button disabled={pending || vendor === null || vendorAddress !== null} className="btn">Add address</button><button type="button" disabled={pending || vendorAddress === null || vendorAddress.status === "VERIFIED_ACTIVE"} onClick={submitAddressVerification} className="btn-secondary">Verify address</button><button type="button" disabled={pending || vendorAddress?.status !== "VERIFIED_ACTIVE" || vendorAuthorized} onClick={submitVendorAuthorization} className="btn-secondary">Authorize vendor</button></div>{vendorAddress ? <StateCard label={shortAddress(vendorAddress.payoutAddress)} status={vendorAuthorized ? "AUTHORIZED" : vendorAddress.status} /> : <EmptyState>Complete the vendor identity first, then add its payout wallet.</EmptyState>}</form>
+        <form onSubmit={submitAddress} className="space-y-4 rounded-2xl bg-white p-5" title="Verify a vendor wallet, then authorize its Arc USDC payment limit onchain."><div><h4 className="font-semibold">Payout destination</h4><p className="mt-1 text-sm text-slate-500">A verified existing payout address is enough to record invoice evidence. Onchain authorization is checked again only before payment.</p></div><Input label="Arc USDC payout address" value={payoutAddress} onChange={setPayoutAddress} required /><Input label="Vendor daily limit" suffix="USDC" value={vendorDailyLimit} onChange={setVendorDailyLimit} required /><div className="flex flex-wrap gap-2"><button disabled={pending || vendor === null || vendorAddress !== null} className="btn">Add address</button><button type="button" disabled={pending || vendorAddress === null || vendorAddress.status === "VERIFIED_ACTIVE"} onClick={submitAddressVerification} className="btn-secondary">Verify address</button><button type="button" disabled={pending || vendorAddress?.status !== "VERIFIED_ACTIVE" || vendorAuthorized} onClick={submitVendorAuthorization} className="btn-secondary">Authorize for payment</button></div>{vendorAddress ? <StateCard label={shortAddress(vendorAddress.payoutAddress)} status={vendorAuthorized ? "AUTHORIZED" : vendorAddress.status} /> : <EmptyState>Complete the vendor identity first, then add its payout wallet.</EmptyState>}</form>
       </div> : null}
 
       {stage === "invoice" ? <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <form onSubmit={submitDocument} className="space-y-5 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Invoice evidence</h4><p className="mt-1 text-sm text-slate-500">Upload the source file. Extracted claims remain reviewable before verification.</p></div><div className="grid gap-4 md:grid-cols-2"><Input label="Invoice number" value={invoiceNumber} onChange={setInvoiceNumber} required /><Input label="Invoice amount" suffix="USDC" value={invoiceAmount} onChange={setInvoiceAmount} required /></div><label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm font-medium text-slate-700">Invoice file<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label><div className="flex flex-wrap gap-2"><button disabled={pending || document !== null} className="btn">Upload and verify document</button><button type="button" disabled={pending || document === null || extraction !== null} onClick={submitExtraction} className="btn-secondary">Extract invoice</button></div>{extraction?.reviewStatus === "PENDING_REVIEW" ? <button type="button" disabled={pending} onClick={submitClaimConfirmation} className="btn-secondary">Confirm extracted claims</button> : null}<button type="button" disabled={pending || extraction === null || extraction.reviewStatus !== "CONFIRMED"} onClick={submitInvoiceVerification} className="btn">Verify invoice</button></form>
+        <form onSubmit={submitDocument} className="space-y-5 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Invoice evidence</h4><p className="mt-1 text-sm text-slate-500">Complete each step in order. Nothing becomes payable until you review the extracted details.</p></div><div><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">1 · Upload source</p><label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm font-medium text-slate-700">Invoice file<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label><button disabled={pending || document !== null} className="btn mt-3">Upload evidence</button></div><div className="border-t border-slate-200 pt-5"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">2 · Extract details</p><button type="button" disabled={pending || document === null || extraction !== null} onClick={submitExtraction} className="btn-secondary">Extract invoice</button></div>{extraction ? <div className="space-y-4 border-t border-slate-200 pt-5"><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">3 · Review claims</p><div className="grid gap-4 md:grid-cols-2"><Input label="Invoice number" value={invoiceNumber} onChange={setInvoiceNumber} required /><Input label="Invoice amount" suffix="USDC" value={invoiceAmount} onChange={setInvoiceAmount} required /><label className="block w-full text-sm font-medium text-slate-700">Due date <span className="font-normal text-slate-400">(optional)</span><input type="date" value={invoiceDueDate} onChange={(event) => setInvoiceDueDate(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-4 outline-none ring-cyan-500 focus:ring-2" /></label></div><button type="button" disabled={pending || !invoiceNumber || !invoiceAmount} onClick={submitClaimConfirmation} className="btn-secondary">Save reviewed claims</button></div> : null}<div className="border-t border-slate-200 pt-5"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">4 · Create invoice record</p><button type="button" disabled={pending || extraction === null || !claimsReviewed} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>{extraction && !claimsReviewed ? <p className="mt-2 text-xs text-slate-500">Save the reviewed claims before verification.</p> : null}</div></form>
         <aside className="space-y-3 rounded-2xl bg-white p-5"><h4 className="font-semibold">Evidence status</h4>{document ? <StateCard label={document.filename} status={document.status} /> : <EmptyState>Your uploaded file and extraction status will appear here.</EmptyState>}{extraction ? <><StateCard label="Extracted claims" status={extraction.reviewStatus} /><SummaryRow label="Invoice" value={invoiceNumber || "—"} /><SummaryRow label="Amount" value={`${invoiceAmount} USDC`} /><SummaryRow label="Payout" value={payoutAddress ? shortAddress(payoutAddress) : "—"} /></> : null}{obligation ? <StateCard label="Payable obligation" status={obligation.status} /> : null}</aside>
       </div> : null}
 
