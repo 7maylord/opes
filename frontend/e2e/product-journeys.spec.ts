@@ -130,6 +130,14 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
 });
 
+test("existing vendor can continue directly to invoice evidence", async ({ page }) => {
+  await openSignedIn(page);
+  await page.getByRole("button", { name: "Invoices & vendors", exact: true }).click();
+  await page.getByLabel("Existing vendor").selectOption("vendor-1");
+  await page.getByRole("tab", { name: /Invoice evidence/ }).click();
+  await expect(page.getByLabel("Invoice file")).toBeVisible();
+});
+
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
   await openSignedIn(page);
   await page.getByRole("button", { name: "Agreements", exact: true }).click();

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useArcTransaction } from "@/lib/use-arc-transaction";
 import { parseDecimalToAtomic } from "@/lib/money";
@@ -12,6 +12,7 @@ import {
   evaluateInvoicePaymentWithAgent,
   executeDecision,
   extractInvoiceDocument,
+  listWorkspaceRecords,
   uploadEvidenceDocument,
   verifyInvoice,
   verifyVendorAddress,
@@ -28,6 +29,7 @@ import {
   type VendorResponse,
   type VendorPortalAccessResponse,
 } from "@/lib/api";
+import type { WorkspaceRecord } from "@/lib/workspace-api.generated";
 
 const arcUsdc = "0x3600000000000000000000000000000000000000";
 const paymentRoutes = [
@@ -45,6 +47,8 @@ export function VendorInvoiceWorkflows({
 }) {
   const sendTransaction = useArcTransaction();
   const [vendorName, setVendorName] = useState("");
+  const [vendors, setVendors] = useState<WorkspaceRecord[]>([]);
+  const [selectedVendorId, setSelectedVendorId] = useState("");
   const [payoutAddress, setPayoutAddress] = useState("");
   const [vendorDailyLimit, setVendorDailyLimit] = useState("100");
   const [invoiceNumber, setInvoiceNumber] = useState("");
@@ -64,11 +68,37 @@ export function VendorInvoiceWorkflows({
   const [execution, setExecution] = useState<PaymentExecutionResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [stage, setStage] = useState<"vendor" | "invoice" | "decision">("vendor");
+  const vendorReady = vendor !== null && vendorAddress?.status === "VERIFIED_ACTIVE";
+
+  useEffect(() => {
+    let cancelled = false;
+    listWorkspaceRecords(token, organizationId, "vendor", { limit: 100 })
+      .then((page) => { if (!cancelled) setVendors(page.items); })
+      .catch((reason: unknown) => { if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load vendors"); });
+    return () => { cancelled = true; };
+  }, [organizationId, token]);
+
+  function selectVendor(id: string) {
+    setSelectedVendorId(id);
+    const record = vendors.find((item) => item.id === id);
+    if (!record) {
+      setVendor(null);
+      setVendorAddress(null);
+      return;
+    }
+    const details = record.details as { version?: number };
+    setVendor({ id: record.id, displayName: record.title, status: record.status, version: details.version ?? 1, metadata: details });
+    setVendorAddress(readVendorAddresses(record).find((item) => item.status === "VERIFIED_ACTIVE") ?? readVendorAddresses(record)[0] ?? null);
+    setVendorAuthorized(false);
+    setPortalAccess(null);
+  }
 
   async function submitVendor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run("Vendor recorded", async () => {
-      setVendor(await createVendor(token, organizationId, { displayName: vendorName }));
+      const created = await createVendor(token, organizationId, { displayName: vendorName });
+      setVendor(created);
+      setSelectedVendorId(created.id);
     });
   }
 
@@ -256,12 +286,12 @@ export function VendorInvoiceWorkflows({
       <div><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">Payables workspace</p><h3 className="mt-2 text-2xl font-semibold">From invoice to authorized payment</h3><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">Establish the vendor, verify the invoice evidence, then review the agent’s decision before any funds move.</p></div>
       <div className="grid gap-2 sm:grid-cols-3" role="tablist" aria-label="Invoice workflow stage">
         <StageButton number="1" label="Vendor" active={stage === "vendor"} complete={vendorAuthorized} onClick={() => setStage("vendor")} />
-        <StageButton number="2" label="Invoice evidence" active={stage === "invoice"} complete={obligation !== null} disabled={!vendorAuthorized} onClick={() => setStage("invoice")} />
+        <StageButton number="2" label="Invoice evidence" active={stage === "invoice"} complete={obligation !== null} disabled={!vendorReady} onClick={() => setStage("invoice")} />
         <StageButton number="3" label="Decision & payment" active={stage === "decision"} complete={execution !== null} disabled={obligation === null} onClick={() => setStage("decision")} />
       </div>
 
       {stage === "vendor" ? <div className="grid gap-4 xl:grid-cols-2">
-        <form onSubmit={submitVendor} className="space-y-4 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Vendor identity</h4><p className="mt-1 text-sm text-slate-500">Create the counterparty record before accepting payment details.</p></div><Input label="Vendor name" value={vendorName} onChange={setVendorName} required /><button disabled={pending || vendor !== null} className="btn">Create vendor</button>{vendor ? <StateCard label={vendor.displayName} status={vendor.status} /> : null}<div className="border-t border-slate-200 pt-4"><Input label="Vendor portal email" value={vendorEmail} onChange={setVendorEmail} /><p className="mt-2 text-xs text-slate-500">Creates a secure submission link for this vendor only.</p><button type="button" disabled={pending || vendor === null || !vendorEmail} onClick={createPortalAccess} className="btn-secondary mt-3">Generate portal link</button>{portalAccess ? <a className="mt-3 block break-all rounded-xl bg-cyan-50 p-3 text-sm font-semibold text-cyan-800" href={`/vendor/${portalAccess.token}`}>Open vendor portal ↗</a> : null}</div></form>
+        <form onSubmit={submitVendor} className="space-y-4 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Vendor identity</h4><p className="mt-1 text-sm text-slate-500">Select an existing vendor or create a new counterparty.</p></div>{vendors.length > 0 ? <label className="block text-sm font-medium text-slate-700">Existing vendor<select value={selectedVendorId} onChange={(event) => selectVendor(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500"><option value="">Choose a vendor</option>{vendors.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label> : null}<div className="flex items-center gap-3 text-xs uppercase tracking-widest text-slate-400"><span className="h-px flex-1 bg-slate-200" />or create new<span className="h-px flex-1 bg-slate-200" /></div><Input label="Vendor name" value={vendorName} onChange={setVendorName} required={vendor === null} /><button disabled={pending || vendor !== null || !vendorName.trim()} className="btn">Create vendor</button>{vendor ? <StateCard label={vendor.displayName} status={vendor.status} /> : null}<div className="border-t border-slate-200 pt-4"><Input label="Vendor portal email" value={vendorEmail} onChange={setVendorEmail} /><p className="mt-2 text-xs text-slate-500">Creates a secure submission link for this vendor only.</p><button type="button" disabled={pending || vendor === null || !vendorEmail} onClick={createPortalAccess} className="btn-secondary mt-3">Generate portal link</button>{portalAccess ? <a className="mt-3 block break-all rounded-xl bg-cyan-50 p-3 text-sm font-semibold text-cyan-800" href={`/vendor/${portalAccess.token}`}>Open vendor portal ↗</a> : null}</div></form>
         <form onSubmit={submitAddress} className="space-y-4 rounded-2xl bg-white p-5" title="Verify a vendor wallet, then authorize its Arc USDC payment limit onchain."><div><h4 className="font-semibold">Payout destination</h4><p className="mt-1 text-sm text-slate-500">Verify the vendor wallet, then authorize how much it may receive each day.</p></div><Input label="Arc USDC payout address" value={payoutAddress} onChange={setPayoutAddress} required /><Input label="Vendor daily limit" suffix="USDC" value={vendorDailyLimit} onChange={setVendorDailyLimit} required /><div className="flex flex-wrap gap-2"><button disabled={pending || vendor === null || vendorAddress !== null} className="btn">Add address</button><button type="button" disabled={pending || vendorAddress === null || vendorAddress.status === "VERIFIED_ACTIVE"} onClick={submitAddressVerification} className="btn-secondary">Verify address</button><button type="button" disabled={pending || vendorAddress?.status !== "VERIFIED_ACTIVE" || vendorAuthorized} onClick={submitVendorAuthorization} className="btn-secondary">Authorize vendor</button></div>{vendorAddress ? <StateCard label={shortAddress(vendorAddress.payoutAddress)} status={vendorAuthorized ? "AUTHORIZED" : vendorAddress.status} /> : <EmptyState>Complete the vendor identity first, then add its payout wallet.</EmptyState>}</form>
       </div> : null}
 
@@ -293,3 +323,8 @@ function EmptyState({ children }: { children: React.ReactNode }) { return <p cla
 function Status({ value }: { value: string }) { const pass = ["PASS", "ACCEPTED", "ACTIVE", "AUTHORIZED", "VERIFIED", "VERIFIED_ACTIVE", "CONFIRMED"].includes(value); return <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase ${pass ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>{value.replaceAll("_", " ")}</span>; }
 function SummaryRow({ label, value, dark = false }: { label: string; value: string; dark?: boolean }) { return <p className="flex justify-between gap-3 text-sm"><span className={dark ? "text-slate-400" : "text-slate-500"}>{label}</span><strong className="max-w-[65%] truncate text-right">{value}</strong></p>; }
 function shortAddress(value: string) { return `${value.slice(0, 8)}…${value.slice(-6)}`; }
+
+function readVendorAddresses(vendor: WorkspaceRecord | undefined): VendorAddressResponse[] {
+  const details = vendor?.details as { addresses?: VendorAddressResponse[] } | undefined;
+  return Array.isArray(details?.addresses) ? details.addresses : [];
+}
