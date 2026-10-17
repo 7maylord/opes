@@ -150,7 +150,11 @@ test("existing vendor can continue directly to invoice evidence", async ({ page 
   await page.getByRole("button", { name: "Invoices & vendors", exact: true }).click();
   await page.getByLabel("Existing vendor").selectOption("vendor-1");
   await page.getByRole("tab", { name: /Invoice evidence/ }).click();
+  await expect(page.getByRole("heading", { name: "Unpaid invoices" })).toBeVisible();
+  await expect(page.getByText("Invoice INV-100", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Invoice file")).toBeVisible();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Agent decision" })).toBeVisible();
 });
 
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
