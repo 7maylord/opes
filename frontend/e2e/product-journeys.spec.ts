@@ -144,8 +144,7 @@ test("journey 3: invoice decision reaches autonomous payment", async ({ page }) 
   await expect(page.getByText("Decision dry run completed")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Payment deferred" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve payment" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Override decision" }).click();
-  await page.getByLabel("Override action").selectOption("PAY");
+  await page.getByRole("button", { name: "Pay now", exact: true }).click();
   await page.getByLabel("Reason for override").fill("Supplier requested early settlement");
   await page.getByRole("button", { name: "Apply override" }).click();
   await expect(page.getByText("Decision override recorded")).toBeVisible();
@@ -167,6 +166,9 @@ test("existing vendor can continue directly to invoice evidence", async ({ page 
   await expect(page.getByLabel("Invoice file")).toBeVisible();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Agent decision" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Payment deferred" })).toBeVisible();
+  await expect(page.getByText("Proposed payment").locator("..").getByText(/2026/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pay now", exact: true })).toBeVisible();
 });
 
 test("journey 4: recurring subscription requires an owner-signed mandate", async ({ page }) => {
@@ -422,7 +424,7 @@ function workspaceResponse(path: string) {
   const records: Record<string, Array<Record<string, unknown>>> = {
     vendor: [workspaceRecord("vendor-1", "vendor", "Canteen Supplies", "Vendor", "VERIFIED", null, null, { addresses: [{ id: "address-1", environment: "arc-testnet", assetSymbol: "USDC", payoutAddress: "0x4000000000000000000000000000000000000004", status: "VERIFIED_ACTIVE" }] })],
     evidence: [workspaceRecord("doc-1", "evidence", "invoice.txt", "INVOICE", "RECORDED", null, null, {})],
-    invoice: [workspaceRecord("invoice-version-1", "invoice", "Invoice INV-100", "Canteen Supplies", "ACCEPTED", "100000000", "USDC", { invoiceNumber: "INV-100", vendorId: "vendor-1" })],
+    invoice: [workspaceRecord("invoice-version-1", "invoice", "Invoice INV-100", "Canteen Supplies", "ACCEPTED", "100000000", "USDC", { invoiceNumber: "INV-100", vendorId: "vendor-1", dueAt: "2026-11-30T23:59:59.999Z", latestDecision: { id: "decision-1", sourceType: "INVOICE", sourceId: "obligation-1", sourceVersionId: "invoice-version-1", decisionVersion: 1, paymentMode: "DIRECT", modelAction: "DELAY", derivedAction: "DELAY", liquidityRoute: "OPERATING", routeEnvironment: "arc-testnet", routeChainId: 5042002, routeAssetSymbol: "USDC", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], proposedExecutionAt: "2026-11-29T23:59:59.999Z", expiresAt: "2026-10-17T16:00:00.000Z" } })],
     decision: [],
     execution: [workspaceRecord("execution-1", "execution", "Payment execution", "arc-testnet", "CONFIRMED", "100000000", "USDC", {})],
     subscription: [], escrow: [], ledger: [], audit: [], connector: [],

@@ -264,11 +264,37 @@ function recordsSql(): string {
              o.status, i.amount_atomic::text, i.currency, NULL, NULL, i.created_at, i.created_at,
              jsonb_build_object('obligationId', i.obligation_id, 'vendorId', i.vendor_id,
                'vendorAddressId', i.vendor_address_id, 'evidenceDocumentId', i.evidence_document_id,
-               'invoiceNumber', i.invoice_number, 'lineItems', i.line_items, 'version', i.version)
+               'invoiceNumber', i.invoice_number, 'lineItems', i.line_items, 'version', i.version,
+               'dueAt', i.due_at,
+               'latestDecision', CASE WHEN decision.id IS NULL THEN NULL ELSE jsonb_build_object(
+                 'id', decision.id, 'sourceType', decision.source_type,
+                 'sourceId', decision.source_id, 'sourceVersionId', decision.source_version_id,
+                 'decisionVersion', decision.decision_version, 'paymentMode', decision.payment_mode,
+                 'modelAction', decision.model_action, 'derivedAction', decision.derived_action,
+                 'liquidityRoute', decision.liquidity_route,
+                 'routeEnvironment', decision.route_environment,
+                 'routeChainId', decision.route_chain_id,
+                 'routeAssetSymbol', decision.route_asset_symbol,
+                 'amountAtomic', decision.amount_atomic::text,
+                 'destinationAddress', decision.destination_address,
+                 'evidenceBundleHash', decision.evidence_bundle_hash,
+                 'policySnapshotHash', decision.policy_snapshot_hash,
+                 'contextHash', decision.context_hash, 'decisionHash', decision.decision_hash,
+                 'checks', decision.checks,
+                 'proposedExecutionAt', COALESCE(decision.proposed_execution_at,
+                   CASE WHEN decision.derived_action='DELAY' THEN i.due_at - interval '1 day' END),
+                 'expiresAt', decision.expires_at
+               ) END)
         FROM opes.payable_obligation_versions i
         JOIN opes.payable_obligations o
           ON o.organization_id = i.organization_id AND o.id = i.obligation_id
         JOIN opes.vendors v ON v.organization_id = i.organization_id AND v.id = i.vendor_id
+        LEFT JOIN LATERAL (
+          SELECT current.* FROM opes.payment_decisions current
+           WHERE current.organization_id=i.organization_id
+             AND current.source_version_id=i.id
+           ORDER BY current.decision_version DESC LIMIT 1
+        ) decision ON true
       UNION ALL
       SELECT p.organization_id, p.id, 'decision', 'Decision · ' || p.derived_action, p.source_type,
              CASE WHEN p.expires_at <= now() THEN 'EXPIRED' ELSE p.derived_action END,

@@ -14,7 +14,8 @@ const context: TenantContext = {
 };
 
 describe('AgentDecisionService', () => {
-  it('passes the model proposal through deterministic decision evaluation', async () => {
+  it('attaches a future payment date to a delayed proposal', async () => {
+    const dueAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     const query: TenantDatabase['query'] = jest.fn().mockResolvedValue({
       rows: [
         {
@@ -26,6 +27,7 @@ describe('AgentDecisionService', () => {
           payout_address: '0x0000000000000000000000000000000000000001',
           document_status: 'VERIFIED',
           extraction_output: { dueDate: '2030-01-01' },
+          due_at: dueAt,
         },
       ],
     });
@@ -35,16 +37,16 @@ describe('AgentDecisionService', () => {
     );
     const evaluateInvoicePayment = jest.fn().mockResolvedValue({
       id: 'decision-1',
-      modelAction: 'PAY',
-      derivedAction: 'PAY',
+      modelAction: 'DELAY',
+      derivedAction: 'DELAY',
     });
     const service = new AgentDecisionService(
       { withTenant } as unknown as DatabaseService,
       {
         proposePayment: jest.fn().mockResolvedValue({
           output: {
-            action: 'PAY',
-            rationale: 'Verified and due',
+            action: 'DELAY',
+            rationale: 'Verified and due later',
             confidence: 90,
           },
           model: 'test-model',
@@ -66,13 +68,16 @@ describe('AgentDecisionService', () => {
 
     await expect(
       service.evaluateInvoicePayment(context, input),
-    ).resolves.toMatchObject({ derivedAction: 'PAY' });
+    ).resolves.toMatchObject({ derivedAction: 'DELAY' });
     expect(evaluateInvoicePayment).toHaveBeenCalledWith(
       context,
       expect.objectContaining({
-        modelAction: 'PAY',
-        modelRationale: 'Verified and due',
+        modelAction: 'DELAY',
+        modelRationale: 'Verified and due later',
         modelName: 'test-model',
+        proposedExecutionAt: new Date(
+          dueAt.getTime() - 24 * 60 * 60 * 1000,
+        ).toISOString(),
       }),
     );
   });

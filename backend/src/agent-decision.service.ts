@@ -39,11 +39,13 @@ export class AgentDecisionService {
         payout_address: string;
         document_status: string;
         extraction_output: unknown;
+        due_at: Date | null;
       }>(
         `SELECT version.invoice_number, version.amount_atomic::text AS amount_atomic,
             version.currency, vendor.status AS vendor_status,
             address.status AS address_status, address.payout_address,
-            document.status AS document_status, claim.claims AS extraction_output
+            document.status AS document_status, claim.claims AS extraction_output,
+            version.due_at
            FROM opes.payable_obligation_versions AS version
            JOIN opes.payable_obligations AS obligation
              ON obligation.organization_id = version.organization_id
@@ -91,12 +93,20 @@ export class AgentDecisionService {
       requestedRoute: input.route,
       decisionExpiresAt: input.expiresAt,
     });
+    const proposedExecutionAt =
+      proposal.output.action === 'DELAY' && row.due_at
+        ? new Date(row.due_at.getTime() - 24 * 60 * 60 * 1000)
+        : null;
     return this.decisions.evaluateInvoicePayment(context, {
       ...input,
       modelAction: proposal.output.action,
       modelName: proposal.model,
       modelRationale: proposal.output.rationale,
       promptVersion: proposal.promptVersion,
+      proposedExecutionAt:
+        proposedExecutionAt && proposedExecutionAt.getTime() > Date.now()
+          ? proposedExecutionAt.toISOString()
+          : null,
     });
   }
 }
