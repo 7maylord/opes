@@ -22,14 +22,38 @@ export function usePrivy() {
 }
 
 export function useWallets() {
-  return { ready: true, wallets: [] };
+  const created = useSyncExternalStore(
+    (onChange) => {
+      window.addEventListener("opes-e2e-wallet", onChange);
+      return () => window.removeEventListener("opes-e2e-wallet", onChange);
+    },
+    () => localStorage.getItem("opes:e2e-wallet-created") === "1",
+    () => false,
+  );
+  return {
+    ready: true,
+    wallets: created
+      ? [{
+          address: "0x5000000000000000000000000000000000000005",
+          type: "ethereum",
+          walletClientType: "privy",
+        }]
+      : [],
+  };
 }
 
 export function useCreateWallet() {
   return {
     createWallet: async () => {
       localStorage.setItem("opes:e2e-wallet-created", "1");
+      window.dispatchEvent(new Event("opes-e2e-wallet"));
     },
+  };
+}
+
+export function useSignTransaction() {
+  return {
+    signTransaction: async () => ({ signature: "0x02" }),
   };
 }
 

@@ -14,6 +14,18 @@ type MockState = { onboarded: boolean; expiredSession: boolean };
 async function installApiMock(page: Page, options: Partial<MockState> = {}) {
   const state: MockState = { onboarded: false, expiredSession: false, ...options };
   await page.route("http://mock.api/**", async (route) => respond(route, state));
+  await page.route("http://mock.rpc/**", async (route) => {
+    const method = (route.request().postDataJSON() as { method: string }).method;
+    const result = method === "eth_chainId" ? "0x4cef52"
+      : method === "eth_getTransactionCount" ? "0x0"
+      : method === "eth_estimateGas" ? "0x10000"
+      : method === "eth_gasPrice" ? "0x3b9aca00"
+      : method === "eth_sendRawTransaction" ? `0x${"1".repeat(64)}`
+      : method === "eth_getTransactionReceipt" ? { status: "0x1" }
+      : method === "eth_call" ? "0x0"
+      : null;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ jsonrpc: "2.0", id: 1, result }) });
+  });
 }
 
 async function openSignedIn(page: Page) {
@@ -26,7 +38,9 @@ async function openSignedIn(page: Page) {
 async function setSession(page: Page, token: string) {
   await page.evaluate((nextToken) => {
     localStorage.setItem("opes:session-token", nextToken);
+    localStorage.setItem("opes:e2e-wallet-created", "1");
     window.dispatchEvent(new Event("opes-storage"));
+    window.dispatchEvent(new Event("opes-e2e-wallet"));
   }, token);
 }
 
@@ -51,7 +65,7 @@ test("Privy session survives a rerender while the backend exchange is pending", 
   await page.goto("/?privy-auth=1");
   await expect.poll(() => exchanges).toBe(1);
   await page.evaluate(() => {
-    localStorage.setItem("opes:network-label", "Base Sepolia");
+    localStorage.setItem("opes:selected-organization-id", "11111111-1111-1111-1111-111111111111");
     window.dispatchEvent(new Event("opes-storage"));
   });
   await expect.poll(() => page.evaluate(() => new Promise((resolve) => {
@@ -101,6 +115,7 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   await page.getByLabel("Arc USDC payout address").fill("0x4000000000000000000000000000000000000004");
   await page.getByRole("button", { name: "Add address" }).click();
   await page.getByRole("button", { name: "Verify address" }).click();
+  await page.getByRole("button", { name: "Authorize vendor" }).click();
   await page.getByLabel("Invoice number").fill("INV-100");
   await page.getByLabel("Invoice file").setInputFiles({
     name: "invoice.txt",
@@ -243,8 +258,7 @@ test("basic accessibility landmarks and labels are present", async ({ page }) =>
   await openSignedIn(page);
   await expect(page.locator("main")).toBeVisible();
   await expect(page.getByLabel("Organization")).toBeVisible();
-  await expect(page.getByLabel("Network")).toBeVisible();
-  await expect(page.getByLabel("Mode")).toBeVisible();
+  await expect(page.getByText("Arc Testnet", { exact: true }).first()).toBeVisible();
 });
 
 async function respond(route: Route, state: MockState) {
@@ -294,6 +308,8 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (path.endsWith("/vendors")) return { id: "vendor-1", displayName: body.displayName, status: "PENDING_REVIEW", version: 1, metadata: {} };
   if (path.includes("/vendors/") && path.endsWith("/addresses")) return { id: "address-1", vendorId: "vendor-1", environment: body.environment, chainId: body.chainId, assetSymbol: body.assetSymbol, assetAddress: body.assetAddress, payoutAddress: body.payoutAddress, status: "PENDING_REVIEW", version: 1, replacesAddressId: null };
   if (path.includes("/vendor-addresses/")) return { id: "address-1", vendorId: "vendor-1", environment: "arc-testnet", chainId: 5042002, assetSymbol: "USDC", assetAddress: "0x3600000000000000000000000000000000000000", payoutAddress: "0x4000000000000000000000000000000000000004", status: "VERIFIED_ACTIVE", version: 1, replacesAddressId: null };
+  if (path.endsWith("/treasury-actions")) return chainAction("vendor-action", String(body.action));
+  if (path.includes("/lifecycle-actions/") && path.endsWith("/confirm")) return { ...chainAction("vendor-action", "SET_VENDOR"), status: "CONFIRMED", transactionHash: body.transactionHash };
   if (path.endsWith("/evidence-documents/uploads")) return { document: { id: "doc-1", ...body, status: "STAGING", storageKey: "staging/doc-1", metadata: {} }, uploadUrl: "http://mock.api/upload/doc-1", uploadHeaders: { "content-type": "text/plain" } };
   if (path.endsWith("/evidence-documents/doc-1/finalize")) return { id: "doc-1", documentType: "INVOICE", filename: "invoice.txt", contentType: "text/plain", sizeBytes: 30, sha256Hex: "a".repeat(64), storageKey: "documents/doc-1", status: "VERIFIED", metadata: {} };
   if (path.endsWith("/evidence-documents/doc-1/extract")) return { id: "extract-1", documentId: "doc-1", schemaName: "invoice", schemaVersion: "2", modelProvider: "deepseek", modelName: "deepseek-flash", sourceSha256Hex: "a".repeat(64), output: { invoiceNumber: "INV-100", amount: "100", payoutAddress: "0x4000000000000000000000000000000000000004" }, status: "ACCEPTED", claimVersionId: "claim-1", reviewStatus: "CONFIRMED" };
