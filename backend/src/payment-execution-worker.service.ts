@@ -276,10 +276,10 @@ export class PaymentExecutionWorkerService {
         providerTransactionId = submitted.id;
         await this.recordProviderSubmission(event, attemptId, submitted.id);
       } catch (error) {
-        const reason =
-          error instanceof Error
-            ? error.message
-            : 'Circle payment submission failed';
+        const reason = circleErrorMessage(
+          error,
+          'Circle payment submission failed',
+        );
         if (submissionMayHaveSucceeded(error))
           await this.markSubmissionUnknown(event, attemptId, reason);
         else await this.fail(event, attemptId, reason);
@@ -803,7 +803,7 @@ export class PaymentExecutionWorkerService {
         body: reason.slice(0, 500),
         subjectType: 'payment_execution',
         subjectId: event.aggregate_id,
-        actionView: 'treasury',
+        actionView: 'invoices',
         dedupeKey: `payment-failed:${event.aggregate_id}`,
       });
       await markOutboxFailed(database, event.id, reason);
@@ -814,6 +814,14 @@ export class PaymentExecutionWorkerService {
 
 function preflightCheck(code: string, passes: boolean) {
   return { code, status: passes ? ('PASS' as const) : ('BLOCK' as const) };
+}
+
+function circleErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'number' && code !== 400
+    ? `${error.message} (Circle code ${code})`
+    : error.message;
 }
 
 function balanceOfCalldata(address: string): string {

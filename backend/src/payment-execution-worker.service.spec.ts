@@ -264,6 +264,7 @@ describe('PaymentExecutionWorkerService', () => {
     mockPreflightRpc();
     const error = Object.assign(new Error('API parameter invalid'), {
       status: 400,
+      code: 155201,
     });
     const queries: Array<{ text: string; values?: readonly unknown[] }> = [];
     const { service } = serviceWithWorker(recordingQuery(queries, workRow()), {
@@ -275,7 +276,14 @@ describe('PaymentExecutionWorkerService', () => {
       queries.some(
         (item) =>
           item.text.includes("SET status = 'FAILED'") &&
-          item.values?.includes('API parameter invalid'),
+          item.values?.includes('API parameter invalid (Circle code 155201)'),
+      ),
+    ).toBe(true);
+    expect(
+      queries.some(
+        (item) =>
+          item.text.includes('opes.workspace_notifications') &&
+          item.values?.includes('invoices'),
       ),
     ).toBe(true);
     expect(

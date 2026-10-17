@@ -143,10 +143,7 @@ export class CircleWalletService {
       walletId: input.walletId,
       contractAddress: input.vaultAddress,
       callData: input.callData as `0x${string}`,
-      fee: {
-        type: 'absolute',
-        config: { maxFee: '75', priorityFee: '25', gasLimit: '500000' },
-      },
+      fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
       refId: `opes:payment:${input.executionId}`,
       idempotencyKey: input.executionId,
     });
