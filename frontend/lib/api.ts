@@ -807,6 +807,23 @@ export async function approveDecision(
   );
 }
 
+export async function overrideDecision(
+  token: string,
+  organizationId: string,
+  decisionId: string,
+  input: {
+    action: "PAY" | "DELAY" | "REJECT";
+    reason: string;
+    proposedExecutionAt?: string | null;
+  },
+) {
+  return request<PaymentDecisionResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/decisions/${encodeURIComponent(decisionId)}/override`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
 export async function executeDecision(
   token: string,
   organizationId: string,

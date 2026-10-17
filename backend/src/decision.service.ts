@@ -50,6 +50,12 @@ export interface PlanInvoicePaymentRequest {
   verifiedDiscountDeadline?: string;
 }
 
+export interface OverrideDecisionRequest {
+  action: 'PAY' | 'DELAY' | 'REJECT';
+  reason: string;
+  proposedExecutionAt?: string | null;
+}
+
 export interface DecisionCheckResponse {
   code: string;
   status: CheckStatus;
@@ -346,6 +352,78 @@ export class DecisionService {
 
       return mapApproval(requireRow(inserted.rows[0], 'decision approval'));
     });
+  }
+
+  async overrideDecision(
+    context: TenantContext,
+    decisionId: string,
+    input: OverrideDecisionRequest,
+  ): Promise<PaymentDecisionResponse> {
+    if (context.role !== 'OWNER' && context.role !== 'ADMIN')
+      throw new ForbiddenException('Owner or admin role is required');
+    const targetDecisionId = requireUuid(decisionId, 'decisionId');
+    const action = input.action;
+    if (!['PAY', 'DELAY', 'REJECT'].includes(action))
+      throw new BadRequestException('override action is invalid');
+    const reason = requireText(input.reason, 'reason');
+    const proposedExecutionAt =
+      action === 'DELAY'
+        ? validateOptionalTimestamp(
+            input.proposedExecutionAt,
+            'proposedExecutionAt',
+          )
+        : null;
+    if (
+      action === 'DELAY' &&
+      (proposedExecutionAt === null ||
+        Date.parse(proposedExecutionAt) <= Date.now())
+    )
+      throw new BadRequestException(
+        'proposedExecutionAt must be in the future',
+      );
+    const original = await this.database.withTenant(context, (database) =>
+      getDecision(database, context.organizationId, targetDecisionId),
+    );
+    if (original.source_type !== 'INVOICE')
+      throw new BadRequestException('Only invoice decisions can be overridden');
+    const overridden = await this.evaluateInvoicePayment(context, {
+      invoiceVersionId: original.source_version_id,
+      modelAction: action,
+      modelName: 'owner-override',
+      modelRationale: reason,
+      promptVersion: 'owner-override-v1',
+      route: {
+        liquidityRoute:
+          original.liquidity_route as EvaluateInvoiceDecisionRequest['route']['liquidityRoute'],
+        environment: original.route_environment,
+        chainId: original.route_chain_id,
+        assetSymbol: original.route_asset_symbol,
+      },
+      proposedExecutionAt,
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    });
+    await this.database.withTenant(context, (database) =>
+      database.query(
+        `INSERT INTO opes.audit_events (
+           organization_id,actor_user_id,actor_membership_id,event_type,
+           subject_type,subject_id,payload
+         ) VALUES ($1,$2,$3,'decision.overridden','PAYMENT_DECISION',$4,$5::jsonb)`,
+        [
+          context.organizationId,
+          context.userId,
+          context.membershipId,
+          overridden.id,
+          JSON.stringify({
+            originalDecisionId: original.id,
+            requestedAction: action,
+            derivedAction: overridden.derivedAction,
+            reason,
+            proposedExecutionAt,
+          }),
+        ],
+      ),
+    );
+    return overridden;
   }
 
   async evaluateInvoicePayment(
@@ -889,9 +967,9 @@ function buildChecks(
     amount;
   return [
     check(
-      'model_advisory_only',
+      'decision_advisory_only',
       'PASS',
-      `model proposed ${modelAction}; deterministic checks derive executable action`,
+      `requested action ${modelAction}; deterministic checks derive executable action`,
       { modelAction },
     ),
     check(

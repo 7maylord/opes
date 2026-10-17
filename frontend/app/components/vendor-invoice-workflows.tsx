@@ -14,6 +14,7 @@ import {
   extractInvoiceDocument,
   listWorkspaceRecords,
   matchInvoiceEvidence,
+  overrideDecision,
   recordProcurementEvidence,
   uploadEvidenceDocument,
   verifyInvoice,
@@ -363,6 +364,28 @@ export function VendorInvoiceWorkflows({
     });
   }
 
+  async function submitOverride(
+    action: "PAY" | "DELAY" | "REJECT",
+    reason: string,
+    proposedExecutionAt: string | null,
+  ) {
+    if (decision === null) {
+      toast.error("Generate a decision first.");
+      return;
+    }
+    await run("Decision override recorded", async () => {
+      setDecision(
+        await overrideDecision(token, organizationId, decision.id, {
+          action,
+          reason,
+          proposedExecutionAt,
+        }),
+      );
+      setApproval(null);
+      setExecution(null);
+    });
+  }
+
   async function submitExecution() {
     if (decision === null) return toast.error("Run a decision first.");
     await run("Execution requested", async () => {
@@ -402,7 +425,7 @@ export function VendorInvoiceWorkflows({
       </div> : null}
 
       {stage === "decision" ? <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-5 rounded-2xl bg-white p-5">{obligation?.status !== "ACCEPTED" ? <div className="space-y-4"><div><h4 className="font-semibold">Match purchase and delivery evidence</h4><p className="mt-1 text-sm text-slate-500">Upload the purchase order and the receipt proving that the goods or service were delivered. OPES checks both against the invoice before payment.</p></div><div className="grid gap-4 md:grid-cols-2"><EvidenceFile label="Purchase order" onChange={setPurchaseOrderFile} /><EvidenceFile label="Delivery receipt" onChange={setDeliveryFile} /></div><button type="button" disabled={pending || purchaseOrderFile === null || deliveryFile === null} onClick={submitEvidenceMatch} className="btn">Match evidence</button></div> : <><div><h4 className="font-semibold">Agent decision</h4><p className="mt-1 text-sm text-slate-500">Choose the payment route, then let OPES evaluate the invoice against treasury policy.</p></div><label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label><button disabled={pending} onClick={submitDecision} className="btn">Generate agent decision</button>{decision ? <DecisionSummary decision={decision} dueDate={invoiceDueDate} approval={approval} execution={execution} pending={pending} onApprove={submitApproval} onExecute={submitExecution} /> : <EmptyState>No decision has been generated for this invoice.</EmptyState>}</>}</div>
+        <div className="space-y-5 rounded-2xl bg-white p-5">{obligation?.status !== "ACCEPTED" ? <div className="space-y-4"><div><h4 className="font-semibold">Match purchase and delivery evidence</h4><p className="mt-1 text-sm text-slate-500">Upload the purchase order and the receipt proving that the goods or service were delivered. OPES checks both against the invoice before payment.</p></div><div className="grid gap-4 md:grid-cols-2"><EvidenceFile label="Purchase order" onChange={setPurchaseOrderFile} /><EvidenceFile label="Delivery receipt" onChange={setDeliveryFile} /></div><button type="button" disabled={pending || purchaseOrderFile === null || deliveryFile === null} onClick={submitEvidenceMatch} className="btn">Match evidence</button></div> : <><div><h4 className="font-semibold">Agent decision</h4><p className="mt-1 text-sm text-slate-500">Choose the payment route, then let OPES evaluate the invoice against treasury policy.</p></div><label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label><button disabled={pending} onClick={submitDecision} className="btn">Generate agent decision</button>{decision ? <DecisionSummary decision={decision} dueDate={invoiceDueDate} approval={approval} execution={execution} pending={pending} onApprove={submitApproval} onExecute={submitExecution} onOverride={submitOverride} /> : <EmptyState>No decision has been generated for this invoice.</EmptyState>}</>}</div>
         <aside className="space-y-3 rounded-2xl bg-slate-950 p-5 text-white"><h4 className="font-semibold">Payment state</h4><SummaryRow label="Invoice" value={invoiceNumber} dark /><SummaryRow label="Amount" value={`${invoiceAmount} USDC`} dark /><SummaryRow label="Decision" value={decision?.derivedAction ?? "Not generated"} dark /><SummaryRow label="Approval" value={approval?.status ?? "Waiting"} dark /><SummaryRow label="Execution" value={execution?.status ?? "Waiting"} dark />{execution?.transactionHash ? <p className="break-all rounded-xl bg-white/10 p-3 text-xs">{execution.transactionHash}</p> : null}</aside>
       </div> : null}
     </section>
@@ -422,7 +445,11 @@ function EvidenceFile({ label, onChange }: { label: string; onChange: (file: Fil
   return <label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">{label}<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => onChange(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label>;
 }
 
-function DecisionSummary({ decision, dueDate, approval, execution, pending, onApprove, onExecute }: { decision: PaymentDecisionResponse; dueDate: string; approval: DecisionApprovalResponse | null; execution: PaymentExecutionResponse | null; pending: boolean; onApprove: () => void; onExecute: () => void }) {
+function DecisionSummary({ decision, dueDate, approval, execution, pending, onApprove, onExecute, onOverride }: { decision: PaymentDecisionResponse; dueDate: string; approval: DecisionApprovalResponse | null; execution: PaymentExecutionResponse | null; pending: boolean; onApprove: () => void; onExecute: () => void; onOverride: (action: "PAY" | "DELAY" | "REJECT", reason: string, proposedExecutionAt: string | null) => Promise<void> }) {
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideAction, setOverrideAction] = useState<"PAY" | "DELAY" | "REJECT">("PAY");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideAt, setOverrideAt] = useState("");
   const passed = decision.checks.filter((check) => check.status === "PASS").length;
   const attention = decision.checks.filter((check) => check.status !== "PASS");
   const action = decision.derivedAction;
@@ -434,7 +461,7 @@ function DecisionSummary({ decision, dueDate, approval, execution, pending, onAp
       : action === "ESCALATE"
         ? "The amount exceeds an autonomous policy limit and needs an authorized reviewer."
         : "One or more required controls blocked this payment.";
-  return <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">Decision summary</p><h5 className="mt-1 text-lg font-semibold">{title}</h5><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{explanation}</p></div><Status value={action} /></div><div className="grid gap-2 sm:grid-cols-3"><SummaryMetric label="Policy checks" value={`${passed}/${decision.checks.length} passed`} /><SummaryMetric label="Route" value={`${decision.routeEnvironment} · ${decision.routeAssetSymbol}`} /><SummaryMetric label="Approval" value={action === "ESCALATE" ? approval?.status ?? "Required" : "Not required"} /></div>{attention.length ? <div className="space-y-2">{attention.map((check) => <div key={check.code} className="rounded-xl bg-white p-3 text-sm"><div className="flex justify-between gap-3"><strong>{check.code.replaceAll("_", " ")}</strong><Status value={check.status} /></div><p className="mt-1 text-slate-500">{check.message}</p></div>)}</div> : null}<details><summary className="cursor-pointer text-sm font-semibold text-blue-700">View all {decision.checks.length} policy checks</summary><div className="mt-3 space-y-2">{decision.checks.map((check) => <div key={check.code} className="flex items-center justify-between gap-3 rounded-xl bg-white p-3 text-sm"><span>{check.code.replaceAll("_", " ")}</span><Status value={check.status} /></div>)}</div></details><div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">{action === "PAY" ? <button disabled={pending || execution !== null} onClick={onExecute} className="btn">Request payment</button> : null}{action === "ESCALATE" ? <><button disabled={pending || approval !== null} onClick={onApprove} className="btn">Approve payment</button><button disabled={pending || approval === null || execution !== null} onClick={onExecute} className="btn-secondary">Request payment</button></> : null}{action === "DELAY" ? <p className="text-sm text-slate-600">No approval or payment action is required now.</p> : null}</div></div>;
+  return <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">Decision summary</p><h5 className="mt-1 text-lg font-semibold">{title}</h5><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{explanation}</p></div><Status value={action} /></div><div className="grid gap-2 sm:grid-cols-3"><SummaryMetric label="Policy checks" value={`${passed}/${decision.checks.length} passed`} /><SummaryMetric label="Route" value={`${decision.routeEnvironment} · ${decision.routeAssetSymbol}`} /><SummaryMetric label="Approval" value={action === "ESCALATE" ? approval?.status ?? "Required" : "Not required"} /></div>{attention.length ? <div className="space-y-2">{attention.map((check) => <div key={check.code} className="rounded-xl bg-white p-3 text-sm"><div className="flex justify-between gap-3"><strong>{check.code.replaceAll("_", " ")}</strong><Status value={check.status} /></div><p className="mt-1 text-slate-500">{check.message}</p></div>)}</div> : null}<details><summary className="cursor-pointer text-sm font-semibold text-blue-700">View all {decision.checks.length} policy checks</summary><div className="mt-3 space-y-2">{decision.checks.map((check) => <div key={check.code} className="flex items-center justify-between gap-3 rounded-xl bg-white p-3 text-sm"><span>{check.code.replaceAll("_", " ")}</span><Status value={check.status} /></div>)}</div></details><div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">{action === "PAY" ? <button disabled={pending || execution !== null} onClick={onExecute} className="btn">Request payment</button> : null}{action === "ESCALATE" ? <><button disabled={pending || approval !== null} onClick={onApprove} className="btn">Approve payment</button><button disabled={pending || approval === null || execution !== null} onClick={onExecute} className="btn-secondary">Request payment</button></> : null}{action === "DELAY" ? <p className="text-sm text-slate-600">No approval or payment action is required now.</p> : null}<button type="button" disabled={pending || execution !== null} onClick={() => setOverrideOpen((value) => !value)} className="btn-secondary">Override decision</button></div>{overrideOpen ? <form className="space-y-3 rounded-xl border border-blue-200 bg-white p-4" onSubmit={async (event) => { event.preventDefault(); await onOverride(overrideAction, overrideReason, overrideAction === "DELAY" ? new Date(overrideAt).toISOString() : null); setOverrideOpen(false); }}><label className="block text-sm font-medium text-slate-700">Override action<select value={overrideAction} onChange={(event) => setOverrideAction(event.target.value as typeof overrideAction)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4"><option value="PAY">Pay now</option><option value="DELAY">Reschedule</option><option value="REJECT">Reject</option></select></label>{overrideAction === "DELAY" ? <label className="block text-sm font-medium text-slate-700">New payment time<input type="datetime-local" required value={overrideAt} onChange={(event) => setOverrideAt(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-4" /></label> : null}<Input label="Reason for override" value={overrideReason} onChange={setOverrideReason} required /><button disabled={pending || !overrideReason.trim() || (overrideAction === "DELAY" && !overrideAt)} className="btn">Apply override</button></form> : null}</div>;
 }
 
 function SummaryMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-sm font-semibold">{value}</p></div>; }

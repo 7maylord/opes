@@ -142,6 +142,13 @@ test("journey 3: invoice decision reaches autonomous payment", async ({ page }) 
   await page.getByRole("button", { name: "Match evidence" }).click();
   await page.getByRole("button", { name: "Generate agent decision" }).click();
   await expect(page.getByText("Decision dry run completed")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Payment deferred" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve payment" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Override decision" }).click();
+  await page.getByLabel("Override action").selectOption("PAY");
+  await page.getByLabel("Reason for override").fill("Supplier requested early settlement");
+  await page.getByRole("button", { name: "Apply override" }).click();
+  await expect(page.getByText("Decision override recorded")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Ready for autonomous payment" })).toBeVisible();
   await expect(page.getByText("1/1 passed")).toBeVisible();
   await expect(page.getByText("Not required")).toBeVisible();
@@ -360,6 +367,10 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (path.endsWith("/invoices/verify")) return { id: "obligation-1", versionId: "invoice-version-1", version: 1, ...body, extractionId: body.extractionId ?? null, amountAtomic: "100000000", amountDecimals: 6, obligationKey: "obligation-key", contentHash: "content-hash", status: "PENDING_MATCH" };
   if (path.endsWith("/procurement-evidence")) return { sourceId: body.evidenceType === "PURCHASE_ORDER" ? "po-1" : "receipt-1", versionId: "evidence-version-1", version: 1, evidenceType: body.evidenceType, status: "ACTIVE", totalAmountAtomic: "100000000" };
   if (path.endsWith("/invoices/invoice-version-1/match")) return { id: "match-1", invoiceVersionId: "invoice-version-1", status: "PASS", reasons: [] };
+  if (path.endsWith("/decisions/decision-1/override")) {
+    const route = { liquidityRoute: "OPERATING", environment: "arc-testnet", chainId: 5042002, assetSymbol: "USDC" };
+    return { id: "decision-override-1", sourceType: "PAYABLE_OBLIGATION", sourceId: "obligation-1", sourceVersionId: "invoice-version-1", decisionVersion: 2, paymentMode: "DIRECT", modelAction: body.action, derivedAction: body.action, liquidityRoute: route.liquidityRoute, routeEnvironment: route.environment, routeChainId: route.chainId, routeAssetSymbol: route.assetSymbol, amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "override-context", decisionHash: "overridehash", checks: [{ code: "route", status: "PASS", message: "route supported" }], proposedExecutionAt: body.proposedExecutionAt ?? null, expiresAt: "2026-10-17T16:00:00.000Z" };
+  }
   if (path.endsWith("/decisions/invoice-payment/agent")) {
     const route = body.route as {
       liquidityRoute: string;
@@ -367,7 +378,7 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
       chainId: number;
       assetSymbol: string;
     };
-    return { id: "decision-1", sourceType: "PAYABLE_OBLIGATION", sourceId: "obligation-1", sourceVersionId: body.invoiceVersionId, decisionVersion: 1, paymentMode: "DIRECT", modelAction: "PAY", derivedAction: "PAY", liquidityRoute: route.liquidityRoute, routeEnvironment: route.environment, routeChainId: route.chainId, routeAssetSymbol: route.assetSymbol, amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], expiresAt: body.expiresAt };
+    return { id: "decision-1", sourceType: "PAYABLE_OBLIGATION", sourceId: "obligation-1", sourceVersionId: body.invoiceVersionId, decisionVersion: 1, paymentMode: "DIRECT", modelAction: "DELAY", derivedAction: "DELAY", liquidityRoute: route.liquidityRoute, routeEnvironment: route.environment, routeChainId: route.chainId, routeAssetSymbol: route.assetSymbol, amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], proposedExecutionAt: "2026-11-29T23:59:59.000Z", expiresAt: body.expiresAt };
   }
   if (path.endsWith("/decisions/decision-1/authorize")) return { id: "approval-1", decisionId: "decision-1", decisionVersion: 1, sourceVersionId: "invoice-version-1", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", contextHash: "context", policySnapshotHash: "policy", status: "ACTIVE", expiresAt: "2026-10-04T01:00:00.000Z" };
   if (path.endsWith("/decisions/decision-1/execute")) return { id: "execution-1", decisionId: "decision-1", approvalId: "approval-1", sourceVersionId: "invoice-version-1", decisionHash: "decisionhash", idempotencyKey: "key", contextHash: "context", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", routeEnvironment: "arc-testnet", routeChainId: 5042002, routeAssetSymbol: "USDC", vaultAddress: "0x2000000000000000000000000000000000000002", status: "PENDING", failureReason: null, transactionHash: null };

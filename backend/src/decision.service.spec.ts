@@ -1,6 +1,9 @@
 import { DatabaseService, TenantDatabase } from './database.service';
 import { DecisionService } from './decision.service';
-import type { DecisionCheckResponse } from './decision.service';
+import type {
+  DecisionCheckResponse,
+  PaymentDecisionResponse,
+} from './decision.service';
 import { TenantContext } from './tenant-context';
 
 const context: TenantContext = {
@@ -111,6 +114,52 @@ function treasuryRow() {
 }
 
 describe('DecisionService', () => {
+  it('creates an immutable policy-checked owner override', async () => {
+    const original = {
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      source_type: 'INVOICE',
+      source_version_id: request.invoiceVersionId,
+      liquidity_route: 'OPERATING',
+      route_environment: 'arc-testnet',
+      route_chain_id: 5042002,
+      route_asset_symbol: 'USDC',
+    };
+    const overridden = {
+      id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      derivedAction: 'PAY',
+    } as PaymentDecisionResponse;
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [original] })
+      .mockResolvedValueOnce({ rows: [] });
+    const service = serviceWithQuery(query);
+    const evaluate = jest
+      .spyOn(service, 'evaluateInvoicePayment')
+      .mockResolvedValue(overridden);
+
+    await expect(
+      service.overrideDecision(context, original.id, {
+        action: 'PAY',
+        reason: 'Supplier requested early settlement',
+      }),
+    ).resolves.toBe(overridden);
+    expect(evaluate).toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({
+        invoiceVersionId: request.invoiceVersionId,
+        modelAction: 'PAY',
+        modelName: 'owner-override',
+      }),
+    );
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining("'decision.overridden'"),
+      expect.arrayContaining([
+        overridden.id,
+        expect.stringContaining(original.id),
+      ]),
+    );
+  });
+
   it('creates a payable invoice decision when deterministic checks pass', async () => {
     const query = jest
       .fn()

@@ -15,6 +15,7 @@ import type { PaymentExecutionResponse } from './payment-execution.service';
 import { PaymentExecutionService } from './payment-execution.service';
 import type {
   EvaluateInvoiceDecisionRequest,
+  OverrideDecisionRequest,
   PlanInvoicePaymentRequest,
   PaymentDecisionResponse,
 } from './decision.service';
@@ -32,6 +33,31 @@ export class DecisionController {
     private readonly tenantContexts: TenantContextService,
     private readonly ownerTreasury: OwnerTreasuryService,
   ) {}
+
+  @Post(':decisionId/override')
+  async overrideDecision(
+    @Param('organizationId') organizationId: string,
+    @Param('decisionId') decisionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+    @Body() body: OverrideDecisionRequest,
+  ): Promise<PaymentDecisionResponse> {
+    const token = parseBearerToken(authorization);
+    if (token === undefined)
+      throw new UnauthorizedException('Bearer session token is required');
+    const user = await this.sessions.resolveUser(token);
+    if (user === null)
+      throw new UnauthorizedException('Session is invalid or expired');
+    return this.decisions.overrideDecision(
+      await this.tenantContexts.resolve({
+        organizationId,
+        userId: user.id,
+        requestId: resolveCorrelationId(correlationId),
+      }),
+      decisionId,
+      body,
+    );
+  }
 
   @Post(':decisionId/authorize')
   async approveDecision(
