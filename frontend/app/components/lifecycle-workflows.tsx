@@ -1,8 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useSendTransaction } from "@privy-io/react-auth";
 import { toast } from "sonner";
+import { useArcTransaction } from "@/lib/use-arc-transaction";
 import {
   acceptMilestone,
   cancelEscrow,
@@ -35,7 +35,7 @@ export function LifecycleWorkflows({
   token: string;
   organizationId: string;
 }) {
-  const { sendTransaction } = useSendTransaction();
+  const sendTransaction = useArcTransaction();
   const today = new Date().toISOString().slice(0, 10);
   const [view, setView] = useState<AgreementView>("recurring");
   const [vendors, setVendors] = useState<WorkspaceRecord[]>([]);

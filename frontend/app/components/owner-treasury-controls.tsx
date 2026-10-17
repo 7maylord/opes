@@ -1,27 +1,53 @@
 "use client";
 
-import { useState } from "react";
-import { useSendTransaction } from "@privy-io/react-auth";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirmLifecycleAction, prepareTreasuryAction } from "@/lib/api";
 import { parseDecimalToAtomic } from "@/lib/money";
+import { readArcPaused, useArcTransaction } from "@/lib/use-arc-transaction";
 
 export function OwnerTreasuryControls({
   token,
   organizationId,
+  vaultAddress,
+  escrowAddress,
 }: {
   token: string;
   organizationId: string;
+  vaultAddress: string;
+  escrowAddress: string;
 }) {
-  const { sendTransaction } = useSendTransaction();
+  const sendTransaction = useArcTransaction();
   const [autonomousLimit, setAutonomousLimit] = useState("10");
   const [singleLimit, setSingleLimit] = useState("100");
   const [dailyLimit, setDailyLimit] = useState("500");
-  const [vendorAddress, setVendorAddress] = useState("");
-  const [vendorDailyLimit, setVendorDailyLimit] = useState("100");
   const [recoveryAmount, setRecoveryAmount] = useState("");
-  const [successorAddress, setSuccessorAddress] = useState("");
   const [pending, setPending] = useState(false);
+  const [vaultPaused, setVaultPaused] = useState<boolean | null>(null);
+  const [escrowPaused, setEscrowPaused] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      readArcPaused(vaultAddress),
+      readArcPaused(escrowAddress),
+    ])
+      .then(([vault, escrow]) => {
+        if (!cancelled) {
+          setVaultPaused(vault);
+          setEscrowPaused(escrow);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVaultPaused(null);
+          setEscrowPaused(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [escrowAddress, vaultAddress]);
 
   async function run(
     action: string,
@@ -46,6 +72,10 @@ export function OwnerTreasuryControls({
         prepared.id,
         transaction.hash,
       );
+      if (action === "PAUSE_VAULT") setVaultPaused(true);
+      if (action === "RESUME_VAULT") setVaultPaused(false);
+      if (action === "PAUSE_ESCROW") setEscrowPaused(true);
+      if (action === "RESUME_ESCROW") setEscrowPaused(false);
       toast.success(label);
     } catch (error) {
       toast.error(
@@ -79,7 +109,10 @@ export function OwnerTreasuryControls({
         owner to sign each change before OPES records it.
       </p>
 
-      <section className="rounded-2xl border border-slate-200 p-5">
+      <section
+        className="rounded-2xl border border-slate-200 p-5"
+        title="Limits define which payments the agent can make and which require owner approval."
+      >
         <div className="mb-4">
           <h4 className="font-semibold">Payment limits</h4>
           <p className="mt-1 text-slate-600">
@@ -127,6 +160,7 @@ export function OwnerTreasuryControls({
           title="Treasury vault"
           detail="Pause outgoing invoice and recurring payments in an emergency."
           pending={pending}
+          paused={vaultPaused}
           onResume={() => submit("RESUME_VAULT", "Treasury vault resumed")}
           onPause={() => submit("PAUSE_VAULT", "Treasury vault paused")}
         />
@@ -134,108 +168,41 @@ export function OwnerTreasuryControls({
           title="Milestone escrow"
           detail="Pause milestone funding and releases without stopping direct payments."
           pending={pending}
+          paused={escrowPaused}
           onResume={() => submit("RESUME_ESCROW", "Milestone escrow resumed")}
           onPause={() => submit("PAUSE_ESCROW", "Milestone escrow paused")}
         />
       </div>
 
-      <section className="rounded-2xl border border-slate-200 p-5">
-        <h4 className="font-semibold">Vendor authorization</h4>
-        <p className="mt-1 text-slate-600">
-          Approve a vendor payout wallet and cap how much it may receive each
-          day.
-        </p>
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_16rem]">
-          <TextInput
-            label="Vendor payout address"
-            detail="The verified 0x wallet belonging to this vendor."
-            value={vendorAddress}
-            onChange={setVendorAddress}
-            placeholder="0x…"
-          />
-          <AmountInput
-            label="Vendor daily limit"
-            detail="Amount in USDC."
-            value={vendorDailyLimit}
-            onChange={setVendorDailyLimit}
-          />
-        </div>
-        <button
-          disabled={pending}
-          onClick={() =>
-            submit("SET_VENDOR", "Vendor authorized", () => ({
-              vendor: vendorAddress,
-              allowed: true,
-              dailyAtomic: atomic(vendorDailyLimit),
-            }))
-          }
-          className="btn-secondary mt-4"
-        >
-          Allow vendor
-        </button>
-      </section>
-
       <details className="rounded-2xl border border-amber-200 bg-amber-50/40 p-5">
-        <summary className="cursor-pointer font-semibold text-slate-900">
-          Recovery and ownership
+        <summary
+          className="cursor-pointer font-semibold text-slate-900"
+          title="Recover vault USDC to the recovery wallet after pausing the vault."
+        >
+          Emergency recovery
         </summary>
         <p className="mt-2 text-slate-600">
-          Use these controls only to recover vault funds or transfer contract
-          ownership.
+          Pause the treasury vault first. Recovery sends USDC to the recovery
+          wallet configured when the vault was deployed.
         </p>
-        <div className="mt-5 grid gap-6 lg:grid-cols-2">
-          <div>
-            <AmountInput
-              label="Recovery amount"
-              detail="USDC returned to the configured recovery wallet."
-              value={recoveryAmount}
-              onChange={setRecoveryAmount}
-            />
-            <button
-              disabled={pending}
-              onClick={() =>
-                submit("RECOVER_USDC", "USDC recovered", () => ({
-                  amountAtomic: atomic(recoveryAmount),
-                }))
-              }
-              className="btn-secondary mt-3"
-            >
-              Recover USDC
-            </button>
-          </div>
-          <div>
-            <TextInput
-              label="New owner address"
-              detail="The 0x wallet that will receive contract ownership."
-              value={successorAddress}
-              onChange={setSuccessorAddress}
-              placeholder="0x…"
-            />
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                disabled={pending}
-                onClick={() =>
-                  submit("HANDOVER_VAULT", "Vault handover submitted", () => ({
-                    newAdmin: successorAddress,
-                  }))
-                }
-                className="btn-secondary"
-              >
-                Handover vault
-              </button>
-              <button
-                disabled={pending}
-                onClick={() =>
-                  submit("HANDOVER_ESCROW", "Escrow handover submitted", () => ({
-                    newAdmin: successorAddress,
-                  }))
-                }
-                className="btn-secondary"
-              >
-                Handover escrow
-              </button>
-            </div>
-          </div>
+        <div className="mt-5 max-w-md">
+          <AmountInput
+            label="Recovery amount"
+            detail="USDC returned to the configured recovery wallet."
+            value={recoveryAmount}
+            onChange={setRecoveryAmount}
+          />
+          <button
+            disabled={pending || vaultPaused !== true}
+            onClick={() =>
+              submit("RECOVER_USDC", "USDC recovered", () => ({
+                amountAtomic: atomic(recoveryAmount),
+              }))
+            }
+            className="btn-secondary mt-3"
+          >
+            {vaultPaused === true ? "Recover USDC" : "Pause vault to recover"}
+          </button>
         </div>
       </details>
     </div>
@@ -246,24 +213,29 @@ function ContractState({
   title,
   detail,
   pending,
+  paused,
   onResume,
   onPause,
 }: {
   title: string;
   detail: string;
   pending: boolean;
+  paused: boolean | null;
   onResume: () => void;
   onPause: () => void;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 p-5">
+    <section className="rounded-2xl border border-slate-200 p-5" title={detail}>
       <h4 className="font-semibold">{title}</h4>
+      <p className="mt-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+        {paused === null ? "Checking status" : paused ? "Paused" : "Active"}
+      </p>
       <p className="mt-1 min-h-10 text-slate-600">{detail}</p>
       <div className="mt-4 flex gap-2">
-        <button disabled={pending} onClick={onResume} className="btn">
+        <button disabled={pending || paused !== true} onClick={onResume} className="btn">
           Resume
         </button>
-        <button disabled={pending} onClick={onPause} className="btn-secondary">
+        <button disabled={pending || paused !== false} onClick={onPause} className="btn-secondary">
           Pause
         </button>
       </div>
@@ -299,7 +271,6 @@ function TextInput({
   detail,
   value,
   onChange,
-  placeholder,
   inputMode,
   suffix,
 }: {
@@ -307,7 +278,6 @@ function TextInput({
   detail: string;
   value: string;
   onChange: (value: string) => void;
-  placeholder?: string;
   inputMode?: "decimal";
   suffix?: string;
 }) {
@@ -319,7 +289,6 @@ function TextInput({
         <input
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder}
           inputMode={inputMode}
           className={`min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 outline-none focus:border-cyan-600 focus:ring-2 focus:ring-cyan-100 ${suffix ? "pr-16" : ""}`}
         />

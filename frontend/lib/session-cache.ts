@@ -3,8 +3,6 @@ const tenantPrefix = "opes:tenant:";
 export const sessionStorageKeys = {
   token: "opes:session-token",
   selectedOrganizationId: "opes:selected-organization-id",
-  networkLabel: "opes:network-label",
-  executionLabel: "opes:execution-label",
 } as const;
 
 export function clearTenantCache(storage: Storage, organizationId?: string) {

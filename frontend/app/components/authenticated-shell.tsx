@@ -45,16 +45,6 @@ import { NotificationCenter } from "./notification-center";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
-const networkOptions = [
-  "Arc testnet",
-  "Base Sepolia",
-  "Arbitrum Sepolia",
-  "Celo Sepolia",
-  "Ethereum Sepolia",
-  "Monad testnet",
-];
-
-const executionOptions = ["Simulation", "Live testnet", "Mainnet disabled"];
 const inviteRoles: MembershipRole[] = [
   "ADMIN",
   "APPROVER",
@@ -77,14 +67,6 @@ export function AuthenticatedShell() {
   const [selectedOrganizationId, setSelectedOrganizationId] = useStoredValue(
     sessionStorageKeys.selectedOrganizationId,
     "",
-  );
-  const [networkLabel, setNetworkLabel] = useStoredValue(
-    sessionStorageKeys.networkLabel,
-    networkOptions[0],
-  );
-  const [executionLabel, setExecutionLabel] = useStoredValue(
-    sessionStorageKeys.executionLabel,
-    executionOptions[0],
   );
   const [onboarding, setOnboarding] = useState({
     organizationName: "",
@@ -266,6 +248,16 @@ export function AuthenticatedShell() {
     [agent, members],
   );
   const setupComplete = canExecute(setupChecks);
+  const arcBindings =
+    agent?.resourceBindings.filter(
+      (binding) => binding.environment === "arc-testnet",
+    ) ?? [];
+  const vaultAddress = arcBindings.find(
+    (binding) => binding.resourceType === "business_policy_vault_contract",
+  )?.address;
+  const escrowAddress = arcBindings.find(
+    (binding) => binding.resourceType === "milestone_escrow_contract",
+  )?.address;
   const canManageMembers =
     selectedOrganization?.role === "OWNER" || selectedOrganization?.role === "ADMIN";
 
@@ -399,12 +391,7 @@ export function AuthenticatedShell() {
           />
         ) : (
           <>
-            <CommandHeader
-              networkLabel={networkLabel}
-              executionLabel={executionLabel}
-              setNetworkLabel={setNetworkLabel}
-              setExecutionLabel={setExecutionLabel}
-            />
+            <CommandHeader />
             <div className="grid gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
             <aside className="min-w-0 self-start rounded-2xl bg-[#20251f] p-5 text-white lg:sticky lg:top-6">
               <div className="flex items-start justify-between gap-4">
@@ -439,8 +426,8 @@ export function AuthenticatedShell() {
                 One workspace. Every obligation accounted for.
               </p>
               <nav className="mt-6 flex gap-2 overflow-x-auto lg:grid" aria-label="Workspace views">
-                {([ ["overview", "Overview"], ["notifications", "Notifications"], ["setup", "Getting started"], ["invoices", "Invoices & vendors"], ["agreements", "Agreements"], ["treasury", "Treasury & controls"], ["inbox", "Email inbox"], ["integrations", "Integrations"], ["team", "Team"] ] as const).map(([value, label]) => (
-                  <button key={value} type="button" aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "flex shrink-0 items-center justify-between gap-2 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "flex shrink-0 items-center justify-between gap-2 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}><span>{label}</span>{value === "notifications" && notificationUnread > 0 ? <span className="rounded-full bg-cyan-400 px-2 py-0.5 text-xs font-bold text-slate-950">{notificationUnread > 99 ? "99+" : notificationUnread}</span> : null}</button>
+                {([ ["overview", "Overview", "Workspace status, setup progress, and next actions."], ["notifications", "Notifications", "Alerts for invoices, approvals, scheduled payments, and settlements."], ["setup", "Getting started", "Wallet, contract, funding, and integration setup."], ["invoices", "Invoices & vendors", "Verify vendors and turn invoice evidence into authorized payments."], ["agreements", "Agreements", "Manage recurring payments and milestone escrow agreements."], ["treasury", "Treasury & controls", "Review balances and forecasts, then set payment and emergency controls."], ["inbox", "Email inbox", "Review invoices and attachments received through your OPES address."], ["integrations", "Integrations", "Connect accounting systems and other evidence sources."], ["team", "Team", "Invite members and manage workspace access." ] ] as const).map(([value, label, summary]) => (
+                  <button key={value} type="button" title={summary} aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "flex shrink-0 items-center justify-between gap-2 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "flex shrink-0 items-center justify-between gap-2 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}><span>{label}</span>{value === "notifications" && notificationUnread > 0 ? <span className="rounded-full bg-cyan-400 px-2 py-0.5 text-xs font-bold text-slate-950">{notificationUnread > 99 ? "99+" : notificationUnread}</span> : null}</button>
                 ))}
               </nav>
               <div className="mt-6 border-t border-white/15 pt-4">
@@ -486,7 +473,7 @@ export function AuthenticatedShell() {
 
               {selectedOrganizationId ? <section className="overflow-hidden rounded-3xl bg-slate-950 text-white">
                 <div className="grid gap-6 p-6 lg:grid-cols-[1fr_auto] lg:items-end lg:p-8"><div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Today’s focus</p><h3 className="mt-3 text-3xl font-semibold">{setupComplete ? "Your treasury is ready to act" : "Finish the controls behind every payment"}</h3><p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">{setupComplete ? "Review incoming obligations, evidence and available liquidity from one operating view." : "Complete the wallet, contract and policy steps before the agent can authorize execution."}</p></div><button className="btn bg-[#dce8c6] text-slate-950 hover:bg-white" onClick={() => setWorkspaceView(setupComplete ? "invoices" : "setup")}>{setupComplete ? "Review invoices" : "Continue setup"}</button></div>
-                <div className="grid border-t border-white/10 sm:grid-cols-2 xl:grid-cols-4"><OverviewStat label="Your role" value={selectedOrganization?.role} /><OverviewStat label="Agent state" value={agent?.lifecycleStatus ?? selectedOrganization?.agentLifecycleStatus} /><OverviewStat label="Settlement network" value={networkLabel} /><OverviewStat label="Execution" value={setupComplete ? executionLabel : "Locked"} /></div>
+                <div className="grid border-t border-white/10 sm:grid-cols-2 xl:grid-cols-4"><OverviewStat label="Your role" value={selectedOrganization?.role} /><OverviewStat label="Agent state" value={agent?.lifecycleStatus ?? selectedOrganization?.agentLifecycleStatus} /><OverviewStat label="Treasury network" value="Arc Testnet" /><OverviewStat label="Execution" value={setupComplete ? "Ready" : "Setup required"} /></div>
               </section> : null}
 
               {selectedOrganizationId ? <div className="grid gap-3 md:grid-cols-3"><QuickAction title="Capture an obligation" detail="Add a vendor and verify an invoice." onClick={() => setWorkspaceView("invoices")} /><QuickAction title="Inspect treasury" detail="See liquidity, budget and reserved funds." onClick={() => setWorkspaceView("treasury")} /><QuickAction title="Connect a source" detail="Receive email or accounting records." onClick={() => setWorkspaceView("inbox")} /></div> : null}
@@ -503,7 +490,7 @@ export function AuthenticatedShell() {
               {workspaceView === "setup" && selectedOrganizationId ? <WorkspaceSetup agent={agent} user={user} checks={setupChecks} canManage={canManageMembers} pending={actionPending} onRetry={requestProvisioning} onTreasury={() => setWorkspaceView("treasury")} onInbox={() => setWorkspaceView("inbox")} onIntegrations={() => setWorkspaceView("integrations")} /> : null}
               {workspaceView === "invoices" && selectedOrganizationId ? <VendorInvoiceWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
               {workspaceView === "agreements" && selectedOrganizationId ? <LifecycleWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
-              {workspaceView === "treasury" && selectedOrganizationId ? <><TreasuryAuditViews key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /><Panel title="Owner controls">{setupComplete && selectedOrganization?.role === "OWNER" ? <OwnerTreasuryControls key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : <p className="text-sm text-slate-600">Owner controls unlock after contract setup completes.</p>}</Panel></> : null}
+              {workspaceView === "treasury" && selectedOrganizationId ? <><TreasuryAuditViews key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /><Panel title="Owner controls">{setupComplete && selectedOrganization?.role === "OWNER" && vaultAddress && escrowAddress ? <OwnerTreasuryControls key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} vaultAddress={vaultAddress} escrowAddress={escrowAddress} /> : <p className="text-sm text-slate-600">Owner controls unlock after contract setup completes.</p>}</Panel></> : null}
               {workspaceView === "team" ? <section className="space-y-5" aria-labelledby="team-title">
                 <div><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-700">Access and authority</p><h3 id="team-title" className="mt-2 text-3xl font-semibold">Team</h3><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">Assign operational roles without sharing wallets or credentials. Every member action remains tied to this workspace.</p></div>
                 <div className="grid gap-4 xl:grid-cols-2">
@@ -589,17 +576,7 @@ export function AuthenticatedShell() {
 }
 
 
-function CommandHeader({
-  networkLabel,
-  executionLabel,
-  setNetworkLabel,
-  setExecutionLabel,
-}: {
-  networkLabel: string;
-  executionLabel: string;
-  setNetworkLabel: (value: string) => void;
-  setExecutionLabel: (value: string) => void;
-}) {
+function CommandHeader() {
   return (
     <header className="flex flex-col gap-5 border-b border-[#dedfd5] pb-6 md:flex-row md:items-center md:justify-between">
       <div>
@@ -613,22 +590,10 @@ function CommandHeader({
           Know what is owed, what is available, and what happens next.
         </p>
       </div>
-      <div className="grid gap-3 text-sm sm:grid-cols-2">
-        <LabelSelect
-          light
-          label="Network"
-          value={networkLabel}
-          options={networkOptions}
-          onChange={setNetworkLabel}
-        />
-        <LabelSelect
-          light
-          label="Mode"
-          value={executionLabel}
-          options={executionOptions}
-          onChange={setExecutionLabel}
-        />
-      </div>
+      <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800">
+        <span aria-hidden="true" className="size-2 rounded-full bg-emerald-600" />
+        Arc Testnet
+      </span>
     </header>
   );
 }
