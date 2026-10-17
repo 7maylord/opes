@@ -1,4 +1,23 @@
-import { InvoiceModelService } from './invoice-model.service';
+import {
+  InvoiceModelService,
+  normalizeInvoiceDate,
+} from './invoice-model.service';
+
+describe('normalizeInvoiceDate', () => {
+  it.each([
+    ['2026-10-31', '2026-10-31'],
+    ['2026/10/31', '2026-10-31'],
+    ['31/10/2026', '2026-10-31'],
+    ['10/31/2026', '2026-10-31'],
+    ['31 October 2026', '2026-10-31'],
+    ['October 31st, 2026', '2026-10-31'],
+    ['03rd of November, 2026', '2026-11-03'],
+    ['03/04/2026', null],
+    ['31/02/2026', null],
+  ])('normalizes %s without guessing ambiguous dates', (input, expected) => {
+    expect(normalizeInvoiceDate(input)).toBe(expected);
+  });
+});
 
 describe('InvoiceModelService', () => {
   const originalFetch = global.fetch;
