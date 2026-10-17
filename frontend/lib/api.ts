@@ -491,6 +491,22 @@ export interface PayableObligationResponse {
   status: string;
 }
 
+export interface ProcurementEvidenceResponse {
+  sourceId: string;
+  versionId: string;
+  version: number;
+  evidenceType: string;
+  status: string;
+  totalAmountAtomic: string;
+}
+
+export interface PayableMatchResponse {
+  id: string;
+  invoiceVersionId: string;
+  status: "PASS" | "BLOCKED";
+  reasons: string[];
+}
+
 export interface PaymentDecisionResponse {
   id: string;
   sourceType: string;
@@ -691,6 +707,44 @@ export async function verifyInvoice(
     `/organizations/${encodeURIComponent(organizationId)}/invoices/verify`,
     token,
     { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function recordProcurementEvidence(
+  token: string,
+  organizationId: string,
+  input: {
+    evidenceType: "PURCHASE_ORDER" | "PURCHASE_RECEIPT";
+    vendorId: string;
+    sourceReference: string;
+    currency: "USDC";
+    totalAmount: string;
+    governingSourceId?: string;
+    evidenceDocumentId: string;
+    lineItems: Array<{ description: string; quantity: string; amount: string }>;
+  },
+) {
+  return request<ProcurementEvidenceResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/procurement-evidence`,
+    token,
+    { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function matchInvoiceEvidence(
+  token: string,
+  organizationId: string,
+  invoiceVersionId: string,
+  governingSourceId: string,
+  deliverySourceId: string,
+) {
+  return request<PayableMatchResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/invoices/${encodeURIComponent(invoiceVersionId)}/match`,
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({ governingSourceId, deliverySourceId }),
+    },
   );
 }
 

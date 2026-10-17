@@ -129,6 +129,17 @@ test("journey 3: invoice decision reaches owner-signature approval", async ({ pa
   await page.getByRole("button", { name: "Save reviewed claims" }).click();
   expect(((await confirmedClaims).postDataJSON() as { claims: { dueDate: string } }).claims.dueDate).toBe("2026-11-30");
   await page.getByRole("button", { name: "Verify invoice" }).click();
+  await page.getByLabel("Purchase order").setInputFiles({
+    name: "purchase-order.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("PO for INV-100 for 100 USDC"),
+  });
+  await page.getByLabel("Delivery receipt").setInputFiles({
+    name: "receipt.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Delivery for INV-100 for 100 USDC"),
+  });
+  await page.getByRole("button", { name: "Match evidence" }).click();
   await page.getByRole("button", { name: "Generate agent decision" }).click();
   await expect(page.getByText("Decision dry run completed")).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeEnabled();
@@ -328,10 +339,18 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   if (path.includes("/vendor-addresses/")) return { id: "address-1", vendorId: "vendor-1", environment: "arc-testnet", chainId: 5042002, assetSymbol: "USDC", assetAddress: "0x3600000000000000000000000000000000000000", payoutAddress: "0x4000000000000000000000000000000000000004", status: "VERIFIED_ACTIVE", version: 1, replacesAddressId: null };
   if (path.endsWith("/treasury-actions")) return chainAction("vendor-action", String(body.action));
   if (path.includes("/lifecycle-actions/") && path.endsWith("/confirm")) return { ...chainAction("vendor-action", "SET_VENDOR"), status: "CONFIRMED", transactionHash: body.transactionHash };
-  if (path.endsWith("/evidence-documents/uploads")) return { document: { id: "doc-1", ...body, status: "STAGING", storageKey: "staging/doc-1", metadata: {} }, uploadUrl: "http://mock.api/upload/doc-1", uploadHeaders: { "content-type": "text/plain" } };
-  if (path.endsWith("/evidence-documents/doc-1/finalize")) return { id: "doc-1", documentType: "INVOICE", filename: "invoice.txt", contentType: "text/plain", sizeBytes: 30, sha256Hex: "a".repeat(64), storageKey: "documents/doc-1", status: "VERIFIED", metadata: {} };
+  if (path.endsWith("/evidence-documents/uploads")) {
+    const id = body.documentType === "INVOICE" ? "doc-1" : body.documentType === "RECEIPT" ? "receipt-doc-1" : "po-doc-1";
+    return { document: { id, ...body, status: "STAGING", storageKey: `staging/${id}`, metadata: {} }, uploadUrl: `http://mock.api/upload/${id}`, uploadHeaders: { "content-type": "text/plain" } };
+  }
+  if (path.includes("/evidence-documents/") && path.endsWith("/finalize")) {
+    const id = path.split("/").at(-2)!;
+    return { id, documentType: id === "doc-1" ? "INVOICE" : id === "receipt-doc-1" ? "RECEIPT" : "OTHER", filename: `${id}.txt`, contentType: "text/plain", sizeBytes: 30, sha256Hex: "a".repeat(64), storageKey: `documents/${id}`, status: "VERIFIED", metadata: {} };
+  }
   if (path.endsWith("/evidence-documents/doc-1/extract")) return { id: "extract-1", documentId: "doc-1", schemaName: "invoice", schemaVersion: "2", modelProvider: "deepseek", modelName: "deepseek-flash", sourceSha256Hex: "a".repeat(64), output: { invoiceNumber: "INV-100", amount: "100", payoutAddress: "0x4000000000000000000000000000000000000004" }, status: "ACCEPTED", claimVersionId: "claim-1", reviewStatus: "CONFIRMED" };
-  if (path.endsWith("/invoices/verify")) return { id: "obligation-1", versionId: "invoice-version-1", version: 1, ...body, extractionId: body.extractionId ?? null, amountAtomic: "100000000", amountDecimals: 6, obligationKey: "obligation-key", contentHash: "content-hash", status: "ACCEPTED" };
+  if (path.endsWith("/invoices/verify")) return { id: "obligation-1", versionId: "invoice-version-1", version: 1, ...body, extractionId: body.extractionId ?? null, amountAtomic: "100000000", amountDecimals: 6, obligationKey: "obligation-key", contentHash: "content-hash", status: "PENDING_MATCH" };
+  if (path.endsWith("/procurement-evidence")) return { sourceId: body.evidenceType === "PURCHASE_ORDER" ? "po-1" : "receipt-1", versionId: "evidence-version-1", version: 1, evidenceType: body.evidenceType, status: "ACTIVE", totalAmountAtomic: "100000000" };
+  if (path.endsWith("/invoices/invoice-version-1/match")) return { id: "match-1", invoiceVersionId: "invoice-version-1", status: "PASS", reasons: [] };
   if (path.endsWith("/decisions/invoice-payment/agent")) {
     const route = body.route as {
       liquidityRoute: string;

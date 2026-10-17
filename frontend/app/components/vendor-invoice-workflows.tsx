@@ -13,6 +13,8 @@ import {
   executeDecision,
   extractInvoiceDocument,
   listWorkspaceRecords,
+  matchInvoiceEvidence,
+  recordProcurementEvidence,
   uploadEvidenceDocument,
   verifyInvoice,
   verifyVendorAddress,
@@ -55,6 +57,8 @@ export function VendorInvoiceWorkflows({
   const [invoiceAmount, setInvoiceAmount] = useState("100.00");
   const [invoiceDueDate, setInvoiceDueDate] = useState("");
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [purchaseOrderFile, setPurchaseOrderFile] = useState<File | null>(null);
+  const [deliveryFile, setDeliveryFile] = useState<File | null>(null);
   const [paymentRoute, setPaymentRoute] = useState(paymentRoutes[0].value);
   const [vendor, setVendor] = useState<VendorResponse | null>(null);
   const [vendorEmail, setVendorEmail] = useState("");
@@ -261,6 +265,52 @@ export function VendorInvoiceWorkflows({
     });
   }
 
+  async function submitEvidenceMatch() {
+    if (vendor === null || obligation === null)
+      return toast.error("Verify an invoice first.");
+    if (purchaseOrderFile === null || deliveryFile === null)
+      return toast.error("Choose the purchase order and delivery receipt.");
+    await run("Purchase and delivery evidence matched", async () => {
+      const purchaseOrderDocument = await uploadEvidenceDocument(token, organizationId, {
+        documentType: "OTHER",
+        file: purchaseOrderFile,
+      });
+      const purchaseOrder = await recordProcurementEvidence(token, organizationId, {
+        evidenceType: "PURCHASE_ORDER",
+        vendorId: vendor.id,
+        sourceReference: `PO-${invoiceNumber}`,
+        currency: "USDC",
+        totalAmount: invoiceAmount,
+        evidenceDocumentId: purchaseOrderDocument.id,
+        lineItems: [{ description: "Invoice total", quantity: "1", amount: invoiceAmount }],
+      });
+      const deliveryDocument = await uploadEvidenceDocument(token, organizationId, {
+        documentType: "RECEIPT",
+        file: deliveryFile,
+      });
+      const delivery = await recordProcurementEvidence(token, organizationId, {
+        evidenceType: "PURCHASE_RECEIPT",
+        vendorId: vendor.id,
+        sourceReference: `RECEIPT-${invoiceNumber}`,
+        currency: "USDC",
+        totalAmount: invoiceAmount,
+        governingSourceId: purchaseOrder.sourceId,
+        evidenceDocumentId: deliveryDocument.id,
+        lineItems: [{ description: "Invoice total", quantity: "1", amount: invoiceAmount }],
+      });
+      const match = await matchInvoiceEvidence(
+        token,
+        organizationId,
+        obligation.versionId,
+        purchaseOrder.sourceId,
+        delivery.sourceId,
+      );
+      if (match.status !== "PASS")
+        throw new Error(match.reasons.join(". ") || "Evidence did not match");
+      setObligation({ ...obligation, status: "ACCEPTED" });
+    });
+  }
+
   async function submitApproval() {
     if (decision === null) return toast.error("Run a decision first.");
     await run("Decision approved", async () => {
@@ -310,7 +360,7 @@ export function VendorInvoiceWorkflows({
       </div> : null}
 
       {stage === "decision" ? <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-5 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Agent decision</h4><p className="mt-1 text-sm text-slate-500">Choose the route, inspect every policy check, then authorize the payment.</p></div><label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label><button disabled={pending || obligation === null} onClick={submitDecision} className="btn">Generate agent decision</button>{decision ? <div className="space-y-2">{decision.checks.map((check) => <div key={check.code} className="flex items-start justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm"><div><strong>{check.code.replaceAll("_", " ")}</strong><p className="mt-1 text-slate-500">{check.message}</p></div><Status value={check.status} /></div>)}</div> : <EmptyState>No decision has been generated for this invoice.</EmptyState>}<div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4"><button disabled={pending || decision === null || approval !== null} onClick={submitApproval} className="btn">Approve</button><button disabled={pending || approval === null || execution !== null} onClick={submitExecution} className="btn-secondary">Request execution</button></div></div>
+        <div className="space-y-5 rounded-2xl bg-white p-5">{obligation?.status !== "ACCEPTED" ? <div className="space-y-4"><div><h4 className="font-semibold">Match purchase and delivery evidence</h4><p className="mt-1 text-sm text-slate-500">Upload the purchase order and the receipt proving that the goods or service were delivered. OPES checks both against the invoice before payment.</p></div><div className="grid gap-4 md:grid-cols-2"><EvidenceFile label="Purchase order" onChange={setPurchaseOrderFile} /><EvidenceFile label="Delivery receipt" onChange={setDeliveryFile} /></div><button type="button" disabled={pending || purchaseOrderFile === null || deliveryFile === null} onClick={submitEvidenceMatch} className="btn">Match evidence</button></div> : <><div><h4 className="font-semibold">Agent decision</h4><p className="mt-1 text-sm text-slate-500">Choose the route, inspect every policy check, then authorize the payment.</p></div><label className="block text-sm font-medium text-slate-700">Payment route<select value={paymentRoute} onChange={(event) => setPaymentRoute(event.target.value as typeof paymentRoute)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-4 outline-none focus:ring-2 focus:ring-cyan-500">{paymentRoutes.map((route) => <option key={route.value} value={route.value}>{route.label}</option>)}</select></label><button disabled={pending} onClick={submitDecision} className="btn">Generate agent decision</button>{decision ? <div className="space-y-2">{decision.checks.map((check) => <div key={check.code} className="flex items-start justify-between gap-3 rounded-xl bg-slate-50 p-3 text-sm"><div><strong>{check.code.replaceAll("_", " ")}</strong><p className="mt-1 text-slate-500">{check.message}</p></div><Status value={check.status} /></div>)}</div> : <EmptyState>No decision has been generated for this invoice.</EmptyState>}<div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4"><button disabled={pending || decision === null || approval !== null} onClick={submitApproval} className="btn">Approve</button><button disabled={pending || approval === null || execution !== null} onClick={submitExecution} className="btn-secondary">Request execution</button></div></>}</div>
         <aside className="space-y-3 rounded-2xl bg-slate-950 p-5 text-white"><h4 className="font-semibold">Payment state</h4><SummaryRow label="Invoice" value={invoiceNumber} dark /><SummaryRow label="Amount" value={`${invoiceAmount} USDC`} dark /><SummaryRow label="Decision" value={decision?.derivedAction ?? "Not generated"} dark /><SummaryRow label="Approval" value={approval?.status ?? "Waiting"} dark /><SummaryRow label="Execution" value={execution?.status ?? "Waiting"} dark />{execution?.transactionHash ? <p className="break-all rounded-xl bg-white/10 p-3 text-xs">{execution.transactionHash}</p> : null}</aside>
       </div> : null}
     </section>
@@ -324,6 +374,10 @@ function Input({ label, value, onChange, required = false, suffix }: { label: st
       <span className="relative mt-2 block"><input value={value} inputMode={suffix ? "decimal" : undefined} required={required} onChange={(event) => onChange(event.target.value)} className={`min-h-11 w-full rounded-xl border border-slate-300 px-4 outline-none ring-cyan-500 focus:ring-2 ${suffix ? "pr-16" : ""}`} />{suffix ? <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs font-semibold text-slate-500">{suffix}</span> : null}</span>
     </label>
   );
+}
+
+function EvidenceFile({ label, onChange }: { label: string; onChange: (file: File | null) => void }) {
+  return <label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">{label}<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => onChange(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label>;
 }
 
 function StageButton({ number, label, active, complete, disabled = false, onClick }: { number: string; label: string; active: boolean; complete: boolean; disabled?: boolean; onClick: () => void }) { return <button type="button" role="tab" aria-selected={active} disabled={disabled} onClick={onClick} className={`flex items-center gap-3 rounded-xl border p-3 text-left ${active ? "border-cyan-500 bg-white" : "border-transparent bg-slate-100"} disabled:opacity-45`}><span className={`flex size-7 items-center justify-center rounded-full text-xs font-semibold ${complete ? "bg-emerald-600 text-white" : active ? "bg-cyan-600 text-white" : "bg-white text-slate-600"}`}>{complete ? "✓" : number}</span><span className="text-sm font-semibold">{label}</span></button>; }
