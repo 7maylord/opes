@@ -142,17 +142,14 @@ export class TreasuryReconciliationService {
           from = rewind + 1;
         }
       }
-      let scanTo = finalized;
+      const scanTo = finalized;
       if (from <= scanTo) {
-        let logs: RpcLog[];
-        try {
-          logs = await transferLogs(environment, tokenAddress, from, scanTo);
-        } catch (error) {
-          const providerLimit = suggestedLogRangeEnd(error, from);
-          if (providerLimit === null || providerLimit >= scanTo) throw error;
-          scanTo = providerLimit;
-          logs = await transferLogs(environment, tokenAddress, from, scanTo);
-        }
+        const logs = await transferLogs(
+          environment,
+          tokenAddress,
+          from,
+          scanTo,
+        );
         for (const log of logs) {
           const fromAddress = topicAddress(log.topics[1]);
           const toAddress = topicAddress(log.topics[2]);
@@ -395,22 +392,48 @@ export function suggestedLogRangeEnd(error: unknown, expectedFrom: number) {
   return Number.isSafeInteger(end) && end >= expectedFrom ? end : null;
 }
 
-function transferLogs(
+export async function transferLogs(
   environment: string,
   tokenAddress: string,
   from: number,
   to: number,
-) {
-  return rpc<RpcLog[]>(environment, 'eth_getLogs', [
-    {
-      address: tokenAddress,
-      fromBlock: hex(from),
-      toBlock: hex(to),
-      topics: [TRANSFER_TOPIC],
-    },
-  ]);
+): Promise<RpcLog[]> {
+  const logs: RpcLog[] = [];
+  // Arc requires ranges below 10,000 blocks; other providers may allow less.
+  let pageSize = 9_999;
+  while (from <= to) {
+    const end = Math.min(to, from + pageSize - 1);
+    try {
+      const page = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
+        {
+          address: tokenAddress,
+          fromBlock: hex(from),
+          toBlock: hex(end),
+          topics: [TRANSFER_TOPIC],
+        },
+      ]);
+      logs.push(...page);
+      from = end + 1;
+    } catch (error) {
+      const suggested = suggestedLogRangeEnd(error, from);
+      if (suggested !== null && suggested < end) {
+        pageSize = suggested - from + 1;
+      } else if (
+        error instanceof Error &&
+        /range too large|ranges over \d+ blocks|block range.*(?:limit|exceed)/i.test(
+          error.message,
+        ) &&
+        end > from
+      ) {
+        pageSize = Math.max(1, Math.floor((end - from + 1) / 2));
+      } else {
+        throw error;
+      }
+    }
+  }
+  return logs;
 }
-async function rpc<T>(
+export async function rpc<T>(
   environment: string,
   method: string,
   params: unknown[],
@@ -422,11 +445,18 @@ async function rpc<T>(
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    signal: AbortSignal.timeout(15_000),
   });
-  const body = (await response.json()) as {
+  const body = (await response.json().catch(() => {
+    throw new Error(`${name} ${method}: HTTP ${response.status}, invalid JSON`);
+  })) as {
     result?: T;
     error?: { message: string };
   };
-  if (body.error) throw new Error(body.error.message);
-  return body.result as T;
+  if (body.error) throw new Error(`${name} ${method}: ${body.error.message}`);
+  if (!response.ok)
+    throw new Error(`${name} ${method}: HTTP ${response.status}`);
+  if (body.result === undefined)
+    throw new Error(`${name} ${method}: missing RPC result`);
+  return body.result;
 }

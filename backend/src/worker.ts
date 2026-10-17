@@ -66,11 +66,16 @@ async function bootstrapWorker() {
       logger.error('escrow execution worker failed', error);
     }
   };
+  let reconciliationRunning = false;
   const runReconciliation = async () => {
+    if (reconciliationRunning) return;
+    reconciliationRunning = true;
     try {
       await reconciliation.process();
     } catch (error) {
       logger.error('treasury reconciliation worker failed', error);
+    } finally {
+      reconciliationRunning = false;
     }
   };
   const runAccounting = async () => {
