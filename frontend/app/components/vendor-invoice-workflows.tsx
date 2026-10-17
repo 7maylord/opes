@@ -72,7 +72,7 @@ export function VendorInvoiceWorkflows({
 
   useEffect(() => {
     let cancelled = false;
-    listWorkspaceRecords(token, organizationId, "vendor", { limit: 100 })
+    listWorkspaceRecords(token, organizationId, "vendor", { limit: 50 })
       .then((page) => { if (!cancelled) setVendors(page.items); })
       .catch((reason: unknown) => { if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load vendors"); });
     return () => { cancelled = true; };
