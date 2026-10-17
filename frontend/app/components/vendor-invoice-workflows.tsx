@@ -374,22 +374,22 @@ export function VendorInvoiceWorkflows({
     action: "PAY" | "DELAY" | "REJECT",
     reason: string,
     proposedExecutionAt: string | null,
-  ) {
+  ): Promise<PaymentDecisionResponse | null> {
     if (decision === null) {
       toast.error("Generate a decision first.");
-      return;
+      return null;
     }
-    await run("Decision override recorded", async () => {
-      setDecision(
-        await overrideDecision(token, organizationId, decision.id, {
-          action,
-          reason,
-          proposedExecutionAt,
-        }),
-      );
+    return (await run("Decision override recorded", async () => {
+      const updated = await overrideDecision(token, organizationId, decision.id, {
+        action,
+        reason,
+        proposedExecutionAt,
+      });
+      setDecision(updated);
       setApproval(null);
       setExecution(null);
-    });
+      return updated;
+    })) ?? null;
   }
 
   async function submitExecution() {
@@ -399,11 +399,12 @@ export function VendorInvoiceWorkflows({
     });
   }
 
-  async function run(success: string, work: () => Promise<void>) {
+  async function run<T>(success: string, work: () => Promise<T>): Promise<T | undefined> {
     setPending(true);
     try {
-      await work();
+      const result = await work();
       toast.success(success);
+      return result;
     } catch (reason) {
       toast.error(reason instanceof Error ? reason.message : "Workflow failed");
     } finally {
@@ -451,11 +452,12 @@ function EvidenceFile({ label, onChange }: { label: string; onChange: (file: Fil
   return <label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm font-medium text-slate-700">{label}<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => onChange(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label>;
 }
 
-function DecisionSummary({ decision, dueDate, approval, execution, pending, onApprove, onExecute, onOverride }: { decision: PaymentDecisionResponse; dueDate: string; approval: DecisionApprovalResponse | null; execution: PaymentExecutionResponse | null; pending: boolean; onApprove: () => void; onExecute: () => void; onOverride: (action: "PAY" | "DELAY" | "REJECT", reason: string, proposedExecutionAt: string | null) => Promise<void> }) {
+function DecisionSummary({ decision, dueDate, approval, execution, pending, onApprove, onExecute, onOverride }: { decision: PaymentDecisionResponse; dueDate: string; approval: DecisionApprovalResponse | null; execution: PaymentExecutionResponse | null; pending: boolean; onApprove: () => void; onExecute: () => void; onOverride: (action: "PAY" | "DELAY" | "REJECT", reason: string, proposedExecutionAt: string | null) => Promise<PaymentDecisionResponse | null> }) {
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [overrideAction, setOverrideAction] = useState<"PAY" | "DELAY" | "REJECT">("PAY");
   const [overrideReason, setOverrideReason] = useState("");
   const [overrideAt, setOverrideAt] = useState("");
+  const [confirmedDecisionId, setConfirmedDecisionId] = useState<string | null>(null);
   const [renderedAt] = useState(() => Date.now());
   const passed = decision.checks.filter((check) => check.status === "PASS").length;
   const attention = decision.checks.filter((check) => check.status !== "PASS");
@@ -472,7 +474,7 @@ function DecisionSummary({ decision, dueDate, approval, execution, pending, onAp
       : action === "ESCALATE"
         ? "The amount exceeds an autonomous policy limit and needs an authorized reviewer."
         : "One or more required controls blocked this payment.";
-  return <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">Decision summary</p><h5 className="mt-1 text-lg font-semibold">{title}</h5><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{explanation}</p></div><Status value={action} /></div>{expired ? <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">The decision remains attached to this invoice, but its execution window expired because treasury and policy checks must be refreshed before money moves. Choose an override below to create a fresh decision.</p> : null}<div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4"><SummaryMetric label="Policy checks" value={`${passed}/${decision.checks.length} passed`} /><SummaryMetric label="Proposed payment" value={proposedPayment} /><SummaryMetric label="Route" value={`${decision.routeEnvironment} · ${decision.routeAssetSymbol}`} /><SummaryMetric label="Approval" value={action === "ESCALATE" ? approval?.status ?? "Required" : "Not required"} /></div>{attention.length ? <div className="space-y-2">{attention.map((check) => <div key={check.code} className="rounded-xl bg-white p-3 text-sm"><div className="flex justify-between gap-3"><strong>{check.code.replaceAll("_", " ")}</strong><Status value={check.status} /></div><p className="mt-1 text-slate-500">{check.message}</p></div>)}</div> : null}<details><summary className="cursor-pointer text-sm font-semibold text-blue-700">View all {decision.checks.length} policy checks</summary><div className="mt-3 space-y-2">{decision.checks.map((check) => <div key={check.code} className="flex items-center justify-between gap-3 rounded-xl bg-white p-3 text-sm"><span>{check.code.replaceAll("_", " ")}</span><Status value={check.status} /></div>)}</div></details><div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">{action === "PAY" ? <button disabled={pending || execution !== null || expired} onClick={onExecute} className="btn">Request payment</button> : null}{action === "ESCALATE" ? <><button disabled={pending || approval !== null || expired} onClick={onApprove} className="btn">Approve payment</button><button disabled={pending || approval === null || execution !== null || expired} onClick={onExecute} className="btn-secondary">Request payment</button></> : null}{action === "DELAY" ? <p className="mr-auto text-sm text-slate-600">No approval or payment action is required now.</p> : null}<button type="button" disabled={pending || execution !== null} onClick={() => { setOverrideAction("PAY"); setOverrideOpen(true); }} className="btn-secondary">Pay now</button><button type="button" disabled={pending || execution !== null} onClick={() => { setOverrideAction("DELAY"); setOverrideOpen(true); }} className="btn-secondary">Reschedule</button><button type="button" disabled={pending || execution !== null} onClick={() => { setOverrideAction("REJECT"); setOverrideOpen(true); }} className="btn-secondary">Reject</button></div>{overrideOpen ? <form className="space-y-3 rounded-xl border border-blue-200 bg-white p-4" onSubmit={async (event) => { event.preventDefault(); await onOverride(overrideAction, overrideReason, overrideAction === "DELAY" ? new Date(overrideAt).toISOString() : null); setOverrideOpen(false); }}><div><p className="text-sm font-semibold">{overrideAction === "PAY" ? "Pay this invoice now" : overrideAction === "DELAY" ? "Choose a new payment time" : "Reject this invoice"}</p><p className="mt-1 text-xs text-slate-500">OPES will create a new decision version and rerun policy checks.</p></div>{overrideAction === "DELAY" ? <label className="block text-sm font-medium text-slate-700">New payment time<input type="datetime-local" required value={overrideAt} onChange={(event) => setOverrideAt(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-4" /></label> : null}<Input label="Reason for override" value={overrideReason} onChange={setOverrideReason} required /><button disabled={pending || !overrideReason.trim() || (overrideAction === "DELAY" && !overrideAt)} className="btn">Apply override</button></form> : null}</div>;
+  return <div className="space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">Decision summary</p><h5 className="mt-1 text-lg font-semibold">{title}</h5><p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600">{explanation}</p></div><Status value={action} /></div>{expired ? <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">The decision remains attached to this invoice, but its execution window expired because treasury and policy checks must be refreshed before money moves. Choose an override below to create a fresh decision.</p> : null}<div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4"><SummaryMetric label="Policy checks" value={`${passed}/${decision.checks.length} passed`} /><SummaryMetric label="Proposed payment" value={proposedPayment} /><SummaryMetric label="Route" value={`${decision.routeEnvironment} · ${decision.routeAssetSymbol}`} /><SummaryMetric label="Approval" value={action === "ESCALATE" ? approval?.status ?? "Required" : "Not required"} /></div>{attention.length ? <div className="space-y-2">{attention.map((check) => <div key={check.code} className="rounded-xl bg-white p-3 text-sm"><div className="flex justify-between gap-3"><strong>{check.code.replaceAll("_", " ")}</strong><Status value={check.status} /></div><p className="mt-1 text-slate-500">{check.message}</p></div>)}</div> : null}<details><summary className="cursor-pointer text-sm font-semibold text-blue-700">View all {decision.checks.length} policy checks</summary><div className="mt-3 space-y-2">{decision.checks.map((check) => <div key={check.code} className="flex items-center justify-between gap-3 rounded-xl bg-white p-3 text-sm"><span>{check.code.replaceAll("_", " ")}</span><Status value={check.status} /></div>)}</div></details><div className="flex flex-wrap gap-2 border-t border-slate-200 pt-4">{action === "PAY" && confirmedDecisionId === decision.id ? <button disabled={pending || execution !== null || expired} onClick={onExecute} className="btn">Request payment</button> : null}{action === "ESCALATE" ? <><button disabled={pending || approval !== null || expired} onClick={onApprove} className="btn">Approve payment</button><button disabled={pending || approval === null || execution !== null || expired} onClick={onExecute} className="btn-secondary">Request payment</button></> : null}{action === "DELAY" ? <p className="mr-auto text-sm text-slate-600">No approval or payment action is required now.</p> : null}{action !== "PAY" || confirmedDecisionId !== decision.id ? <button type="button" disabled={pending || execution !== null} onClick={() => { if (action === "PAY" && !expired) { setConfirmedDecisionId(decision.id); setOverrideOpen(false); } else { setOverrideAction("PAY"); setOverrideOpen(true); } }} className="btn">Pay now</button> : null}<button type="button" disabled={pending || execution !== null} onClick={() => { setConfirmedDecisionId(null); setOverrideAction("DELAY"); setOverrideOpen(true); }} className="btn-secondary">Reschedule</button><button type="button" disabled={pending || execution !== null} onClick={() => { setConfirmedDecisionId(null); setOverrideAction("REJECT"); setOverrideOpen(true); }} className="btn-secondary">Reject</button></div>{overrideOpen ? <form className="space-y-3 rounded-xl border border-blue-200 bg-white p-4" onSubmit={async (event) => { event.preventDefault(); const updated = await onOverride(overrideAction, overrideReason, overrideAction === "DELAY" ? new Date(overrideAt).toISOString() : null); if (updated?.derivedAction === "PAY") setConfirmedDecisionId(updated.id); setOverrideOpen(false); }}><div><p className="text-sm font-semibold">{overrideAction === "PAY" ? "Pay this invoice now" : overrideAction === "DELAY" ? "Choose a new payment time" : "Reject this invoice"}</p><p className="mt-1 text-xs text-slate-500">OPES will create a new decision version and rerun policy checks.</p></div>{overrideAction === "DELAY" ? <label className="block text-sm font-medium text-slate-700">New payment time<input type="datetime-local" required value={overrideAt} onChange={(event) => setOverrideAt(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-4" /></label> : null}<Input label="Reason for override" value={overrideReason} onChange={setOverrideReason} required /><button disabled={pending || !overrideReason.trim() || (overrideAction === "DELAY" && !overrideAt)} className="btn">Apply override</button></form> : null}</div>;
 }
 
 function SummaryMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 text-sm font-semibold">{value}</p></div>; }

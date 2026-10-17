@@ -144,6 +144,7 @@ test("journey 3: invoice decision reaches autonomous payment", async ({ page }) 
   await expect(page.getByText("Decision dry run completed")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Payment deferred" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Approve payment" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Request payment" })).toHaveCount(0);
   await page.getByRole("button", { name: "Pay now", exact: true }).click();
   await page.getByLabel("Reason for override").fill("Supplier requested early settlement");
   await page.getByRole("button", { name: "Apply override" }).click();
