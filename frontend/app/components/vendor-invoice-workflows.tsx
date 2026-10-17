@@ -44,9 +44,13 @@ const paymentRoutes = [
 export function VendorInvoiceWorkflows({
   token,
   organizationId,
+  initialInvoiceVersionId,
+  onInitialInvoiceHandled,
 }: {
   token: string;
   organizationId: string;
+  initialInvoiceVersionId: string | null;
+  onInitialInvoiceHandled: () => void;
 }) {
   const sendTransaction = useArcTransaction();
   const [vendorName, setVendorName] = useState("");
@@ -76,6 +80,7 @@ export function VendorInvoiceWorkflows({
   const [execution, setExecution] = useState<PaymentExecutionResponse | null>(null);
   const [pending, setPending] = useState(false);
   const [stage, setStage] = useState<"vendor" | "invoice" | "decision">("vendor");
+  const [focusedInvoiceVersionId, setFocusedInvoiceVersionId] = useState<string | null>(null);
   const vendorReady = vendor !== null && vendorAddress?.status === "VERIFIED_ACTIVE";
   const unpaidInvoices = invoices.filter((item, index, all) => {
     const details = item.details as { obligationId?: string; vendorId?: string };
@@ -88,14 +93,31 @@ export function VendorInvoiceWorkflows({
 
   useEffect(() => {
     let cancelled = false;
-    listWorkspaceRecords(token, organizationId, "vendor", { limit: 50 })
-      .then((page) => { if (!cancelled) setVendors(page.items); })
-      .catch((reason: unknown) => { if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load vendors"); });
-    listWorkspaceRecords(token, organizationId, "invoice", { limit: 50 })
-      .then((page) => { if (!cancelled) setInvoices(page.items); })
-      .catch((reason: unknown) => { if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load invoices"); });
+    Promise.all([
+      listWorkspaceRecords(token, organizationId, "vendor", { limit: 50 }),
+      listWorkspaceRecords(token, organizationId, "invoice", { limit: 50 }),
+    ]).then(([vendorPage, invoicePage]) => {
+      if (cancelled) return;
+      setVendors(vendorPage.items);
+      setInvoices(invoicePage.items);
+      if (!initialInvoiceVersionId) return;
+      const invoice = invoicePage.items.find((item) => item.id === initialInvoiceVersionId);
+      const vendorId = (invoice?.details as { vendorId?: string } | undefined)?.vendorId;
+      const vendorRecord = vendorPage.items.find((item) => item.id === vendorId);
+      if (!invoice || !vendorRecord) return;
+      const details = vendorRecord.details as { version?: number };
+      const addresses = readVendorAddresses(vendorRecord);
+      setSelectedVendorId(vendorRecord.id);
+      setVendor({ id: vendorRecord.id, displayName: vendorRecord.title, status: vendorRecord.status, version: details.version ?? 1, metadata: details });
+      setVendorAddress(addresses.find((item) => item.status === "VERIFIED_ACTIVE") ?? addresses[0] ?? null);
+      setFocusedInvoiceVersionId(invoice.id);
+      setStage("invoice");
+      onInitialInvoiceHandled();
+    }).catch((reason: unknown) => {
+      if (!cancelled) toast.error(reason instanceof Error ? reason.message : "Unable to load invoice workspace");
+    });
     return () => { cancelled = true; };
-  }, [organizationId, token]);
+  }, [initialInvoiceVersionId, onInitialInvoiceHandled, organizationId, token]);
 
   function selectVendor(id: string) {
     setSelectedVendorId(id);
@@ -427,7 +449,7 @@ export function VendorInvoiceWorkflows({
       </div> : null}
 
       {stage === "invoice" ? <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="space-y-4"><div className="rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Unpaid invoices</h4><p className="mt-1 text-sm text-slate-500">Continue an existing invoice for this vendor.</p></div>{unpaidInvoices.length ? <div className="mt-4 space-y-2">{unpaidInvoices.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 p-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.amountAtomic ? formatAtomic(item.amountAtomic, 6) : "0"} {item.assetSymbol ?? "USDC"}</p></div><div className="flex items-center gap-2"><Status value={item.status} /><button type="button" onClick={() => continueInvoice(item)} className="btn-secondary">Continue</button></div></div>)}</div> : <EmptyState>No unpaid invoices for this vendor.</EmptyState>}</div><form onSubmit={submitDocument} className="space-y-5 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">New invoice evidence</h4><p className="mt-1 text-sm text-slate-500">Complete each step in order. Nothing becomes payable until you review the extracted details.</p></div><div><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">1 · Upload source</p><label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm font-medium text-slate-700">Invoice file<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label><button disabled={pending || document !== null} className="btn mt-3">Upload evidence</button></div><div className="border-t border-slate-200 pt-5"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">2 · Extract details</p><button type="button" disabled={pending || document === null || extraction !== null} onClick={submitExtraction} className="btn-secondary">Extract invoice</button></div>{extraction ? <div className="space-y-4 border-t border-slate-200 pt-5"><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">3 · Review claims</p><div className="grid gap-4 md:grid-cols-2"><Input label="Invoice number" value={invoiceNumber} onChange={setInvoiceNumber} required /><Input label="Invoice amount" suffix="USDC" value={invoiceAmount} onChange={setInvoiceAmount} required /><label className="block w-full text-sm font-medium text-slate-700">Due date <span className="font-normal text-slate-400">(optional)</span><input type="date" value={invoiceDueDate} onChange={(event) => setInvoiceDueDate(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-4 outline-none ring-cyan-500 focus:ring-2" /></label></div><button type="button" disabled={pending || !invoiceNumber || !invoiceAmount} onClick={submitClaimConfirmation} className="btn-secondary">Save reviewed claims</button></div> : null}<div className="border-t border-slate-200 pt-5"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">4 · Create invoice record</p><button type="button" disabled={pending || extraction === null || !claimsReviewed} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>{extraction && !claimsReviewed ? <p className="mt-2 text-xs text-slate-500">Save the reviewed claims before verification.</p> : null}</div></form></div>
+        <div className="space-y-4"><div className="rounded-2xl bg-white p-5"><div><h4 className="font-semibold">Unpaid invoices</h4><p className="mt-1 text-sm text-slate-500">Continue an existing invoice for this vendor.</p></div>{unpaidInvoices.length ? <div className="mt-4 space-y-2">{unpaidInvoices.map((item) => <div key={item.id} className={`flex items-center justify-between gap-3 rounded-xl border p-3 ${focusedInvoiceVersionId === item.id ? "border-cyan-500 bg-cyan-50" : "border-slate-200"}`}><div className="min-w-0"><p className="truncate text-sm font-semibold">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.amountAtomic ? formatAtomic(item.amountAtomic, 6) : "0"} {item.assetSymbol ?? "USDC"}</p></div><div className="flex items-center gap-2"><Status value={item.status} /><button type="button" onClick={() => continueInvoice(item)} className="btn-secondary">Continue</button></div></div>)}</div> : <EmptyState>No unpaid invoices for this vendor.</EmptyState>}</div><form onSubmit={submitDocument} className="space-y-5 rounded-2xl bg-white p-5"><div><h4 className="font-semibold">New invoice evidence</h4><p className="mt-1 text-sm text-slate-500">Complete each step in order. Nothing becomes payable until you review the extracted details.</p></div><div><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">1 · Upload source</p><label className="block rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm font-medium text-slate-700">Invoice file<input type="file" accept=".pdf,.json,.jpg,.jpeg,.png,.csv,.txt" required onChange={(event) => setInvoiceFile(event.target.files?.[0] ?? null)} className="mt-3 block w-full text-sm" /></label><button disabled={pending || document !== null} className="btn mt-3">Upload evidence</button></div><div className="border-t border-slate-200 pt-5"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">2 · Extract details</p><button type="button" disabled={pending || document === null || extraction !== null} onClick={submitExtraction} className="btn-secondary">Extract invoice</button></div>{extraction ? <div className="space-y-4 border-t border-slate-200 pt-5"><p className="text-xs font-semibold uppercase tracking-widest text-blue-700">3 · Review claims</p><div className="grid gap-4 md:grid-cols-2"><Input label="Invoice number" value={invoiceNumber} onChange={setInvoiceNumber} required /><Input label="Invoice amount" suffix="USDC" value={invoiceAmount} onChange={setInvoiceAmount} required /><label className="block w-full text-sm font-medium text-slate-700">Due date <span className="font-normal text-slate-400">(optional)</span><input type="date" value={invoiceDueDate} onChange={(event) => setInvoiceDueDate(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 px-4 outline-none ring-cyan-500 focus:ring-2" /></label></div><button type="button" disabled={pending || !invoiceNumber || !invoiceAmount} onClick={submitClaimConfirmation} className="btn-secondary">Save reviewed claims</button></div> : null}<div className="border-t border-slate-200 pt-5"><p className="mb-2 text-xs font-semibold uppercase tracking-widest text-blue-700">4 · Create invoice record</p><button type="button" disabled={pending || extraction === null || !claimsReviewed} onClick={submitInvoiceVerification} className="btn">Verify invoice</button>{extraction && !claimsReviewed ? <p className="mt-2 text-xs text-slate-500">Save the reviewed claims before verification.</p> : null}</div></form></div>
         <aside className="space-y-3 rounded-2xl bg-white p-5"><h4 className="font-semibold">Evidence status</h4>{document ? <StateCard label={document.filename} status={document.status} /> : <EmptyState>Your uploaded file and extraction status will appear here.</EmptyState>}{extraction ? <><StateCard label="Extracted claims" status={extraction.reviewStatus} /><SummaryRow label="Invoice" value={invoiceNumber || "—"} /><SummaryRow label="Amount" value={`${invoiceAmount} USDC`} /><SummaryRow label="Payout" value={payoutAddress ? shortAddress(payoutAddress) : "—"} /></> : null}{obligation ? <StateCard label="Payable obligation" status={obligation.status} /> : null}</aside>
       </div> : null}
 

@@ -309,6 +309,7 @@ function recordsSql(): string {
              e.status, e.amount_atomic::text, e.route_asset_symbol, e.route_chain_id, e.transaction_hash,
              e.requested_at, e.updated_at,
              jsonb_build_object('decisionId', e.decision_id, 'approvalId', e.approval_id,
+               'sourceVersionId', e.source_version_id,
                'destinationAddress', e.destination_address, 'failureReason', e.failure_reason,
                'executionMode', e.execution_mode, 'liquidityActionId', e.liquidity_action_id)
         FROM opes.payment_executions e

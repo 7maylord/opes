@@ -274,6 +274,8 @@ test("workspace notifications surface approvals and open the affected workflow",
   await expect(page.getByRole("heading", { name: "Invoice payment needs approval" })).toBeVisible();
   await page.getByRole("article").filter({ hasText: "Payment execution failed" }).getByRole("button", { name: "Open" }).click();
   await expect(page.getByRole("heading", { name: "From invoice to authorized payment" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /Invoice evidence/ })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("Invoice INV-100", { exact: true })).toBeVisible();
 });
 
 test("workspace history exposes an error and recovers on retry", async ({ page }) => {
@@ -428,7 +430,7 @@ function workspaceResponse(path: string) {
     evidence: [workspaceRecord("doc-1", "evidence", "invoice.txt", "INVOICE", "RECORDED", null, null, {})],
     invoice: [workspaceRecord("invoice-version-1", "invoice", "Invoice INV-100", "Canteen Supplies", "ACCEPTED", "100000000", "USDC", { invoiceNumber: "INV-100", vendorId: "vendor-1", dueAt: "2026-11-30T23:59:59.999Z", latestDecision: { id: "decision-1", sourceType: "INVOICE", sourceId: "obligation-1", sourceVersionId: "invoice-version-1", decisionVersion: 1, paymentMode: "DIRECT", modelAction: "DELAY", derivedAction: "DELAY", liquidityRoute: "OPERATING", routeEnvironment: "arc-testnet", routeChainId: 5042002, routeAssetSymbol: "USDC", amountAtomic: "100000000", destinationAddress: "0x4000000000000000000000000000000000000004", evidenceBundleHash: "hash", policySnapshotHash: "policy", contextHash: "context", decisionHash: "decisionhash", checks: [{ code: "route", status: "PASS", message: "route supported" }], proposedExecutionAt: "2026-11-29T23:59:59.999Z", expiresAt: "2026-10-17T16:00:00.000Z" } })],
     decision: [],
-    execution: [workspaceRecord("execution-1", "execution", "Payment execution", "arc-testnet", "CONFIRMED", "100000000", "USDC", {})],
+    execution: [workspaceRecord("execution-1", "execution", "Payment execution", "arc-testnet", "FAILED", "100000000", "USDC", { sourceVersionId: "invoice-version-1", failureReason: "API parameter invalid" })],
     subscription: [], escrow: [], ledger: [], audit: [], connector: [],
   };
   const items = path.includes(secondOrgId) ? [] : records[kind ?? ""] ?? [];

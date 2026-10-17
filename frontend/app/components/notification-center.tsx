@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { listNotifications, markAllNotificationsRead, markNotificationRead, type NotificationView, type WorkspaceNotificationResponse } from "@/lib/api";
+import { getWorkspaceRecord, listNotifications, markAllNotificationsRead, markNotificationRead, type NotificationView, type WorkspaceNotificationResponse } from "@/lib/api";
 
 export function NotificationCenter({ token, organizationId, onNavigate, onUnreadChange }: {
   token: string; organizationId: string;
-  onNavigate: (view: NotificationView) => void;
+  onNavigate: (view: NotificationView, invoiceVersionId?: string) => void;
   onUnreadChange: (count: number) => void;
 }) {
   const [items, setItems] = useState<WorkspaceNotificationResponse[]>([]);
@@ -29,8 +29,17 @@ export function NotificationCenter({ token, organizationId, onNavigate, onUnread
       setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, readAt: new Date().toISOString() } : entry));
       onUnreadChange(Math.max(0, items.filter((entry) => !entry.readAt).length - 1));
     }
-    const view = item.type === "PAYMENT_FAILED" ? "invoices" : item.actionView;
-    if (view) onNavigate(view);
+    if (item.type === "PAYMENT_FAILED" && item.subjectId) {
+      try {
+        const detail = await getWorkspaceRecord(token, organizationId, "execution", item.subjectId);
+        const invoiceVersionId = detail.record.details.sourceVersionId;
+        onNavigate("invoices", typeof invoiceVersionId === "string" ? invoiceVersionId : undefined);
+      } catch {
+        onNavigate("invoices");
+      }
+      return;
+    }
+    if (item.actionView) onNavigate(item.actionView);
   }
 
   async function readAll() {

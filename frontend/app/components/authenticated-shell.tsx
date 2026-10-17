@@ -84,10 +84,12 @@ export function AuthenticatedShell() {
   const [agent, setAgent] = useState<BusinessAgentDetail | null>(null);
   const [members, setMembers] = useState<OrganizationMember[]>([]);
   const [workspaceView, setWorkspaceView] = useState<NotificationView>("overview");
+  const [focusedInvoiceVersionId, setFocusedInvoiceVersionId] = useState<string | null>(null);
   const [notificationUnread, setNotificationUnread] = useState(0);
   const [actionPending, setActionPending] = useState(false);
   const privyExchangePending = useRef<Promise<AuthSessionResult> | null>(null);
   const isLoading = token !== "" && user === null;
+  const clearFocusedInvoice = useCallback(() => setFocusedInvoiceVersionId(null), []);
 
   useEffect(() => {
     console.info("[OPES auth] state", {
@@ -488,7 +490,7 @@ export function AuthenticatedShell() {
 
               </> : null}
               {workspaceView === "setup" && selectedOrganizationId ? <WorkspaceSetup agent={agent} user={user} checks={setupChecks} canManage={canManageMembers} pending={actionPending} onRetry={requestProvisioning} onTreasury={() => setWorkspaceView("treasury")} onInbox={() => setWorkspaceView("inbox")} onIntegrations={() => setWorkspaceView("integrations")} /> : null}
-              {workspaceView === "invoices" && selectedOrganizationId ? <VendorInvoiceWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
+              {workspaceView === "invoices" && selectedOrganizationId ? <VendorInvoiceWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} initialInvoiceVersionId={focusedInvoiceVersionId} onInitialInvoiceHandled={clearFocusedInvoice} /> : null}
               {workspaceView === "agreements" && selectedOrganizationId ? <LifecycleWorkflows key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /> : null}
               {workspaceView === "treasury" && selectedOrganizationId ? <><TreasuryAuditViews key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} /><Panel title="Owner controls">{setupComplete && selectedOrganization?.role === "OWNER" && vaultAddress && escrowAddress ? <OwnerTreasuryControls key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} vaultAddress={vaultAddress} escrowAddress={escrowAddress} /> : <p className="text-sm text-slate-600">Owner controls unlock after contract setup completes.</p>}</Panel></> : null}
               {workspaceView === "team" ? <section className="space-y-5" aria-labelledby="team-title">
@@ -565,7 +567,7 @@ export function AuthenticatedShell() {
 
               {workspaceView === "inbox" && selectedOrganizationId !== "" ? <EmailInboxScreen key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
               {workspaceView === "integrations" && selectedOrganizationId !== "" ? <AccountingIntegrations key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
-              {workspaceView === "notifications" && selectedOrganizationId !== "" ? <NotificationCenter key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} onNavigate={setWorkspaceView} onUnreadChange={setNotificationUnread} /> : null}
+              {workspaceView === "notifications" && selectedOrganizationId !== "" ? <NotificationCenter key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} onNavigate={(view, invoiceVersionId) => { setFocusedInvoiceVersionId(invoiceVersionId ?? null); setWorkspaceView(view); }} onUnreadChange={setNotificationUnread} /> : null}
             </section>
           </div>
           </>
