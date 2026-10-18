@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { RecurringExecutionService } from './recurring-execution.service';
 import { TenantContext } from './tenant-context';
@@ -86,4 +87,26 @@ describe('owner vault lifecycle confirmation', () => {
       );
     },
   );
+});
+
+describe('recurring mandate preparation', () => {
+  it('reads the billing anchor as date-only text to prevent timezone shifts', async () => {
+    const query = jest.fn().mockResolvedValue({ rows: [] });
+    const database = {
+      withTenant: jest.fn(
+        (_: TenantContext, work: (db: TenantDatabase) => unknown) =>
+          work({ query }),
+      ),
+    } as unknown as DatabaseService;
+
+    await expect(
+      new RecurringExecutionService(database, {} as never, {} as never).prepare(
+        context,
+        'subscription-1',
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    const calls = query.mock.calls as unknown as Array<[string]>;
+    expect(calls[0]?.[0]).toContain('version.anchor_date::text AS anchor_date');
+  });
 });

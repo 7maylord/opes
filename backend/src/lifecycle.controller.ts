@@ -1,6 +1,8 @@
 import {
   Body,
   Controller,
+  Delete,
+  Get,
   Headers,
   Param,
   Post,
@@ -101,6 +103,36 @@ export class LifecycleController {
     );
   }
 
+  @Get('subscriptions/:subscriptionId/actions')
+  async subscriptionActions(
+    @Param('organizationId') organizationId: string,
+    @Param('subscriptionId') subscriptionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.recurring.subscriptionOwnerActions(context, subscriptionId);
+  }
+
+  @Delete('subscriptions/:subscriptionId')
+  async removeSubscriptionDraft(
+    @Param('organizationId') organizationId: string,
+    @Param('subscriptionId') subscriptionId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.lifecycle.removeSubscriptionDraft(context, subscriptionId);
+  }
+
   @Post('subscriptions/:subscriptionId/cancel')
   async cancelSubscription(
     @Param('organizationId') organizationId: string,
@@ -171,6 +203,36 @@ export class LifecycleController {
       ...agreement,
       ownerActions: await this.escrow.prepareAgreement(context, agreement.id),
     };
+  }
+
+  @Get('escrow-agreements/:agreementId/actions')
+  async escrowAgreementActions(
+    @Param('organizationId') organizationId: string,
+    @Param('agreementId') agreementId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.escrow.agreementOwnerActions(context, agreementId);
+  }
+
+  @Delete('escrow-agreements/:agreementId')
+  async removeEscrowDraft(
+    @Param('organizationId') organizationId: string,
+    @Param('agreementId') agreementId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.lifecycle.removeEscrowDraft(context, agreementId);
   }
 
   @Post('escrow-agreements/:agreementId/fund')

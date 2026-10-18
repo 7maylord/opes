@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useArcTransaction } from "@/lib/use-arc-transaction";
 import {
@@ -14,7 +14,11 @@ import {
   createSubscriptionCycle,
   disputeMilestone,
   fundEscrow,
+  getEscrowAgreementActions,
+  getSubscriptionActions,
   listWorkspaceRecords,
+  removeEscrowDraft,
+  removeSubscriptionDraft,
   submitMilestoneEvidence,
   type ChainActionResponse,
   type EscrowAgreementResponse,
@@ -64,22 +68,49 @@ export function LifecycleWorkflows({
   const [evidenceDocumentId, setEvidenceDocumentId] = useState("");
   const [disputeReason, setDisputeReason] = useState("");
 
+  const refreshAgreements = useCallback(async () => {
+    const [subscriptionPage, escrowPage] = await Promise.all([
+      listWorkspaceRecords(token, organizationId, "subscription", { limit: 50 }),
+      listWorkspaceRecords(token, organizationId, "escrow", { limit: 50 }),
+    ]);
+    const records = [...subscriptionPage.items, ...escrowPage.items].sort((a, b) =>
+      b.updatedAt.localeCompare(a.updatedAt),
+    );
+    setRecent(records);
+    setAgreement((current) => {
+      if (!current) return current;
+      const record = records.find(
+        (item) => item.kind === "escrow" && item.id === current.id,
+      );
+      if (!record) return current;
+      const refreshedMilestones = readMilestones(record);
+      return { ...current, status: record.status, milestones: refreshedMilestones.length ? refreshedMilestones : current.milestones };
+    });
+    setSubscription((current) => {
+      if (!current) return current;
+      const record = records.find(
+        (item) => item.kind === "subscription" && item.id === current.id,
+      );
+      return record ? { ...current, status: record.status } : current;
+    });
+  }, [organizationId, token]);
+
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       listWorkspaceRecords(token, organizationId, "vendor", { limit: 50 }),
       listWorkspaceRecords(token, organizationId, "evidence", { limit: 50 }),
-      listWorkspaceRecords(token, organizationId, "subscription", { limit: 10 }),
-      listWorkspaceRecords(token, organizationId, "escrow", { limit: 10 }),
+      listWorkspaceRecords(token, organizationId, "subscription", { limit: 50 }),
+      listWorkspaceRecords(token, organizationId, "escrow", { limit: 50 }),
     ])
       .then(([vendorPage, documentPage, subscriptionPage, escrowPage]) => {
         if (cancelled) return;
         setVendors(vendorPage.items);
         setDocuments(documentPage.items);
         setRecent(
-          [...subscriptionPage.items, ...escrowPage.items]
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-            .slice(0, 6),
+          [...subscriptionPage.items, ...escrowPage.items].sort((a, b) =>
+            b.updatedAt.localeCompare(a.updatedAt),
+          ),
         );
         const firstVendor = vendorPage.items[0];
         const firstAddress = readAddresses(firstVendor)[0]?.id ?? "";
@@ -99,7 +130,14 @@ export function LifecycleWorkflows({
     return () => {
       cancelled = true;
     };
-  }, [organizationId, token]);
+  }, [organizationId, refreshAgreements, token]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      refreshAgreements().catch(() => undefined);
+    }, 10_000);
+    return () => window.clearInterval(interval);
+  }, [refreshAgreements]);
 
   const subscriptionAddresses = useMemo(
     () => readAddresses(vendors.find((vendor) => vendor.id === subscriptionVendorId)),
@@ -122,6 +160,12 @@ export function LifecycleWorkflows({
   }, [milestones]);
   const selectedMilestone = agreement?.milestones.find(
     (item) => item.id === selectedMilestoneId,
+  );
+  const activeAgreements = recent.filter(
+    (item) => !["COMPLETED", "CANCELLED"].includes(item.status),
+  );
+  const completedAgreements = recent.filter((item) =>
+    ["COMPLETED", "CANCELLED"].includes(item.status),
   );
 
   function selectSubscriptionVendor(id: string) {
@@ -220,6 +264,25 @@ export function LifecycleWorkflows({
     });
   }
 
+  function confirmSubscriptionRemoval() {
+    if (!subscription) return;
+    const id = subscription.id;
+    toast.warning("Remove recurring draft?", {
+      description: "This unfinished agreement and its prepared actions will be deleted.",
+      duration: 15_000,
+      action: { label: "Remove", onClick: () => void removeCurrentSubscription(id) },
+      cancel: { label: "Keep", onClick: () => undefined },
+    });
+  }
+
+  async function removeCurrentSubscription(id: string) {
+    await run("Recurring draft removed", async () => {
+      await removeSubscriptionDraft(token, organizationId, id);
+      setSubscription(null);
+      setCycle(null);
+    });
+  }
+
   async function submitEscrow(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
@@ -244,6 +307,25 @@ export function LifecycleWorkflows({
       });
       setAgreement(created);
       setSelectedMilestoneId(created.milestones[0]?.id ?? "");
+    });
+  }
+
+  async function openAgreement(record: WorkspaceRecord) {
+    if (!record.amountAtomic) return;
+    await run("Agreement opened", async () => {
+      if (record.kind === "escrow") {
+        const ownerActions = record.status === "SETUP_REQUIRED" ? await getEscrowAgreementActions(token, organizationId, record.id) : [];
+        const restored = readMilestones(record);
+        setView("escrow");
+        setAgreement({ id: record.id, status: record.status, totalAmountAtomic: record.amountAtomic!, milestones: restored, ownerActions });
+        setSelectedMilestoneId(restored[0]?.id ?? "");
+        setEvidenceDocumentId(restored[0]?.evidenceDocumentId ?? "");
+        return;
+      }
+      const details = record.details;
+      const ownerActions = record.status === "SETUP_REQUIRED" ? await getSubscriptionActions(token, organizationId, record.id) : [];
+      setView("recurring");
+      setSubscription({ id: record.id, versionId: typeof details.versionId === "string" ? details.versionId : "", version: 1, status: record.status, cadence: record.subtitle, anchorDate: typeof details.anchorDate === "string" ? details.anchorDate : "", timezone: typeof details.timezone === "string" ? details.timezone : "UTC", amountAtomic: record.amountAtomic!, ownerActions });
     });
   }
 
@@ -327,6 +409,26 @@ export function LifecycleWorkflows({
     });
   }
 
+  function confirmEscrowRemoval() {
+    if (!agreement) return;
+    const id = agreement.id;
+    toast.warning("Remove escrow draft?", {
+      description: "This unfinished escrow and its milestone drafts will be deleted.",
+      duration: 15_000,
+      action: { label: "Remove", onClick: () => void removeCurrentEscrow(id) },
+      cancel: { label: "Keep", onClick: () => undefined },
+    });
+  }
+
+  async function removeCurrentEscrow(id: string) {
+    await run("Escrow draft removed", async () => {
+      await removeEscrowDraft(token, organizationId, id);
+      setAgreement(null);
+      setSelectedMilestoneId("");
+      setEvidenceDocumentId("");
+    });
+  }
+
   function updateMilestone(updated: EscrowMilestoneResponse) {
     setAgreement((current) =>
       current
@@ -359,6 +461,7 @@ export function LifecycleWorkflows({
     setPending(true);
     try {
       await work();
+      await refreshAgreements();
       toast.success(success);
     } catch (reason) {
       console.error("[OPES agreements] action failed", reason);
@@ -371,19 +474,35 @@ export function LifecycleWorkflows({
   }
 
   return (
-    <section className="space-y-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-widest text-blue-700">Payment agreements</p>
-        <h3 className="mt-2 text-2xl font-semibold">Commit once. Pay by the rules.</h3>
-        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          Create recurring mandates for predictable bills or milestone escrow for
-          work that must be reviewed before funds are released.
-        </p>
+    <section className="space-y-6">
+      <div className="overflow-hidden rounded-3xl bg-slate-950 p-6 text-white md:p-8">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Agreements</p>
+            <h3 className="mt-3 max-w-2xl text-3xl font-semibold tracking-tight">Automate repeat payments. Protect milestone work.</h3>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">Every agreement keeps its schedule, evidence, approval and settlement state in one place.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Metric label="In progress" value={String(activeAgreements.length)} />
+            <Metric label="Completed" value={String(completedAgreements.length)} />
+          </div>
+        </div>
       </div>
 
-      <div className="inline-flex rounded-xl bg-slate-200/70 p-1" role="tablist" aria-label="Agreement type">
-        <AgreementTab active={view === "recurring"} onClick={() => setView("recurring")}>Recurring payments</AgreementTab>
-        <AgreementTab active={view === "escrow"} onClick={() => setView("escrow")}>Milestone escrow</AgreementTab>
+      {activeAgreements.length ? (
+        <section>
+          <div className="flex items-end justify-between gap-4">
+            <div><h4 className="text-lg font-semibold">Active work</h4><p className="mt-1 text-sm text-slate-500">Items that still need setup, funding, evidence, or settlement.</p></div>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {activeAgreements.map((item) => <AgreementCard key={item.id} item={item} onClick={() => openAgreement(item)} />)}
+          </div>
+        </section>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2" role="tablist" aria-label="Agreement type">
+        <AgreementTab active={view === "recurring"} onClick={() => setView("recurring")} title="Recurring payments" description="Create a mandate once and let OPES schedule each cycle." />
+        <AgreementTab active={view === "escrow"} onClick={() => setView("escrow")} title="Milestone escrow" description="Fund work upfront and release each milestone after evidence review." />
       </div>
 
       {view === "recurring" ? (
@@ -411,7 +530,7 @@ export function LifecycleWorkflows({
                 <SummaryRow label="Frequency" value={subscription.cadence.toLowerCase()} />
                 <SummaryRow label="First billing date" value={subscription.anchorDate} />
                 <div className="grid gap-2 pt-2">
-                  {subscription.status === "SETUP_REQUIRED" ? <button type="button" disabled={pending} onClick={activateSubscription} className="btn">Sign and activate mandate</button> : null}
+                  {subscription.status === "SETUP_REQUIRED" ? <><button type="button" disabled={pending} onClick={activateSubscription} className="btn">Sign and activate mandate</button><button type="button" disabled={pending} onClick={confirmSubscriptionRemoval} className="btn-secondary">Remove draft</button></> : null}
                   {subscription.status === "ACTIVE" ? <button type="button" disabled={pending} onClick={submitCycle} className="btn-secondary">Create current billing cycle</button> : null}
                   {subscription.status === "ACTIVE" ? <button type="button" disabled={pending} onClick={() => changeStatus("pause")} className="btn-secondary">Pause recurring payments</button> : null}
                   {subscription.status === "PAUSED" ? <button type="button" disabled={pending} onClick={() => changeStatus("resume")} className="btn">Resume recurring payments</button> : null}
@@ -458,7 +577,7 @@ export function LifecycleWorkflows({
                 <>
                   <SummaryRow label="Total" value={`${formatAtomic(agreement.totalAmountAtomic, 6)} USDC`} />
                   <SummaryRow label="Milestones" value={String(agreement.milestones.length)} />
-                  {agreement.status === "SETUP_REQUIRED" ? <button type="button" disabled={pending} onClick={activateEscrow} className="btn w-full">Sign escrow setup</button> : null}
+                  {agreement.status === "SETUP_REQUIRED" ? <><div className="rounded-xl bg-cyan-50 p-3 text-sm leading-5 text-cyan-900"><strong>One agreement signature</strong><p className="mt-1">A one-time escrow permission may appear first if this workspace has never used milestone escrow.</p></div><button type="button" disabled={pending} onClick={activateEscrow} className="btn w-full">Authorize agreement</button><button type="button" disabled={pending} onClick={confirmEscrowRemoval} className="btn-secondary w-full">Remove draft</button></> : null}
                   {agreement.status === "CREATED" ? <button type="button" disabled={pending} onClick={submitFunding} className="btn w-full">Approve escrow funding</button> : null}
                   {agreement.status === "FUNDING_APPROVED" ? <div className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">Funding is approved. The worker will confirm settlement onchain.</div> : null}
                   {agreement.status !== "CANCELLED" ? <details className="border-t border-slate-200 pt-3"><summary className="cursor-pointer text-sm font-medium">Cancel and refund</summary><button type="button" disabled={pending} onClick={submitEscrowCancel} className="btn-secondary mt-3">Cancel agreement and refund</button></details> : null}
@@ -467,13 +586,13 @@ export function LifecycleWorkflows({
             </AgreementProgress>
 
             <section className="rounded-2xl bg-white p-5">
-              <h4 className="font-semibold">Milestone review</h4>
-              <p className="mt-1 text-sm text-slate-500">Attach evidence, then accept the work or open a dispute.</p>
+              <h4 className="font-semibold">Milestone workspace</h4>
+              <p className="mt-1 text-sm text-slate-500">Select a milestone to see exactly what happens next.</p>
               {agreement ? (
                 <>
                   <div className="mt-4 grid gap-2 sm:grid-cols-2">
                     {agreement.milestones.map((item) => (
-                      <button key={item.id} type="button" onClick={() => setSelectedMilestoneId(item.id)} className={`rounded-xl border p-4 text-left ${selectedMilestoneId === item.id ? "border-cyan-500 bg-cyan-50" : "border-slate-200"}`}>
+                      <button key={item.id} type="button" onClick={() => { setSelectedMilestoneId(item.id); setEvidenceDocumentId(item.evidenceDocumentId ?? ""); setDisputeReason(""); }} className={`rounded-xl border p-4 text-left transition ${selectedMilestoneId === item.id ? "border-cyan-500 bg-cyan-50 ring-2 ring-cyan-100" : "border-slate-200 hover:border-slate-400"}`}>
                         <span className="text-xs text-slate-500">Milestone {item.milestoneIndex + 1}</span>
                         <strong className="mt-1 block">{item.title}</strong>
                         <span className="mt-2 flex justify-between text-sm"><span>{formatAtomic(item.amountAtomic, 6)} USDC</span><Status value={item.status} /></span>
@@ -481,10 +600,10 @@ export function LifecycleWorkflows({
                     ))}
                   </div>
                   {selectedMilestone ? (
-                    <div className="mt-4 space-y-4 rounded-xl border border-slate-200 p-4">
-                      <Select label="Evidence document" value={evidenceDocumentId} onChange={setEvidenceDocumentId} optional options={documents.map((item) => ({ value: item.id, label: item.title }))} />
-                      <button type="button" disabled={pending || !evidenceDocumentId || selectedMilestone.status === "ACCEPTED"} onClick={submitEvidence} className="btn-secondary">Submit milestone evidence</button>
-                      {selectedMilestone.status === "SUBMITTED" ? <div className="grid gap-3 border-t border-slate-200 pt-4 md:grid-cols-[auto_1fr_auto]"><button type="button" disabled={pending} onClick={submitAccept} className="btn">Accept and release</button><Input label="Reason if disputing" value={disputeReason} onChange={setDisputeReason} placeholder="Describe what needs review" /><button type="button" disabled={pending || !disputeReason.trim()} onClick={submitDispute} className="btn-secondary self-end">Open dispute</button></div> : null}
+                    <div className="mt-4 space-y-4 rounded-2xl border border-slate-200 p-5">
+                      <MilestoneNextStep status={selectedMilestone.status} />
+                      {selectedMilestone.status === "PENDING" ? <><Select label="Evidence document" value={evidenceDocumentId} onChange={setEvidenceDocumentId} optional options={documents.map((item) => ({ value: item.id, label: item.title }))} /><button type="button" disabled={pending || !evidenceDocumentId || agreement.status !== "FUNDED"} onClick={submitEvidence} className="btn-secondary">Submit evidence for review</button>{agreement.status !== "FUNDED" ? <p className="text-xs text-amber-700">Fund the escrow before submitting milestone evidence.</p> : null}</> : null}
+                      {selectedMilestone.status === "SUBMITTED" ? <div className="grid gap-3 border-t border-slate-200 pt-4 lg:grid-cols-[auto_1fr_auto]"><button type="button" disabled={pending} onClick={submitAccept} className="btn">Approve & release payment</button><Input label="Reason if disputing" value={disputeReason} onChange={setDisputeReason} placeholder="Describe what needs correction" /><button type="button" disabled={pending || !disputeReason.trim()} onClick={submitDispute} className="btn-secondary self-end">Open dispute</button></div> : null}
                     </div>
                   ) : null}
                 </>
@@ -494,11 +613,12 @@ export function LifecycleWorkflows({
         </div>
       )}
 
-      {recent.length ? (
-        <section className="rounded-2xl bg-white p-5">
-          <h4 className="font-semibold">Recent agreements</h4>
+      {completedAgreements.length ? (
+        <section className="rounded-2xl border border-slate-200 bg-white p-5">
+          <h4 className="font-semibold">Completed agreements</h4>
+          <p className="mt-1 text-sm text-slate-500">Settled escrow work and closed recurring mandates.</p>
           <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-            {recent.map((item) => <div key={item.id} className="rounded-xl border border-slate-200 p-3"><div className="flex items-start justify-between gap-2"><strong className="text-sm">{item.title}</strong><Status value={item.status} /></div><p className="mt-2 text-xs text-slate-500">{item.subtitle}{item.amountAtomic && item.assetSymbol ? ` · ${formatAtomic(item.amountAtomic, 6)} ${item.assetSymbol}` : ""}</p></div>)}
+            {completedAgreements.map((item) => <AgreementCard key={item.id} item={item} />)}
           </div>
         </section>
       ) : null}
@@ -506,8 +626,47 @@ export function LifecycleWorkflows({
   );
 }
 
-function AgreementTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${active ? "bg-white text-slate-950 shadow-sm" : "text-slate-600 hover:text-slate-950"}`}>{children}</button>;
+function AgreementTab({ active, onClick, title, description }: { active: boolean; onClick: () => void; title: string; description: string }) {
+  return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`rounded-2xl border p-5 text-left transition ${active ? "border-cyan-500 bg-cyan-50 ring-2 ring-cyan-100" : "border-slate-200 bg-white hover:border-slate-400"}`}><span className="flex items-center justify-between gap-3"><strong>{title}</strong><span className={`size-2.5 rounded-full ${active ? "bg-cyan-500" : "bg-slate-300"}`} /></span><span className="mt-2 block text-sm leading-5 text-slate-600">{description}</span></button>;
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-28 rounded-2xl border border-white/10 bg-white/10 px-4 py-3"><strong className="block text-2xl">{value}</strong><span className="text-xs text-slate-300">{label}</span></div>;
+}
+
+function AgreementCard({ item, onClick }: { item: WorkspaceRecord; onClick?: () => void }) {
+  const content = <><div className="flex items-start justify-between gap-3"><div><span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{item.kind === "escrow" ? "Milestone escrow" : "Recurring"}</span><h5 className="mt-1 font-semibold text-slate-900">{item.title.replace(/^(Escrow|Subscription) · /, "")}</h5></div><Status value={item.status} /></div><p className="mt-4 text-sm font-medium text-slate-700">{agreementNextStep(item)}</p><div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-500"><span>{item.amountAtomic && item.assetSymbol ? `${formatAtomic(item.amountAtomic, 6)} ${item.assetSymbol}` : item.subtitle}</span><span>{new Date(item.updatedAt).toLocaleDateString()}</span></div></>;
+  return onClick ? <button type="button" onClick={onClick} className="rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-cyan-400 hover:shadow-md" title={`Open agreement · ${agreementNextStep(item)}`}>{content}</button> : <article className="rounded-2xl border border-slate-200 bg-white p-4" title={agreementNextStep(item)}>{content}</article>;
+}
+
+function MilestoneNextStep({ status }: { status: string }) {
+  const copy: Record<string, [string, string, string]> = {
+    PENDING: ["Evidence needed", "Attach the verified delivery or acceptance document for this milestone.", "bg-slate-50 text-slate-700"],
+    SUBMITTED: ["Ready for your review", "Approve to authorize release, or dispute the work with a reason.", "bg-amber-50 text-amber-900"],
+    ACCEPTED: ["Release queued", "Your approval is confirmed. The OPES operator will release the milestone automatically.", "bg-cyan-50 text-cyan-900"],
+    PROCESSING: ["Release in progress", "The onchain milestone transfer is being confirmed.", "bg-cyan-50 text-cyan-900"],
+    RELEASED: ["Paid", "This milestone is settled. The agreement completes after every milestone is released.", "bg-emerald-50 text-emerald-900"],
+    DISPUTED: ["Disputed", "Payment is stopped until the disagreement is resolved.", "bg-rose-50 text-rose-900"],
+    FAILED: ["Release needs attention", "The last settlement attempt failed and requires review.", "bg-rose-50 text-rose-900"],
+  };
+  const [title, description, tone] = copy[status] ?? [status.replaceAll("_", " "), "Review this milestone before continuing.", "bg-slate-50 text-slate-700"];
+  return <div className={`rounded-xl p-4 ${tone}`}><strong className="text-sm">{title}</strong><p className="mt-1 text-sm leading-5 opacity-80">{description}</p></div>;
+}
+
+function agreementNextStep(item: WorkspaceRecord) {
+  if (item.status === "COMPLETED") return "All milestones released";
+  if (item.status === "CANCELLED") return "Agreement closed";
+  if (item.status === "SETUP_REQUIRED") return "Owner authorization required";
+  if (item.status === "CREATED") return "Ready to fund";
+  if (item.status === "FUNDING_APPROVED") return "Funding queued";
+  if (item.status === "FUNDED") {
+    const milestones = item.details.milestones;
+    if (Array.isArray(milestones) && milestones.some((entry) => typeof entry === "object" && entry !== null && (entry as Record<string, unknown>).status === "SUBMITTED")) return "Milestone evidence awaiting review";
+    return "Waiting for milestone evidence";
+  }
+  if (item.status === "PAUSED") return "Recurring payments paused";
+  if (item.kind === "subscription" && item.status === "ACTIVE") return "Recurring mandate active";
+  return item.status.replaceAll("_", " ").toLowerCase();
 }
 
 function AgreementProgress({ title, status, empty, children }: { title: string; status?: string; empty: string; children: React.ReactNode }) {
@@ -554,5 +713,29 @@ function readAddresses(vendor: WorkspaceRecord | undefined): Array<{ id: string;
     return typeof address.id === "string" && typeof address.environment === "string" && typeof address.assetSymbol === "string" && typeof address.payoutAddress === "string" && address.status === "VERIFIED_ACTIVE"
       ? [{ id: address.id, environment: address.environment, assetSymbol: address.assetSymbol, payoutAddress: address.payoutAddress }]
       : [];
+  });
+}
+
+function readMilestones(record: WorkspaceRecord): EscrowMilestoneResponse[] {
+  const milestones = record.details.milestones;
+  if (!Array.isArray(milestones)) return [];
+  return milestones.flatMap((item, index) => {
+    if (typeof item !== "object" || item === null) return [];
+    const milestone = item as Record<string, unknown>;
+    if (
+      typeof milestone.id !== "string" ||
+      typeof milestone.title !== "string" ||
+      typeof milestone.amountAtomic !== "string" ||
+      typeof milestone.status !== "string"
+    ) return [];
+    return [{
+      id: milestone.id,
+      agreementId: record.id,
+      milestoneIndex: index,
+      title: milestone.title,
+      amountAtomic: milestone.amountAtomic,
+      status: milestone.status,
+      evidenceDocumentId: typeof milestone.evidenceDocumentId === "string" ? milestone.evidenceDocumentId : null,
+    }];
   });
 }

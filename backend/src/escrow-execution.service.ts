@@ -25,6 +25,7 @@ import {
   verifyLifecycleExecution,
 } from './lifecycle-chain-evidence';
 import { organizationDomain } from './evm-decision-hash';
+import { recordNotification } from './notification.service';
 import { TenantContext } from './tenant-context';
 import {
   ActionRow,
@@ -43,6 +44,24 @@ export class EscrowExecutionService {
     private readonly circle: CircleWalletService,
     private readonly manifests: FactoryManifestService,
   ) {}
+
+  async agreementOwnerActions(
+    context: TenantContext,
+    agreementId: string,
+  ): Promise<ChainActionResponse[]> {
+    if (context.role !== 'OWNER')
+      throw new ConflictException('Escrow activation requires the owner');
+    return this.database.withTenant(context, async (db) => {
+      const result = await db.query<ActionRow>(
+        `SELECT * FROM opes.lifecycle_chain_actions
+          WHERE organization_id=$1 AND target_type='escrow_agreement' AND target_id=$2
+            AND actor='OWNER' AND action_type IN ('SET_ESCROW_POLICY','CREATE_ESCROW_AGREEMENT')
+          ORDER BY CASE action_type WHEN 'SET_ESCROW_POLICY' THEN 1 ELSE 2 END`,
+        [context.organizationId, agreementId],
+      );
+      return result.rows.map(mapAction);
+    });
+  }
 
   async prepareAgreement(
     context: TenantContext,
@@ -89,21 +108,19 @@ export class EscrowExecutionService {
           completionDeadline,
         ],
       );
-      const actions: Array<[string, string, string]> = [
-        [
-          'SET_ESCROW_LIMITS',
-          row.vault_address,
-          encodeFunctionData({
-            abi: vaultAbi,
-            functionName: 'setLimits',
-            args: [
-              BigInt(row.total_amount_atomic),
-              BigInt(row.total_amount_atomic),
-              BigInt(row.total_amount_atomic),
-            ],
-          }),
-        ],
-        [
+      const policyConfigured = (
+        await db.query<{ configured: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM opes.lifecycle_chain_actions
+              WHERE organization_id=$1 AND action_type='SET_ESCROW_POLICY'
+                AND status='CONFIRMED'
+           ) AS configured`,
+          [context.organizationId],
+        )
+      ).rows[0]?.configured;
+      const actions: Array<[string, string, string]> = [];
+      if (!policyConfigured)
+        actions.push([
           'SET_ESCROW_POLICY',
           row.vault_address,
           encodeFunctionData({
@@ -111,42 +128,28 @@ export class EscrowExecutionService {
             functionName: 'setEscrow',
             args: [row.escrow_address as `0x${string}`, true],
           }),
-        ],
-        [
-          'SET_ESCROW_VENDOR',
-          row.vault_address,
-          encodeFunctionData({
-            abi: vaultAbi,
-            functionName: 'setVendor',
-            args: [
-              row.payout_address as `0x${string}`,
-              true,
-              BigInt(row.total_amount_atomic),
-            ],
-          }),
-        ],
-        [
-          'CREATE_ESCROW_AGREEMENT',
-          row.escrow_address,
-          encodeFunctionData({
-            abi: escrowAbi,
-            functionName: 'createAgreement',
-            args: [
-              chainId,
-              row.payout_address as `0x${string}`,
-              row.vault_address as `0x${string}`,
-              keccak256(stringToHex(`opes:terms:${agreementId}`)),
-              row.amounts.map(BigInt),
-              row.titles.map((title, index) =>
-                keccak256(stringToHex(`${index}:${title}`)),
-              ),
-              true,
-              BigInt(fundingDeadline),
-              BigInt(completionDeadline),
-            ],
-          }),
-        ],
-      ];
+        ]);
+      actions.push([
+        'CREATE_ESCROW_AGREEMENT',
+        row.escrow_address,
+        encodeFunctionData({
+          abi: escrowAbi,
+          functionName: 'createAgreement',
+          args: [
+            chainId,
+            row.payout_address as `0x${string}`,
+            row.vault_address as `0x${string}`,
+            keccak256(stringToHex(`opes:terms:${agreementId}`)),
+            row.amounts.map(BigInt),
+            row.titles.map((title, index) =>
+              keccak256(stringToHex(`${index}:${title}`)),
+            ),
+            true,
+            BigInt(fundingDeadline),
+            BigInt(completionDeadline),
+          ],
+        }),
+      ]);
       const output: ChainActionResponse[] = [];
       for (const [type, to, data] of actions)
         output.push(
@@ -444,6 +447,21 @@ export class EscrowExecutionService {
             },
           );
       }
+      const notification = escrowOwnerNotification(action.action_type);
+      if (notification)
+        await recordNotification(db, {
+          organizationId: context.organizationId,
+          type: notification.type,
+          priority: notification.priority,
+          title: notification.title,
+          body: notification.body,
+          subjectType: action.action_type.includes('MILESTONE')
+            ? 'escrow_milestone'
+            : 'escrow_agreement',
+          subjectId: action.target_id,
+          actionView: 'agreements',
+          dedupeKey: `escrow-owner-action:${actionId}`,
+        });
     });
   }
 
@@ -503,6 +521,7 @@ export class EscrowExecutionService {
         receipt,
       );
       await this.database.withWorker(async (db) => {
+        let completedAgreementId: string | undefined;
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status='CONFIRMED',transaction_hash=$2,confirmed_at=now(),updated_at=now() WHERE id=$1`,
           [action.id, transactionHash],
@@ -517,11 +536,13 @@ export class EscrowExecutionService {
             `UPDATE opes.escrow_milestones SET status='RELEASED',transaction_hash=$3,updated_at=now() WHERE organization_id=$1 AND id=$2`,
             [action.organization_id, action.target_id, transactionHash],
           );
-        if (action.action_type === 'RELEASE_ESCROW_MILESTONE')
-          await db.query(
-            `UPDATE opes.escrow_agreements agreement SET status='COMPLETED',updated_at=now() WHERE agreement.organization_id=$1 AND agreement.id=(SELECT agreement_id FROM opes.escrow_milestones WHERE organization_id=$1 AND id=$2) AND NOT EXISTS (SELECT 1 FROM opes.escrow_milestones milestone WHERE milestone.organization_id=agreement.organization_id AND milestone.agreement_id=agreement.id AND milestone.status<>'RELEASED')`,
+        if (action.action_type === 'RELEASE_ESCROW_MILESTONE') {
+          const completed = await db.query<{ id: string }>(
+            `UPDATE opes.escrow_agreements agreement SET status='COMPLETED',updated_at=now() WHERE agreement.organization_id=$1 AND agreement.id=(SELECT agreement_id FROM opes.escrow_milestones WHERE organization_id=$1 AND id=$2) AND NOT EXISTS (SELECT 1 FROM opes.escrow_milestones milestone WHERE milestone.organization_id=agreement.organization_id AND milestone.agreement_id=agreement.id AND milestone.status<>'RELEASED') RETURNING agreement.id`,
             [action.organization_id, action.target_id],
           );
+          completedAgreementId = completed.rows[0]?.id;
+        }
         if (action.action_type === 'REFUND_ESCROW') {
           await db.query(
             `UPDATE opes.escrow_milestones SET status='REFUNDED',transaction_hash=$3,updated_at=now() WHERE organization_id=$1 AND agreement_id=$2 AND status NOT IN ('DISPUTED','RELEASED','REFUNDED')`,
@@ -534,17 +555,55 @@ export class EscrowExecutionService {
           transactionHash,
           evidence.amountAtomic,
         );
+        const settled = escrowExecutionNotification(action.action_type);
+        if (settled)
+          await recordNotification(db, {
+            organizationId: action.organization_id,
+            type: settled.type,
+            priority: 'SUCCESS',
+            title: settled.title,
+            body: settled.body,
+            subjectType: settled.subjectType,
+            subjectId: action.target_id,
+            actionView: 'agreements',
+            dedupeKey: `escrow-execution:${action.id}`,
+            metadata: { transactionHash },
+          });
+        if (completedAgreementId)
+          await recordNotification(db, {
+            organizationId: action.organization_id,
+            type: 'ESCROW_COMPLETED',
+            priority: 'SUCCESS',
+            title: 'Escrow agreement completed',
+            body: 'Every milestone has been released and the agreement is fully settled.',
+            subjectType: 'escrow_agreement',
+            subjectId: completedAgreementId,
+            actionView: 'agreements',
+            dedupeKey: `escrow-completed:${completedAgreementId}`,
+          });
       });
     } catch (error) {
-      await this.database.withWorker((db) =>
-        db.query(
+      const reason =
+        error instanceof Error ? error.message : 'Escrow execution failed';
+      await this.database.withWorker(async (db) => {
+        await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status='FAILED',failure_reason=$2,updated_at=now() WHERE id=$1`,
-          [
-            action.id,
-            error instanceof Error ? error.message : 'Escrow execution failed',
-          ],
-        ),
-      );
+          [action.id, reason],
+        );
+        await recordNotification(db, {
+          organizationId: action.organization_id,
+          type: 'ESCROW_EXECUTION_FAILED',
+          priority: 'WARNING',
+          title: 'Escrow action failed',
+          body: reason.slice(0, 500),
+          subjectType: action.action_type.includes('MILESTONE')
+            ? 'escrow_milestone'
+            : 'escrow_agreement',
+          subjectId: action.target_id,
+          actionView: 'agreements',
+          dedupeKey: `escrow-execution-failed:${action.id}`,
+        });
+      });
     }
   }
 
@@ -698,6 +757,70 @@ export class EscrowExecutionService {
       );
     });
   }
+}
+
+function escrowOwnerNotification(actionType: string) {
+  if (actionType === 'CREATE_ESCROW_AGREEMENT')
+    return {
+      type: 'ESCROW_READY_TO_FUND',
+      priority: 'ACTION' as const,
+      title: 'Escrow agreement authorized',
+      body: 'The agreement is onchain and ready for funding approval.',
+    };
+  if (actionType === 'APPROVE_ESCROW_FUNDING')
+    return {
+      type: 'ESCROW_FUNDING_QUEUED',
+      priority: 'INFO' as const,
+      title: 'Escrow funding queued',
+      body: 'Funding was approved. OPES will move the authorized amount into escrow.',
+    };
+  if (actionType === 'APPROVE_ESCROW_MILESTONE')
+    return {
+      type: 'MILESTONE_RELEASE_QUEUED',
+      priority: 'INFO' as const,
+      title: 'Milestone payment queued',
+      body: 'The milestone was approved. OPES will release its payment automatically.',
+    };
+  if (actionType === 'DISPUTE_ESCROW_MILESTONE')
+    return {
+      type: 'MILESTONE_DISPUTED',
+      priority: 'WARNING' as const,
+      title: 'Milestone disputed',
+      body: 'Payment is stopped while the milestone dispute is reviewed.',
+    };
+  if (actionType === 'CANCEL_ESCROW_AGREEMENT')
+    return {
+      type: 'ESCROW_CANCELLED',
+      priority: 'WARNING' as const,
+      title: 'Escrow agreement cancelled',
+      body: 'Any unreleased escrow balance has been queued for refund.',
+    };
+  return null;
+}
+
+function escrowExecutionNotification(actionType: string) {
+  if (actionType === 'FUND_ESCROW')
+    return {
+      type: 'ESCROW_FUNDED',
+      title: 'Escrow funded',
+      body: 'Funds are secured and the first milestone can now receive evidence.',
+      subjectType: 'escrow_agreement',
+    };
+  if (actionType === 'RELEASE_ESCROW_MILESTONE')
+    return {
+      type: 'MILESTONE_RELEASED',
+      title: 'Milestone payment released',
+      body: 'The approved milestone was paid successfully.',
+      subjectType: 'escrow_milestone',
+    };
+  if (actionType === 'REFUND_ESCROW')
+    return {
+      type: 'ESCROW_REFUNDED',
+      title: 'Escrow refund completed',
+      body: 'The unreleased escrow balance was returned to the treasury vault.',
+      subjectType: 'escrow_agreement',
+    };
+  return null;
 }
 
 export function escrowDecisionHash(

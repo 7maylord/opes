@@ -212,6 +212,46 @@ describe('LifecycleService', () => {
         { milestoneIndex: 1, amountAtomic: '6000000', status: 'PENDING' },
       ],
     });
+    expect(query).toHaveBeenNthCalledWith(
+      3,
+      expect.stringContaining(
+        "VALUES ($1, $2, $3, 'SETUP_REQUIRED', $4, $5, $6)",
+      ),
+      expect.any(Array),
+    );
+    expect(
+      query.mock.calls.some(([sql]) =>
+        String(sql).includes('opes.workspace_notifications'),
+      ),
+    ).toBe(true);
+  });
+
+  it('removes only an escrow draft with no confirmed onchain agreement', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({
+        rows: [{ id: '55555555-5555-5555-5555-555555555555' }],
+      })
+      .mockResolvedValue({ rows: [] });
+    const service = serviceWithQuery(query);
+
+    await expect(
+      service.removeEscrowDraft(
+        context,
+        '55555555-5555-5555-5555-555555555555',
+      ),
+    ).resolves.toEqual({ id: '55555555-5555-5555-5555-555555555555' });
+    expect(query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        "action_type='CREATE_ESCROW_AGREEMENT' AND action.status='CONFIRMED'",
+      ),
+      [context.organizationId, '55555555-5555-5555-5555-555555555555'],
+    );
+    expect(query).toHaveBeenLastCalledWith(
+      expect.stringContaining('DELETE FROM opes.escrow_agreements'),
+      [context.organizationId, '55555555-5555-5555-5555-555555555555'],
+    );
   });
 
   it('accepts only submitted milestone evidence', async () => {

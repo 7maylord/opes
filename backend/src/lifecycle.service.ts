@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { normalizeDateInput } from './date';
+import { recordNotification } from './notification.service';
 import { TenantContext } from './tenant-context';
 
 const USDC_DECIMALS = 6;
@@ -223,6 +224,17 @@ export class LifecycleService {
         ],
       );
       const versionRow = requireRow(version.rows[0], 'subscription version');
+      await recordNotification(database, {
+        organizationId: context.organizationId,
+        type: 'RECURRING_SETUP_REQUIRED',
+        priority: 'ACTION',
+        title: 'Recurring agreement needs authorization',
+        body: 'Review and authorize the recurring mandate before scheduled payments can begin.',
+        subjectType: 'subscription',
+        subjectId: row.id,
+        actionView: 'agreements',
+        dedupeKey: `recurring-setup:${row.id}`,
+      });
 
       return {
         id: row.id,
@@ -300,7 +312,59 @@ export class LifecycleService {
         ],
       );
 
-      return mapCycle(requireRow(inserted.rows[0], 'subscription cycle'));
+      const cycle = requireRow(inserted.rows[0], 'subscription cycle');
+      await recordNotification(database, {
+        organizationId: context.organizationId,
+        type: 'RECURRING_PAYMENT_SCHEDULED',
+        priority: 'INFO',
+        title: 'Recurring payment scheduled',
+        body: `The next payment cycle is scheduled for ${start}.`,
+        subjectType: 'subscription_cycle',
+        subjectId: cycle.id,
+        actionView: 'agreements',
+        dedupeKey: `recurring-scheduled:${cycle.id}`,
+      });
+      return mapCycle(cycle);
+    });
+  }
+
+  async removeSubscriptionDraft(
+    context: TenantContext,
+    subscriptionId: string,
+  ): Promise<{ id: string }> {
+    requireOwnerOrAdmin(context);
+    const id = requireUuid(subscriptionId, 'subscriptionId');
+    return this.database.withTenant(context, async (database) => {
+      const draft = await database.query<{ id: string }>(
+        `SELECT subscription.id FROM opes.subscriptions subscription
+          WHERE subscription.organization_id=$1 AND subscription.id=$2
+            AND subscription.status='SETUP_REQUIRED'
+            AND NOT EXISTS (
+              SELECT 1 FROM opes.lifecycle_chain_actions action
+               WHERE action.organization_id=subscription.organization_id
+                 AND action.target_type='subscription' AND action.target_id=subscription.id
+                 AND action.action_type='CREATE_RECURRING_MANDATE' AND action.status='CONFIRMED'
+            ) FOR UPDATE`,
+        [context.organizationId, id],
+      );
+      requireRow(draft.rows[0], 'removable subscription draft');
+      await database.query(
+        `DELETE FROM opes.lifecycle_chain_actions WHERE organization_id=$1 AND target_type='subscription' AND target_id=$2 AND status<>'CONFIRMED'`,
+        [context.organizationId, id],
+      );
+      await database.query(
+        `DELETE FROM opes.subscription_cycles WHERE organization_id=$1 AND subscription_id=$2`,
+        [context.organizationId, id],
+      );
+      await database.query(
+        `DELETE FROM opes.subscription_versions WHERE organization_id=$1 AND subscription_id=$2`,
+        [context.organizationId, id],
+      );
+      await database.query(
+        `DELETE FROM opes.subscriptions WHERE organization_id=$1 AND id=$2`,
+        [context.organizationId, id],
+      );
+      return { id };
     });
   }
 
@@ -374,11 +438,12 @@ export class LifecycleService {
             organization_id,
             vendor_id,
             vendor_address_id,
+            status,
             total_amount_atomic,
             agreement_document_id,
             created_by_membership_id
           )
-          VALUES ($1, $2, $3, $4, $5, $6)
+          VALUES ($1, $2, $3, 'SETUP_REQUIRED', $4, $5, $6)
           RETURNING id, status, total_amount_atomic
         `,
         [
@@ -422,6 +487,17 @@ export class LifecycleService {
         );
         milestoneRows.push(requireRow(inserted.rows[0], 'escrow milestone'));
       }
+      await recordNotification(database, {
+        organizationId: context.organizationId,
+        type: 'ESCROW_SETUP_REQUIRED',
+        priority: 'ACTION',
+        title: 'Escrow agreement needs authorization',
+        body: 'Review the milestones and authorize the agreement before funding it.',
+        subjectType: 'escrow_agreement',
+        subjectId: agreementRow.id,
+        actionView: 'agreements',
+        dedupeKey: `escrow-setup:${agreementRow.id}`,
+      });
 
       return {
         id: agreementRow.id,
@@ -429,6 +505,42 @@ export class LifecycleService {
         totalAmountAtomic: agreementRow.total_amount_atomic,
         milestones: milestoneRows.map(mapMilestone),
       };
+    });
+  }
+
+  async removeEscrowDraft(
+    context: TenantContext,
+    agreementId: string,
+  ): Promise<{ id: string }> {
+    requireOwnerOrAdmin(context);
+    const id = requireUuid(agreementId, 'agreementId');
+    return this.database.withTenant(context, async (database) => {
+      const draft = await database.query<{ id: string }>(
+        `SELECT agreement.id FROM opes.escrow_agreements agreement
+          WHERE agreement.organization_id=$1 AND agreement.id=$2
+            AND agreement.status='SETUP_REQUIRED'
+            AND NOT EXISTS (
+              SELECT 1 FROM opes.lifecycle_chain_actions action
+               WHERE action.organization_id=agreement.organization_id
+                 AND action.target_type='escrow_agreement' AND action.target_id=agreement.id
+                 AND action.action_type='CREATE_ESCROW_AGREEMENT' AND action.status='CONFIRMED'
+            ) FOR UPDATE`,
+        [context.organizationId, id],
+      );
+      requireRow(draft.rows[0], 'removable escrow draft');
+      await database.query(
+        `DELETE FROM opes.lifecycle_chain_actions WHERE organization_id=$1 AND target_type='escrow_agreement' AND target_id=$2 AND status<>'CONFIRMED'`,
+        [context.organizationId, id],
+      );
+      await database.query(
+        `DELETE FROM opes.escrow_milestones WHERE organization_id=$1 AND agreement_id=$2`,
+        [context.organizationId, id],
+      );
+      await database.query(
+        `DELETE FROM opes.escrow_agreements WHERE organization_id=$1 AND id=$2`,
+        [context.organizationId, id],
+      );
+      return { id };
     });
   }
 
@@ -462,7 +574,20 @@ export class LifecycleService {
         `,
         [context.organizationId, targetMilestoneId, documentId],
       );
-      return mapMilestone(requireRow(updated.rows[0], 'escrow milestone'));
+      const milestone = requireRow(updated.rows[0], 'escrow milestone');
+      await recordNotification(database, {
+        organizationId: context.organizationId,
+        type: 'MILESTONE_REVIEW_REQUIRED',
+        priority: 'ACTION',
+        title: `${milestone.title} is ready for review`,
+        body: 'Milestone evidence was submitted. Approve the work to release payment, or open a dispute.',
+        subjectType: 'escrow_milestone',
+        subjectId: milestone.id,
+        actionView: 'agreements',
+        dedupeKey: `milestone-review:${milestone.id}:${documentId}`,
+        metadata: { agreementId: milestone.agreement_id },
+      });
+      return mapMilestone(milestone);
     });
   }
 

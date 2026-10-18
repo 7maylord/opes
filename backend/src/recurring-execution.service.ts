@@ -15,6 +15,7 @@ import { CircleWalletService } from './circle-wallet.service';
 import { DatabaseService, TenantDatabase } from './database.service';
 import { organizationDomain } from './evm-decision-hash';
 import { FactoryManifestService } from './factory-manifest.service';
+import { recordNotification } from './notification.service';
 import {
   CircleLifecycleTransaction,
   LifecycleExecutionEvidence,
@@ -74,6 +75,23 @@ export class RecurringExecutionService {
     private readonly manifests: FactoryManifestService,
   ) {}
 
+  async subscriptionOwnerActions(
+    context: TenantContext,
+    subscriptionId: string,
+  ): Promise<ChainActionResponse[]> {
+    if (context.role !== 'OWNER')
+      throw new ConflictException('Subscription activation requires the owner');
+    return this.database.withTenant(context, async (database) => {
+      const result = await database.query<ActionRow>(
+        `SELECT * FROM opes.lifecycle_chain_actions
+          WHERE organization_id=$1 AND target_type='subscription' AND target_id=$2
+            AND actor='OWNER' AND action_type='CREATE_RECURRING_MANDATE'`,
+        [context.organizationId, subscriptionId],
+      );
+      return result.rows.map(mapAction);
+    });
+  }
+
   async prepare(
     context: TenantContext,
     subscriptionId: string,
@@ -83,7 +101,7 @@ export class RecurringExecutionService {
     return this.database.withTenant(context, async (database) => {
       const setup = await database.query<SubscriptionSetupRow>(
         `SELECT subscription.id, subscription.status, version.cadence, version.timezone,
-                version.anchor_date, version.amount_atomic::text AS amount_atomic,
+                version.anchor_date::text AS anchor_date, version.amount_atomic::text AS amount_atomic,
                 address.payout_address, vault.address AS vault_address
            FROM opes.subscriptions subscription
            JOIN opes.subscription_versions version ON version.organization_id = subscription.organization_id
@@ -141,30 +159,6 @@ export class RecurringExecutionService {
       );
       const total = BigInt(row.amount_atomic) * BigInt(schedule.length);
       const actions = [
-        [
-          'SET_RECURRING_LIMITS',
-          encodeFunctionData({
-            abi: vaultAbi,
-            functionName: 'setLimits',
-            args: [
-              BigInt(row.amount_atomic),
-              BigInt(row.amount_atomic),
-              BigInt(row.amount_atomic),
-            ],
-          }),
-        ],
-        [
-          'SET_RECURRING_VENDOR',
-          encodeFunctionData({
-            abi: vaultAbi,
-            functionName: 'setVendor',
-            args: [
-              row.payout_address as `0x${string}`,
-              true,
-              BigInt(row.amount_atomic),
-            ],
-          }),
-        ],
         [
           'CREATE_RECURRING_MANDATE',
           encodeFunctionData({
@@ -285,6 +279,20 @@ export class RecurringExecutionService {
             [context.organizationId, row.target_id],
           );
       }
+      const notification = recurringActionNotification(row.action_type);
+      if (notification)
+        await recordNotification(database, {
+          organizationId: context.organizationId,
+          type: notification.type,
+          priority: notification.priority,
+          title: notification.title,
+          body: notification.body,
+          subjectType: 'subscription',
+          subjectId: row.target_id,
+          actionView: 'agreements',
+          dedupeKey: `recurring-action:${actionId}`,
+          metadata: { transactionHash: transactionHash.toLowerCase() },
+        });
       return { ...row, status: 'CONFIRMED' };
     });
     return mapAction(action);
@@ -506,6 +514,18 @@ export class RecurringExecutionService {
           [action.organization_id, action.target_id, transactionHash],
         );
         await insertRecurringLedger(db, action, transactionHash);
+        await recordNotification(db, {
+          organizationId: action.organization_id,
+          type: 'RECURRING_PAYMENT_SETTLED',
+          priority: 'SUCCESS',
+          title: 'Recurring payment settled',
+          body: 'The scheduled payment cycle was completed successfully.',
+          subjectType: 'subscription_cycle',
+          subjectId: action.target_id,
+          actionView: 'agreements',
+          dedupeKey: `recurring-settled:${action.id}`,
+          metadata: { transactionHash },
+        });
       });
     } catch (error) {
       const reason =
@@ -519,6 +539,17 @@ export class RecurringExecutionService {
           `UPDATE opes.subscription_cycles SET status = 'FAILED', failure_reason = $3 WHERE organization_id = $1 AND id = $2`,
           [action.organization_id, action.target_id, reason],
         );
+        await recordNotification(db, {
+          organizationId: action.organization_id,
+          type: 'RECURRING_PAYMENT_FAILED',
+          priority: 'WARNING',
+          title: 'Recurring payment failed',
+          body: reason.slice(0, 500),
+          subjectType: 'subscription_cycle',
+          subjectId: action.target_id,
+          actionView: 'agreements',
+          dedupeKey: `recurring-failed:${action.id}`,
+        });
       });
     }
   }
@@ -571,6 +602,38 @@ export class RecurringExecutionService {
       eventTopics: [row.mandate_id, obligationKey],
     };
   }
+}
+
+function recurringActionNotification(actionType: string) {
+  if (actionType === 'CREATE_RECURRING_MANDATE')
+    return {
+      type: 'RECURRING_ACTIVATED',
+      priority: 'SUCCESS' as const,
+      title: 'Recurring agreement activated',
+      body: 'OPES will execute eligible payment cycles on their scheduled dates.',
+    };
+  if (actionType === 'PAUSE_RECURRING_MANDATE')
+    return {
+      type: 'RECURRING_PAUSED',
+      priority: 'WARNING' as const,
+      title: 'Recurring agreement paused',
+      body: 'Scheduled payments are stopped until the agreement is resumed.',
+    };
+  if (actionType === 'RESUME_RECURRING_MANDATE')
+    return {
+      type: 'RECURRING_RESUMED',
+      priority: 'SUCCESS' as const,
+      title: 'Recurring agreement resumed',
+      body: 'Future eligible cycles can execute again.',
+    };
+  if (actionType === 'CANCEL_RECURRING_MANDATE')
+    return {
+      type: 'RECURRING_CANCELLED',
+      priority: 'WARNING' as const,
+      title: 'Recurring agreement cancelled',
+      body: 'Remaining payment cycles were cancelled.',
+    };
+  return null;
 }
 
 export function buildSchedule(

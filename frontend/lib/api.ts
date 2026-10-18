@@ -920,6 +920,29 @@ export async function createSubscriptionCycle(
   );
 }
 
+export async function getSubscriptionActions(
+  token: string,
+  organizationId: string,
+  subscriptionId: string,
+) {
+  return request<ChainActionResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/subscriptions/${encodeURIComponent(subscriptionId)}/actions`,
+    token,
+  );
+}
+
+export async function removeSubscriptionDraft(
+  token: string,
+  organizationId: string,
+  subscriptionId: string,
+) {
+  return request<{ id: string }>(
+    `/organizations/${encodeURIComponent(organizationId)}/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    token,
+    { method: "DELETE" },
+  );
+}
+
 export async function cancelSubscription(
   token: string,
   organizationId: string,
@@ -964,6 +987,29 @@ export async function createEscrowAgreement(
     `/organizations/${encodeURIComponent(organizationId)}/escrow-agreements`,
     token,
     { method: "POST", body: JSON.stringify(input) },
+  );
+}
+
+export async function getEscrowAgreementActions(
+  token: string,
+  organizationId: string,
+  agreementId: string,
+) {
+  return request<ChainActionResponse[]>(
+    `/organizations/${encodeURIComponent(organizationId)}/escrow-agreements/${encodeURIComponent(agreementId)}/actions`,
+    token,
+  );
+}
+
+export async function removeEscrowDraft(
+  token: string,
+  organizationId: string,
+  agreementId: string,
+) {
+  return request<{ id: string }>(
+    `/organizations/${encodeURIComponent(organizationId)}/escrow-agreements/${encodeURIComponent(agreementId)}`,
+    token,
+    { method: "DELETE" },
   );
 }
 
