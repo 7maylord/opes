@@ -1,6 +1,15 @@
 # OPES contracts
 
-C0 establishes the local test harness. C1 implements vault policy and owner controls; C2 adds authorized direct payments; C3 adds recurring mandates; C4 adds escrow agreements and funding; C5 adds milestone release, disputes and refunds. C6 adds financial sequence, reentrancy and boundary checks. Deployment gates remain pending.
+OPES uses one factory-deployed contract boundary per organization on Arc. `BusinessPolicyVault` enforces direct and recurring USDC payment authority; `MilestoneEscrow` secures staged work; `OrganizationFactory` creates both without taking tenant ownership.
+
+| Contract | Purpose |
+|---|---|
+| `OrganizationFactory` | Idempotently deploys and registers one isolated vault/escrow pair for an organization domain |
+| `VaultDeployer` | Keeps factory runtime bytecode below the EVM size limit and accepts calls only from its immutable factory |
+| `BusinessPolicyVault` | Enforces vendors, payment limits, exact decision hashes, recurring mandates, pause, recovery, and two-step ownership |
+| `MilestoneEscrow` | Holds fixed milestone allocations and enforces evidence-bound approval, release, dispute, cancellation, and refund |
+
+The factory and helper are deployed and source-verified on Arc Testnet. A recorded tenant smoke run covers factory provisioning, policy setup, direct payment, escrow funding, milestone approval, release, and final balance checks. Deployment evidence is under [`deployments/5042002/`](deployments/5042002/).
 
 ## Organization factory
 
@@ -12,9 +21,9 @@ Escrow starts with the supplied owner as admin/approver and the supplied operato
 
 One factory-owned `VaultDeployer` helper separates creation code to keep runtime sizes below 24,576 bytes. Only its immutable factory can call it. There are no proxies, upgrade hooks, arbitrary deployment bytecode or shared customer balances. Verify factory, helper and each tenant instance, recording constructor arguments and events in manifests. A factory address must be allowlisted per chain/environment by the application.
 
-Onboarding automation is backend B2 work: create/reconcile the wallet and distinct owner/operator bindings → submit or reconcile factory creation → verify deployed source/bindings → enter `SETUP_REQUIRED`. Signup is asynchronous. If the provisioner's gas budget is insufficient, keep a visible pending reason, alert operations and retry after funding; unknown submissions must be reconciled against the registry before another attempt. Never label a tenant active before verification and configuration. Sponsorship must have authenticated signup, rate limits, per-tenant/platform budgets and balance monitoring.
+Onboarding automation creates or reconciles the Circle operator wallet and distinct owner/operator bindings, submits or resumes factory creation, verifies the receipt, registry, bytecode, configuration, roles, token, domain, paused state, and source status, then records the tenant resources in `SETUP_REQUIRED`. Signup is asynchronous. If the provisioner's gas budget is insufficient, OPES keeps a visible pending reason and retries after funding; unknown submissions are reconciled against the registry before another attempt. A tenant is never labeled active before verification and owner configuration.
 
-For now the intended deployment sponsor is an OPES-funded provisioner. [Circle Gas Station](https://developers.circle.com/wallets/gas-station) also documents Arc support for compatible ERC-4337 Circle wallets; validate account type and sponsorship policy during wallet integration. Neither mechanism supplies customer invoice funds. Later owner/operator actions also need funded gas or compatible sponsorship. The factory and helper are deployed and source-verified on Arc testnet; backend signup wiring and sponsored tenant provisioning remain pending.
+An OPES-funded Circle provisioner sponsors tenant deployment, so customer owner wallets do not need deployment gas. This does not supply customer invoice funds. Owner actions still require their embedded wallet to hold the native Arc Testnet gas asset; operator actions use the configured Circle wallet path.
 
 ## Milestone release and refunds (C5)
 
