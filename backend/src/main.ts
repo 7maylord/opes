@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { configureApiDocumentation } from './api-documentation';
 import { AppModule } from './app.module';
 import { useCorrelationIds } from './correlation-id';
 import { loadRuntimeConfig } from './runtime.config';
@@ -11,6 +12,7 @@ async function bootstrap() {
     origin: config.allowedOrigins,
     credentials: true,
   });
+  configureApiDocumentation(app);
   app.enableShutdownHooks();
   await app.listen(config.port, '0.0.0.0');
 }
