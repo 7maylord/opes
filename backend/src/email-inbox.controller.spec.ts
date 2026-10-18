@@ -29,7 +29,7 @@ describe('email inbox HTTP response', () => {
       ],
     }).compile();
     app = module.createNestApplication();
-    await app.init();
+    await app.listen(0, '127.0.0.1');
   });
 
   afterAll(async () => {
@@ -43,7 +43,7 @@ describe('email inbox HTTP response', () => {
     'returns parseable JSON so unconfigured workspaces can open the inbox: %j',
     async (inbox) => {
       getInbox.mockResolvedValue(inbox);
-      const response = await request(app.getHttpAdapter().getInstance() as App)
+      const response = await request(app.getHttpServer() as App)
         .get('/organizations/org-1/email-inbox')
         .set('Authorization', 'Bearer session-token')
         .expect(200)

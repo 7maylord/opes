@@ -28,10 +28,12 @@ describe('Resend inbound email (e2e)', () => {
   const originalFetch = global.fetch;
   const originalSecret = process.env.OPES_RESEND_WEBHOOK_SECRET;
   const originalApiKey = process.env.OPES_RESEND_API_KEY;
+  const originalInboundDomain = process.env.OPES_INBOUND_EMAIL_DOMAIN;
 
   beforeAll(async () => {
     process.env.OPES_RESEND_WEBHOOK_SECRET = secret;
     process.env.OPES_RESEND_API_KEY = 're_e2e';
+    process.env.OPES_INBOUND_EMAIL_DOMAIN = 'inbound.example';
     const bucket = {
       isConfigured: () => true,
       write: (key: string, bytes: Uint8Array, contentType: string) => {
@@ -198,6 +200,9 @@ describe('Resend inbound email (e2e)', () => {
     else process.env.OPES_RESEND_WEBHOOK_SECRET = originalSecret;
     if (originalApiKey === undefined) delete process.env.OPES_RESEND_API_KEY;
     else process.env.OPES_RESEND_API_KEY = originalApiKey;
+    if (originalInboundDomain === undefined)
+      delete process.env.OPES_INBOUND_EMAIL_DOMAIN;
+    else process.env.OPES_INBOUND_EMAIL_DOMAIN = originalInboundDomain;
     await database.withOrganizationScope(organizationId, async (sql) => {
       await sql.query(
         'DELETE FROM opes.audit_events WHERE organization_id=$1',

@@ -161,19 +161,22 @@ async function sendPaymentAdvice(advice: AdviceRow): Promise<string> {
     throw new Error('Resend outbound email is not configured');
   const amount = formatAtomic(advice.amount_atomic);
   const explorer = explorerUrl(advice.route_chain_id, advice.transaction_hash);
+  const network = networkName(advice.route_environment);
+  const settledAt = formatSettledAt(advice.confirmed_at);
   const text = [
-    `Payment advice from ${advice.organization_name}`,
+    `Payment confirmed by ${advice.organization_name}`,
     '',
     `Supplier: ${advice.vendor_name}`,
     `Invoice: ${advice.invoice_number}`,
     `Amount: ${amount} ${advice.asset_symbol}`,
-    `Network: ${advice.route_environment}`,
-    `Settled: ${advice.confirmed_at.toISOString()}`,
+    `Network: ${network}`,
+    `Settled: ${settledAt}`,
     `Transaction: ${advice.transaction_hash}`,
-    explorer ? `Explorer: ${explorer}` : '',
+    explorer ? `View transaction: ${explorer}` : '',
   ]
     .filter(Boolean)
     .join('\n');
+  const html = paymentAdviceHtml(advice, amount, network, settledAt, explorer);
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     signal: AbortSignal.timeout(20_000),
@@ -184,8 +187,9 @@ async function sendPaymentAdvice(advice: AdviceRow): Promise<string> {
     body: JSON.stringify({
       from,
       to: [advice.recipient_email],
-      subject: `Payment advice: invoice ${advice.invoice_number} settled`,
+      subject: `Payment confirmed — invoice ${advice.invoice_number}`,
       text,
+      html,
     }),
   });
   if (!response.ok)
@@ -207,4 +211,74 @@ function explorerUrl(chainId: number, hash: string) {
     : chainId === 84532
       ? `https://sepolia.basescan.org/tx/${hash}`
       : null;
+}
+
+function networkName(environment: string) {
+  return environment === 'arc-testnet'
+    ? 'Arc Testnet'
+    : environment === 'base-sepolia'
+      ? 'Base Sepolia'
+      : environment;
+}
+
+function formatSettledAt(value: Date) {
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
+  }).format(value);
+}
+
+function escapeHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (character) =>
+      ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+      })[character]!,
+  );
+}
+
+function paymentAdviceHtml(
+  advice: AdviceRow,
+  amount: string,
+  network: string,
+  settledAt: string,
+  explorer: string | null,
+) {
+  const organization = escapeHtml(advice.organization_name);
+  const vendor = escapeHtml(advice.vendor_name);
+  const invoice = escapeHtml(advice.invoice_number);
+  const asset = escapeHtml(advice.asset_symbol);
+  const transaction = escapeHtml(advice.transaction_hash);
+  const shortTransaction = escapeHtml(
+    `${advice.transaction_hash.slice(0, 10)}…${advice.transaction_hash.slice(-8)}`,
+  );
+  const action = explorer
+    ? `<tr><td style="padding:28px 40px 8px"><a href="${escapeHtml(explorer)}" style="display:block;background:#2448ed;border-radius:14px;color:#ffffff;font-size:15px;font-weight:700;padding:16px 24px;text-align:center;text-decoration:none">View transaction on Arcscan&nbsp;&nbsp;↗</a></td></tr>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payment confirmed</title></head>
+<body style="margin:0;background:#f4f3ed;color:#20251f;font-family:Arial,Helvetica,sans-serif">
+<div style="display:none;max-height:0;overflow:hidden">${organization} paid invoice ${invoice} in full.</div>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f3ed"><tr><td align="center" style="padding:40px 16px">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #d8dbd0;border-radius:24px;overflow:hidden">
+<tr><td style="background:#20251f;padding:28px 40px;color:#ffffff"><table role="presentation" width="100%"><tr><td style="font-size:22px;font-weight:800;letter-spacing:-.5px">OPES</td><td align="right" style="font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#dce8c6">Payment advice</td></tr></table></td></tr>
+<tr><td style="padding:40px 40px 20px"><div style="display:inline-block;background:#d7f46c;border-radius:999px;color:#20251f;font-size:11px;font-weight:800;letter-spacing:1px;padding:8px 12px;text-transform:uppercase">✓ Payment confirmed</div><h1 style="font-size:30px;line-height:1.15;letter-spacing:-1px;margin:20px 0 10px">${invoice} has been settled.</h1><p style="color:#68705f;font-size:15px;line-height:1.7;margin:0">${organization} has sent payment to ${vendor}. The transaction is confirmed onchain.</p></td></tr>
+<tr><td style="padding:10px 40px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#edf1e5;border-radius:18px"><tr><td style="padding:24px"><div style="color:#68705f;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase">Amount paid</div><div style="font-size:34px;font-weight:800;letter-spacing:-1px;margin-top:8px">${escapeHtml(amount)} <span style="font-size:16px;color:#4d6a3b">${asset}</span></div></td></tr></table></td></tr>
+<tr><td style="padding:22px 40px 0"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size:14px"><tr><td style="border-bottom:1px solid #e5e7df;color:#68705f;padding:13px 0">Supplier</td><td align="right" style="border-bottom:1px solid #e5e7df;font-weight:700;padding:13px 0">${vendor}</td></tr><tr><td style="border-bottom:1px solid #e5e7df;color:#68705f;padding:13px 0">Network</td><td align="right" style="border-bottom:1px solid #e5e7df;font-weight:700;padding:13px 0">${escapeHtml(network)}</td></tr><tr><td style="border-bottom:1px solid #e5e7df;color:#68705f;padding:13px 0">Settled</td><td align="right" style="border-bottom:1px solid #e5e7df;font-weight:700;padding:13px 0">${escapeHtml(settledAt)}</td></tr><tr><td style="color:#68705f;padding:13px 0">Transaction</td><td align="right" title="${transaction}" style="font-family:Consolas,monospace;font-size:12px;font-weight:700;padding:13px 0">${shortTransaction}</td></tr></table></td></tr>
+${action}
+<tr><td style="padding:26px 40px 36px;color:#78816d;font-size:12px;line-height:1.6">This receipt was generated automatically by OPES from a confirmed onchain settlement. Keep it with your invoice records.</td></tr>
+</table>
+<div style="color:#8a9480;font-size:11px;padding:20px;text-align:center">Evidence verified. Treasury authorized. Payment settled.</div>
+</td></tr></table></body></html>`;
 }

@@ -34,7 +34,7 @@ it('sends supplier advice only for a confirmed settlement and records the provid
         {
           recipient_email: 'vendor@example.com',
           organization_name: 'Alpha Co',
-          vendor_name: 'Canteen Supplies',
+          vendor_name: 'Canteen & Supplies',
           invoice_number: 'INV-100',
           amount_atomic: '1250000',
           asset_symbol: 'USDC',
@@ -65,6 +65,17 @@ it('sends supplier advice only for a confirmed settlement and records the provid
     expect.objectContaining({ method: 'POST' }),
   );
   expect(sentBody).toContain('vendor@example.com');
+  const payload = JSON.parse(sentBody) as {
+    subject: string;
+    html: string;
+    text: string;
+  };
+  expect(payload.subject).toBe('Payment confirmed — invoice INV-100');
+  expect(payload.html).toContain('✓ Payment confirmed');
+  expect(payload.html).toContain('1.25 <span');
+  expect(payload.html).toContain('Canteen &amp; Supplies');
+  expect(payload.html).toContain('View transaction on Arcscan');
+  expect(payload.text).toContain('Network: Arc Testnet');
   expect(queries.some((text) => text.includes("status='SENT'"))).toBe(true);
 
   global.fetch = originalFetch;

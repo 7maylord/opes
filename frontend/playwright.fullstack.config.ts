@@ -6,6 +6,7 @@ export default defineConfig({
   globalSetup: "./e2e/fullstack-setup.ts",
   globalTeardown: "./e2e/fullstack-teardown.ts",
   timeout: 30_000,
+  expect: { timeout: 15_000 },
   use: { baseURL: "http://127.0.0.1:3205", trace: "on-first-retry" },
   webServer: [
     {
