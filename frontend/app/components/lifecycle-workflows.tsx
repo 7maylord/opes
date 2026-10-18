@@ -141,18 +141,24 @@ export function LifecycleWorkflows({
   async function submitSubscription(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     await run("Recurring agreement created", async () => {
+      const input = {
+        vendorId: subscriptionVendorId,
+        vendorAddressId: subscriptionAddressId,
+        cadence,
+        anchorDate,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+        amount: subscriptionAmount,
+        termsDocumentId: termsDocumentId || undefined,
+      };
+      console.info("[OPES recurring] create requested", input);
       setCycle(null);
-      setSubscription(
-        await createSubscription(token, organizationId, {
-          vendorId: subscriptionVendorId,
-          vendorAddressId: subscriptionAddressId,
-          cadence,
-          anchorDate,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-          amount: subscriptionAmount,
-          termsDocumentId: termsDocumentId || undefined,
-        }),
-      );
+      const created = await createSubscription(token, organizationId, input);
+      console.info("[OPES recurring] create succeeded", {
+        id: created.id,
+        anchorDate: created.anchorDate,
+        status: created.status,
+      });
+      setSubscription(created);
     });
   }
 
@@ -171,6 +177,10 @@ export function LifecycleWorkflows({
   async function submitCycle() {
     if (!subscription) return toast.error("Create a recurring agreement first");
     await run("Current billing cycle created", async () => {
+      console.info("[OPES recurring] cycle requested", {
+        subscriptionId: subscription.id,
+        servicePeriodStart: today,
+      });
       setCycle(
         await createSubscriptionCycle(token, organizationId, subscription.id, {
           servicePeriodStart: today,
@@ -351,6 +361,7 @@ export function LifecycleWorkflows({
       await work();
       toast.success(success);
     } catch (reason) {
+      console.error("[OPES agreements] action failed", reason);
       toast.error(
         reason instanceof Error ? reason.message : "Agreement action failed",
       );

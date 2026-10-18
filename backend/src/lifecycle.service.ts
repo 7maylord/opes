@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
@@ -130,6 +131,8 @@ interface MilestoneRow {
 
 @Injectable()
 export class LifecycleService {
+  private readonly logger = new Logger(LifecycleService.name);
+
   constructor(private readonly database: DatabaseService) {}
 
   async createSubscription(
@@ -137,6 +140,9 @@ export class LifecycleService {
     input: CreateSubscriptionRequest,
   ): Promise<SubscriptionResponse> {
     requireOwnerOrAdmin(context);
+    this.logger.log(
+      `Recurring agreement requested organization=${context.organizationId} anchorDate=${String(input.anchorDate)} cadence=${String(input.cadence)}`,
+    );
     const vendorId = requireUuid(input.vendorId, 'vendorId');
     const vendorAddressId = requireUuid(
       input.vendorAddressId,
@@ -144,6 +150,9 @@ export class LifecycleService {
     );
     const cadence = validateCadence(input.cadence);
     const anchorDate = validateDate(input.anchorDate, 'anchorDate');
+    this.logger.log(
+      `Recurring agreement date normalized organization=${context.organizationId} anchorDate=${anchorDate}`,
+    );
     const timezone = requireText(input.timezone, 'timezone');
     const amountAtomic = parseAtomicAmount(input.amount, 'amount');
     const termsDocumentId = input.termsDocumentId
@@ -234,6 +243,9 @@ export class LifecycleService {
     input: CreateSubscriptionCycleRequest,
   ): Promise<SubscriptionCycleResponse> {
     const targetSubscriptionId = requireUuid(subscriptionId, 'subscriptionId');
+    this.logger.log(
+      `Recurring cycle requested organization=${context.organizationId} subscription=${targetSubscriptionId} servicePeriodStart=${String(input.servicePeriodStart)}`,
+    );
     const start = validateDate(input.servicePeriodStart, 'servicePeriodStart');
 
     return this.database.withTenant(context, async (database) => {
@@ -742,6 +754,7 @@ function parseDate(value: string): {
 } {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (match === null) {
+    console.warn('[OPES recurring] internal date parsing failed', { value });
     throw new BadRequestException('date must be YYYY-MM-DD');
   }
   const year = Number(match[1]);
