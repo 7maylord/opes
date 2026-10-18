@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { DatabaseService, TenantDatabase } from './database.service';
+import { normalizeDateInput } from './date';
 import { TenantContext } from './tenant-context';
 
 const USDC_DECIMALS = 6;
@@ -728,11 +729,10 @@ export function dueAtUtc(date: string, timezone: string): string {
 
 function validateDate(value: string, name: string): string {
   const text = requireText(value, name);
-  const parsed = parseDate(text);
-  if (formatDate(parsed.year, parsed.month, parsed.day) !== text) {
-    throw new BadRequestException(`${name} must be YYYY-MM-DD`);
-  }
-  return text;
+  const normalized = normalizeDateInput(text);
+  if (normalized === null)
+    throw new BadRequestException(`${name} must be an unambiguous valid date`);
+  return normalized;
 }
 
 function parseDate(value: string): {

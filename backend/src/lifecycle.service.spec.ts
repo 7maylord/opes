@@ -36,6 +36,41 @@ function verifiedPayeeMocks(query: jest.Mock): jest.Mock {
 }
 
 describe('LifecycleService', () => {
+  it('normalizes a human-readable recurring billing date', async () => {
+    const query = verifiedPayeeMocks(jest.fn())
+      .mockResolvedValueOnce({
+        rows: [{ id: 'subscription-1', status: 'SETUP_REQUIRED' }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'version-1',
+            version: 1,
+            cadence: 'MONTHLY',
+            anchor_date: '2026-11-03',
+            timezone: 'Africa/Lagos',
+            amount_atomic: '10000000',
+          },
+        ],
+      });
+    const service = serviceWithQuery(query);
+
+    await service.createSubscription(context, {
+      vendorId: '55555555-5555-5555-5555-555555555555',
+      vendorAddressId: '66666666-6666-6666-6666-666666666666',
+      cadence: 'MONTHLY',
+      anchorDate: '03rd of November, 2026',
+      timezone: 'Africa/Lagos',
+      amount: '10',
+    });
+
+    expect(query).toHaveBeenNthCalledWith(
+      4,
+      expect.stringContaining('INSERT INTO opes.subscription_versions'),
+      expect.arrayContaining(['2026-11-03']),
+    );
+  });
+
   it('converts local noon across timezone and DST boundaries', () => {
     expect(dueAtUtc('2026-03-07', 'America/New_York')).toBe(
       '2026-03-07T17:00:00.000Z',
