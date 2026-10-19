@@ -507,6 +507,19 @@ export async function getVendorPortal(token: string) {
 export async function listVendorPortalSubmissions(token: string) {
   return fetchJson<VendorPortalSubmission[]>(`/vendor-portal/${encodeURIComponent(token)}/submissions`, {});
 }
+export interface VendorPortalStatus {
+  payoutAddresses: Array<{ id: string; payoutAddress: string; status: string; version: number; createdAt: string }>;
+  invoices: Array<{ id: string; invoiceNumber: string; amountAtomic: string; assetSymbol: string; status: string; executionId: string | null; paymentStatus: string | null; transactionHash: string | null; confirmedAt: string | null }>;
+}
+export function getVendorPortalStatus(token: string) {
+  return fetchJson<VendorPortalStatus>(`/vendor-portal/${encodeURIComponent(token)}/status`, {});
+}
+export function requestVendorPayoutChange(token: string, payoutAddress: string) {
+  return fetchJson<{ id: string; status: string }>(`/vendor-portal/${encodeURIComponent(token)}/payout-address-change`, { method: "POST", body: JSON.stringify({ payoutAddress }) });
+}
+export function getVendorPaymentAdvice(token: string, executionId: string) {
+  return fetchJson<{ invoiceNumber: string; amountAtomic: string; assetSymbol: string; network: string; transactionHash: string; confirmedAt: string; organizationName: string }>(`/vendor-portal/${encodeURIComponent(token)}/payment-advice/${encodeURIComponent(executionId)}`, {});
+}
 
 export async function submitVendorPortalDocument(token: string, file: File, vendorNote: string, replacesSubmissionId?: string) {
   if (!file.type) throw new Error("Document file type is missing");

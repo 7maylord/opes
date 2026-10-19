@@ -152,6 +152,43 @@ describe('Vendor portal (e2e)', () => {
     );
     expect(authority.rows[0]).toEqual({ addresses: '0', trusted: false });
 
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.vendor_payout_addresses
+          (organization_id,vendor_id,environment,chain_id,asset_symbol,asset_address,payout_address,status,version,verified_by_membership_id,verified_at)
+         VALUES ($1,$2,'arc-testnet',5042002,'USDC','0x3600000000000000000000000000000000000000','0x4000000000000000000000000000000000000004','VERIFIED_ACTIVE',1,$3,now())`,
+        [organizationId, vendorId, membershipId],
+      ),
+    );
+    await request(server)
+      .get(`/vendor-portal/${token}/status`)
+      .expect(200)
+      .expect(({ body }: { body: unknown }) =>
+        expect(body).toMatchObject({
+          payoutAddresses: [{ status: 'VERIFIED_ACTIVE' }],
+          invoices: [],
+        }),
+      );
+    await request(server)
+      .post(`/vendor-portal/${token}/payout-address-change`)
+      .send({ payoutAddress: '0x5000000000000000000000000000000000000005' })
+      .expect(201)
+      .expect(({ body }: { body: unknown }) =>
+        expect(body).toMatchObject({ status: 'PENDING_REVIEW' }),
+      );
+    const addresses = await database.withOrganizationScope(
+      organizationId,
+      (sql) =>
+        sql.query<{ status: string }>(
+          `SELECT status FROM opes.vendor_payout_addresses WHERE organization_id=$1 AND vendor_id=$2 ORDER BY version`,
+          [organizationId, vendorId],
+        ),
+    );
+    expect(addresses.rows.map((row) => row.status)).toEqual([
+      'VERIFIED_ACTIVE',
+      'PENDING_REVIEW',
+    ]);
+
     await request(server)
       .delete(
         `/organizations/${organizationId}/vendors/${vendorId}/portal-access/${accessBody.id}`,
@@ -202,6 +239,7 @@ describe('Vendor portal (e2e)', () => {
       for (const table of [
         'vendor_portal_submissions',
         'vendor_portal_accesses',
+        'vendor_payout_addresses',
         'audit_events',
         'intake_envelopes',
         'evidence_documents',

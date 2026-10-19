@@ -22,7 +22,7 @@ The model handles judgment-heavy work such as document extraction and advisory r
 
 - Upload invoices, purchase orders, receipts, contracts, and milestone evidence.
 - Receive invoice email and attachments through a workspace inbox backed by signed Resend webhooks.
-- Give a vendor a scoped submission portal for invoices and supporting documents.
+- Give each vendor a scoped portal to submit or correct evidence, track invoices, request payout-address re-verification, and download confirmed payment advice.
 - Watch an object-storage folder for new financial evidence.
 - Import suppliers, purchase orders, receipts, and vendor bills from **Odoo 19 JSON-2** or **ERPNext REST**.
 - Store immutable document hashes and extraction provenance in private object storage.

@@ -82,6 +82,27 @@ export class VendorPortalController {
     return this.portal.listSubmissions(token);
   }
 
+  @Get('status')
+  status(@Param('token') token: string) {
+    return this.portal.getStatus(token);
+  }
+
+  @Post('payout-address-change')
+  payoutAddressChange(
+    @Param('token') token: string,
+    @Body() body: { payoutAddress: string },
+  ) {
+    return this.portal.requestPayoutAddressChange(token, body.payoutAddress);
+  }
+
+  @Get('payment-advice/:executionId')
+  paymentAdvice(
+    @Param('token') token: string,
+    @Param('executionId') executionId: string,
+  ) {
+    return this.portal.getPaymentAdvice(token, executionId);
+  }
+
   @Post('submissions/uploads')
   initiate(
     @Param('token') token: string,

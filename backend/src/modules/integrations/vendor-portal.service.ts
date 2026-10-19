@@ -41,6 +41,33 @@ interface SubmissionRow {
   created_at: Date;
   submitted_at: Date | null;
 }
+interface PortalAddressRow {
+  id: string;
+  payout_address: string;
+  status: string;
+  version: number;
+  created_at: Date;
+}
+interface PortalInvoiceRow {
+  id: string;
+  invoice_number: string;
+  amount_atomic: string;
+  currency: string;
+  status: string;
+  execution_id: string | null;
+  payment_status: string | null;
+  transaction_hash: string | null;
+  confirmed_at: Date | null;
+}
+interface PortalAdviceRow {
+  invoice_number: string;
+  amount_atomic: string;
+  asset_symbol: string;
+  route_environment: string;
+  transaction_hash: string;
+  confirmed_at: Date;
+  organization_name: string;
+}
 
 export interface VendorPortalSubmission {
   id: string;
@@ -208,6 +235,149 @@ export class VendorPortalService {
         selectSubmissions(database, access.organization_id, access.vendor_id),
     );
     return result.rows.map(mapSubmission);
+  }
+
+  async getStatus(token: string) {
+    const access = await this.resolveAccess(token);
+    return this.database.withOrganizationScope(
+      access.organization_id,
+      async (database) => {
+        const [addresses, invoices] = await Promise.all([
+          database.query<PortalAddressRow>(
+            `SELECT id,payout_address,status,version,created_at FROM opes.vendor_payout_addresses
+           WHERE organization_id=$1 AND vendor_id=$2 ORDER BY version DESC`,
+            [access.organization_id, access.vendor_id],
+          ),
+          database.query<PortalInvoiceRow>(
+            `SELECT DISTINCT ON (version.obligation_id) version.id,version.invoice_number,
+             version.amount_atomic::text,version.currency,version.status,
+             execution.id AS execution_id,execution.status AS payment_status,
+             execution.transaction_hash,execution.confirmed_at
+           FROM opes.payable_obligation_versions version
+           LEFT JOIN LATERAL (SELECT id,status,transaction_hash,confirmed_at
+             FROM opes.payment_executions current WHERE current.organization_id=version.organization_id
+             AND current.source_version_id=version.id ORDER BY requested_at DESC LIMIT 1) execution ON true
+           WHERE version.organization_id=$1 AND version.vendor_id=$2
+           ORDER BY version.obligation_id,version.version DESC`,
+            [access.organization_id, access.vendor_id],
+          ),
+        ]);
+        return {
+          payoutAddresses: addresses.rows.map((row) => ({
+            id: row.id,
+            payoutAddress: row.payout_address,
+            status: row.status,
+            version: row.version,
+            createdAt: row.created_at,
+          })),
+          invoices: invoices.rows.map((row) => ({
+            id: row.id,
+            invoiceNumber: row.invoice_number,
+            amountAtomic: row.amount_atomic,
+            assetSymbol: row.currency,
+            status: row.status,
+            executionId: row.execution_id,
+            paymentStatus: row.payment_status,
+            transactionHash: row.transaction_hash,
+            confirmedAt: row.confirmed_at,
+          })),
+        };
+      },
+    );
+  }
+
+  async requestPayoutAddressChange(token: string, payoutAddress: string) {
+    const access = await this.resolveAccess(token);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(payoutAddress))
+      throw new BadRequestException('payoutAddress must be an EVM address');
+    return this.database.withOrganizationScope(
+      access.organization_id,
+      async (database) => {
+        const current = await database.query<{
+          id: string;
+          environment: string;
+          chain_id: number;
+          asset_symbol: string;
+          asset_address: string;
+          version: number;
+        }>(
+          `SELECT id,environment,chain_id,asset_symbol,asset_address,version
+         FROM opes.vendor_payout_addresses WHERE organization_id=$1 AND vendor_id=$2
+           AND status='VERIFIED_ACTIVE' ORDER BY version DESC LIMIT 1 FOR UPDATE`,
+          [access.organization_id, access.vendor_id],
+        );
+        const active = current.rows[0];
+        if (!active)
+          throw new ConflictException(
+            'An active payout address is required before requesting a replacement',
+          );
+        const pending = await database.query<{ id: string }>(
+          `SELECT id FROM opes.vendor_payout_addresses WHERE organization_id=$1 AND vendor_id=$2 AND status='PENDING_REVIEW' LIMIT 1`,
+          [access.organization_id, access.vendor_id],
+        );
+        if (pending.rows[0])
+          throw new ConflictException(
+            'A payout address change is already awaiting review',
+          );
+        const inserted = await database.query<{ id: string; status: string }>(
+          `INSERT INTO opes.vendor_payout_addresses
+          (organization_id,vendor_id,environment,chain_id,asset_symbol,asset_address,payout_address,version,replaces_address_id,metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) RETURNING id,status`,
+          [
+            access.organization_id,
+            access.vendor_id,
+            active.environment,
+            active.chain_id,
+            active.asset_symbol,
+            active.asset_address,
+            payoutAddress,
+            active.version + 1,
+            active.id,
+            JSON.stringify({
+              vendorPortal: {
+                accessId: access.id,
+                trustedForPayoutAuthority: false,
+              },
+            }),
+          ],
+        );
+        await database.query(
+          `UPDATE opes.vendors SET status='ADDRESS_REVIEW',version=version+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,
+          [access.organization_id, access.vendor_id],
+        );
+        return inserted.rows[0];
+      },
+    );
+  }
+
+  async getPaymentAdvice(token: string, executionId: string) {
+    const access = await this.resolveAccess(token);
+    requireUuid(executionId, 'executionId');
+    const result = await this.database.withOrganizationScope(
+      access.organization_id,
+      (database) =>
+        database.query<PortalAdviceRow>(
+          `SELECT version.invoice_number,execution.amount_atomic::text,execution.route_asset_symbol AS asset_symbol,
+        execution.route_environment,execution.transaction_hash,execution.confirmed_at,organization.display_name AS organization_name
+       FROM opes.payment_executions execution
+       JOIN opes.payable_obligation_versions version ON version.organization_id=execution.organization_id AND version.id=execution.source_version_id
+       JOIN opes.organizations organization ON organization.id=execution.organization_id
+       WHERE execution.organization_id=$1 AND execution.id=$2 AND version.vendor_id=$3 AND execution.status='CONFIRMED'`,
+          [access.organization_id, executionId, access.vendor_id],
+        ),
+    );
+    if (!result.rows[0])
+      throw new UnauthorizedException('Payment advice is unavailable');
+    const row = result.rows[0];
+    return {
+      invoiceNumber: row.invoice_number,
+      amountAtomic: row.amount_atomic,
+      assetSymbol: row.asset_symbol,
+      network: row.route_environment,
+      transactionHash: row.transaction_hash,
+      confirmedAt: row.confirmed_at,
+      organizationName: row.organization_name,
+    };
   }
 
   private async resolveAccess(token: string): Promise<AccessRow> {
