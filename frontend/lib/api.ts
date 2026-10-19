@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "anomalies" | "corrections" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "anomalies" | "corrections" | "treasury" | "inbox" | "integrations" | "developer" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -339,6 +339,18 @@ export function getAnomalyReview(token: string, organizationId: string) { return
 export interface PaymentCorrectionResponse { id: string; type: "CREDIT_NOTE" | "REFUND"; executionId: string; creditNoteId: string | null; amountAtomic: string; reason: string; transactionHash: string | null; status: string; createdAt: string }
 export function listPaymentCorrections(token: string, organizationId: string) { return request<PaymentCorrectionResponse[]>(`/organizations/${encodeURIComponent(organizationId)}/payment-corrections`, token); }
 export function createPaymentCorrection(token: string, organizationId: string, input: { type: "CREDIT_NOTE" | "REFUND"; executionId: string; creditNoteId?: string; amountAtomic: string; reason: string; transactionHash?: string }) { return request<PaymentCorrectionResponse>(`/organizations/${encodeURIComponent(organizationId)}/payment-corrections`, token, { method: "POST", body: JSON.stringify(input) }); }
+export interface ApiCredentialResponse { id:string;name:string;keyPrefix:string;scopes:string[];status:string;lastUsedAt:string|null;createdAt:string }
+export interface WebhookEndpointResponse { id:string;url:string;description:string;eventTypes:string[];status:string;createdAt:string }
+export interface WebhookDeliveryResponse { id:string;endpointId:string;eventId:string;eventType:string;status:string;attemptCount:number;responseStatus:number|null;lastError:string|null;deliveredAt:string|null;createdAt:string }
+const developerPath=(organizationId:string)=>`/organizations/${encodeURIComponent(organizationId)}/developer`;
+export function listApiCredentials(token:string,organizationId:string){return request<ApiCredentialResponse[]>(`${developerPath(organizationId)}/credentials`,token);}
+export function createApiCredential(token:string,organizationId:string,input:{name:string;scopes:string[]}){return request<ApiCredentialResponse&{secret:string}>(`${developerPath(organizationId)}/credentials`,token,{method:"POST",body:JSON.stringify(input)});}
+export function revokeApiCredential(token:string,organizationId:string,id:string){return request<{revoked:true}>(`${developerPath(organizationId)}/credentials/${encodeURIComponent(id)}`,token,{method:"DELETE"});}
+export function listWebhookEndpoints(token:string,organizationId:string){return request<WebhookEndpointResponse[]>(`${developerPath(organizationId)}/webhooks`,token);}
+export function createWebhookEndpoint(token:string,organizationId:string,input:{url:string;description:string;eventTypes:string[]}){return request<WebhookEndpointResponse&{signingSecret:string}>(`${developerPath(organizationId)}/webhooks`,token,{method:"POST",body:JSON.stringify(input)});}
+export function disableWebhookEndpoint(token:string,organizationId:string,id:string){return request<{disabled:true}>(`${developerPath(organizationId)}/webhooks/${encodeURIComponent(id)}`,token,{method:"DELETE"});}
+export function testWebhookEndpoint(token:string,organizationId:string,id:string){return request<{queued:true}>(`${developerPath(organizationId)}/webhooks/${encodeURIComponent(id)}/test`,token,{method:"POST"});}
+export function listWebhookDeliveries(token:string,organizationId:string){return request<WebhookDeliveryResponse[]>(`${developerPath(organizationId)}/webhook-deliveries`,token);}
 
 export type AccountingProvider = "ODOO" | "ERPNEXT";
 

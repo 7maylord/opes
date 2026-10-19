@@ -100,6 +100,12 @@ Failed rows keep `payload.failureReason`. Do not manually mark failed money move
 
 Alert when `/ready` fails, when a worker deployment exits repeatedly, or when `/operations/outbox` reports `failed > 0`, `staleProcessing > 0`, or an increasing `oldestPendingSeconds`. Use the hosting monitor or an external HTTPS monitor; the operations bearer token must be stored as its secret header.
 
+## Public API and webhooks
+
+Workspace owners create scoped API keys and webhook endpoints from **API & webhooks**. API keys are returned once, stored as SHA-256 hashes, and sent in `X-OPES-API-Key` to `/v1/organizations/:organizationId/invoices` or `/payments`. Webhook signing secrets are also returned once and encrypted at rest with `OPES_CONNECTOR_ENCRYPTION_KEY`.
+
+For each delivery, verify `X-OPES-Signature` by computing HMAC-SHA256 over `X-OPES-Timestamp + "." + rawBody` and comparing it with the value after `v1=` using a constant-time comparison. Reject stale timestamps and persist `X-OPES-Event-Id`; do not process the same event ID twice. The worker retries failed HTTPS deliveries up to five times, and the workspace delivery audit retains the response status and failure reason.
+
 ## Backup and restore drill
 
 Enable scheduled Railway volume backups and PITR before production money movement. At every release candidate, also test a logical dump against a disposable database:

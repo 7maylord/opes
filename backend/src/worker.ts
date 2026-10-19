@@ -11,6 +11,7 @@ import { TreasuryReconciliationService } from './modules/treasury/treasury-recon
 import { AccountingConnectorService } from './modules/integrations/accounting-connector.service';
 import { WatchedBucketService } from './modules/integrations/watched-bucket.service';
 import { NotificationEmailWorkerService } from './modules/notifications/notification-email-worker.service';
+import { WebhookDeliveryWorkerService } from './modules/developers/webhook-delivery-worker.service';
 
 async function bootstrapWorker() {
   const config = loadRuntimeConfig();
@@ -31,6 +32,7 @@ async function bootstrapWorker() {
   const accounting = app.get(AccountingConnectorService);
   const watchedBucket = app.get(WatchedBucketService);
   const notificationEmails = app.get(NotificationEmailWorkerService);
+  const webhooks = app.get(WebhookDeliveryWorkerService);
   const runProvisioning = async () => {
     try {
       await provisioning.processDueArcProvisioning();
@@ -99,6 +101,13 @@ async function bootstrapWorker() {
       logger.error('notification email worker failed', error);
     }
   };
+  const runWebhooks = async () => {
+    try {
+      await webhooks.processDue();
+    } catch (error) {
+      logger.error('webhook delivery worker failed', error);
+    }
+  };
 
   await runProvisioning();
   await runPayments();
@@ -109,6 +118,7 @@ async function bootstrapWorker() {
   await runAccounting();
   await runWatchedBucket();
   await runNotificationEmails();
+  await runWebhooks();
   const interval = setInterval(() => {
     void runProvisioning();
     void runPayments();
@@ -119,6 +129,7 @@ async function bootstrapWorker() {
     void runAccounting();
     void runWatchedBucket();
     void runNotificationEmails();
+    void runWebhooks();
   }, 10_000);
 
   await new Promise<void>((resolve) => {

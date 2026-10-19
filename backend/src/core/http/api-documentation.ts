@@ -22,6 +22,10 @@ const tags: Array<[string, string]> = [
   ['Workspace audit', 'Tenant-scoped records, history, and lineage'],
   ['Operations', 'Protected operational queue visibility'],
   ['Provider webhooks', 'Signed provider callbacks'],
+  [
+    'Developer platform',
+    'Scoped API credentials and signed lifecycle webhooks',
+  ],
 ];
 const httpMethods = [
   'get',
@@ -53,6 +57,10 @@ export function configureApiDocumentation(
     .addBearerAuth(
       { type: 'http', scheme: 'bearer', bearerFormat: 'Operations token' },
       'operationsToken',
+    )
+    .addApiKey(
+      { type: 'apiKey', in: 'header', name: 'X-OPES-API-Key' },
+      'opesApiKey',
     );
   for (const [name, description] of tags)
     builder = builder.addTag(name, description);
@@ -90,6 +98,7 @@ export function applyApiDocumentationConventions(
 }
 
 function securityForPath(path: string): Array<Record<string, string[]>> {
+  if (path.startsWith('/v1/')) return [{ opesApiKey: [] }];
   if (path === '/auth/privy/session') return [{ privyToken: [] }];
   if (path.startsWith('/operations/')) return [{ operationsToken: [] }];
   if (
@@ -103,6 +112,8 @@ function securityForPath(path: string): Array<Record<string, string[]>> {
 }
 
 function tagForPath(path: string): string {
+  if (path.startsWith('/v1/') || path.includes('/developer'))
+    return 'Developer platform';
   if (['/', '/health', '/ready'].includes(path)) return 'Health';
   if (path.startsWith('/auth/') || path === '/session') return 'Authentication';
   if (

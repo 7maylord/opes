@@ -4,6 +4,7 @@ import {
   TenantDatabase,
 } from '../../core/database/database.service';
 import { TenantContext } from '../../core/database/tenant-context';
+import { enqueueWebhookEvent } from '../developers/developer-platform.service';
 
 export interface WorkspaceNotification {
   id: string;
@@ -152,6 +153,19 @@ export async function recordNotification(
       input.dedupeKey,
       JSON.stringify(input.metadata ?? {}),
     ],
+  );
+  await enqueueWebhookEvent(
+    database,
+    input.organizationId,
+    input.type,
+    `notification:${input.dedupeKey}`,
+    {
+      title: input.title,
+      body: input.body,
+      subjectType: input.subjectType,
+      subjectId: input.subjectId ?? null,
+      metadata: input.metadata ?? {},
+    },
   );
 }
 

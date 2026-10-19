@@ -73,6 +73,7 @@ All three arrangements share the same vendor controls, evidence lineage, tenant 
 - Successful payments create balanced, document-linked ledger postings.
 - Supplier payment advice includes the paid invoice, amount, network, transaction, and explorer link.
 - Accounting connectors can write settlement references back to the source system without duplicating the writeback.
+- Scoped API keys expose read-only invoice and payment endpoints; signed lifecycle webhooks use stable event IDs, retries, and a delivery audit trail.
 
 ### Multi-tenant by construction
 
@@ -108,6 +109,7 @@ The web application separates the operating surface into focused views:
 - **Treasury & controls** — balances, commitments, forecasts, policy limits, pause controls, vendor authorization, and recovery.
 - **Email inbox** — configured address, forwarding guidance, received messages, attachments, and processing state.
 - **Integrations** — self-service Odoo and ERPNext connection tests, standard evidence mapping, sync status, imported records, audited disconnects, and settlement writeback.
+- **API & webhooks** — owner-managed read scopes, one-time secrets, signed event delivery, tests, revocation, and delivery history.
 - **Team** — organization membership and roles.
 
 ## Architecture
