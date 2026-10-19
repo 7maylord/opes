@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "anomalies" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -334,6 +334,8 @@ export interface ApprovalInboxResponse {
 export function getApprovalInbox(token: string, organizationId: string) {
   return request<ApprovalInboxResponse>(`/organizations/${encodeURIComponent(organizationId)}/approvals`, token);
 }
+export interface AnomalySignalResponse { id: string; kind: "DUPLICATE" | "AMOUNT" | "FREQUENCY" | "PAYOUT_CHANGE"; severity: "INFO" | "REVIEW"; title: string; explanation: string; relatedRecordId: string; actionView: "invoices" | "approvals"; observedAt: string }
+export function getAnomalyReview(token: string, organizationId: string) { return request<{ authoritative: false; signals: AnomalySignalResponse[] }>(`/organizations/${encodeURIComponent(organizationId)}/anomalies`, token); }
 
 export type AccountingProvider = "ODOO" | "ERPNEXT";
 
