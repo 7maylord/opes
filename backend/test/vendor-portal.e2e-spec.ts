@@ -4,9 +4,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { DatabaseService } from '../src/database.service';
-import { RailwayBucketService } from '../src/railway-bucket.service';
-import { SessionService } from '../src/session.service';
+import { SessionService } from '../src/core/auth/session.service';
+import { DatabaseService } from '../src/core/database/database.service';
+import { RailwayBucketService } from '../src/infrastructure/storage/railway-bucket.service';
 
 jest.mock('@privy-io/node', () => ({ PrivyClient: jest.fn() }));
 

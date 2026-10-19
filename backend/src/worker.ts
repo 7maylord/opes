@@ -1,16 +1,16 @@
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ProvisioningWorkerService } from './provisioning-worker.service';
-import { PaymentExecutionWorkerService } from './payment-execution-worker.service';
-import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.service';
-import { loadRuntimeConfig } from './runtime.config';
-import { RecurringExecutionService } from './recurring-execution.service';
-import { EscrowExecutionService } from './escrow-execution.service';
-import { TreasuryReconciliationService } from './treasury-reconciliation.service';
-import { AccountingConnectorService } from './accounting-connector.service';
-import { WatchedBucketService } from './watched-bucket.service';
-import { NotificationEmailWorkerService } from './notification-email-worker.service';
+import { ProvisioningWorkerService } from './modules/agents/provisioning-worker.service';
+import { PaymentExecutionWorkerService } from './modules/payments/payment-execution-worker.service';
+import { LiquidityExecutionWorkerService } from './modules/treasury/liquidity-execution-worker.service';
+import { loadRuntimeConfig } from './core/config/runtime.config';
+import { RecurringExecutionService } from './modules/agreements/recurring-execution.service';
+import { EscrowExecutionService } from './modules/agreements/escrow-execution.service';
+import { TreasuryReconciliationService } from './modules/treasury/treasury-reconciliation.service';
+import { AccountingConnectorService } from './modules/integrations/accounting-connector.service';
+import { WatchedBucketService } from './modules/integrations/watched-bucket.service';
+import { NotificationEmailWorkerService } from './modules/notifications/notification-email-worker.service';
 
 async function bootstrapWorker() {
   const config = loadRuntimeConfig();

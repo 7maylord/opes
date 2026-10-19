@@ -6,7 +6,7 @@ import { AppModule } from './../src/app.module';
 import {
   CORRELATION_ID_HEADER,
   useCorrelationIds,
-} from './../src/correlation-id';
+} from './../src/core/http/correlation-id';
 
 jest.mock('@privy-io/node', () => ({ PrivyClient: jest.fn() }));
 

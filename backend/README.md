@@ -27,6 +27,22 @@ The same image runs in two modes:
 
 PostgreSQL is the source of truth and queue boundary. Runtime access uses a `NOSUPERUSER NOBYPASSRLS` login so row-level security remains effective. Documents use Railway’s S3-compatible Storage Bucket in production and MinIO locally.
 
+## Source layout
+
+```text
+src/
+├── core/            # authentication, configuration, database, health, HTTP concerns
+├── infrastructure/  # Circle, Arc contracts, EVM encoding, document storage
+├── modules/         # business features, each owned by a Nest feature module
+├── abi/             # imported contract ABIs
+├── deployments/     # verified deployment manifests
+├── app.module.ts    # root module composition only
+├── main.ts          # API entry point
+└── worker.ts        # worker entry point
+```
+
+Business code belongs to its feature directory under `modules/`. Shared framework concerns belong to `core/`; external providers and chain/storage adapters belong to `infrastructure/`.
+
 ## Local setup
 
 From the repository root:

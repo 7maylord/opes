@@ -4,11 +4,14 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { CircleWalletService } from '../src/circle-wallet.service';
-import { DatabaseService } from '../src/database.service';
-import { PaymentExecutionWorkerService } from '../src/payment-execution-worker.service';
-import { SessionService } from '../src/session.service';
-import { workspaceKinds, WorkspaceService } from '../src/workspace.service';
+import { SessionService } from '../src/core/auth/session.service';
+import { DatabaseService } from '../src/core/database/database.service';
+import { CircleWalletService } from '../src/infrastructure/circle/circle-wallet.service';
+import { PaymentExecutionWorkerService } from '../src/modules/payments/payment-execution-worker.service';
+import {
+  workspaceKinds,
+  WorkspaceService,
+} from '../src/modules/workspace/workspace.service';
 
 jest.mock('@privy-io/node', () => ({ PrivyClient: jest.fn() }));
 

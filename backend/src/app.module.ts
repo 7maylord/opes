@@ -1,140 +1,33 @@
 import { Module } from '@nestjs/common';
-import { AccountingConnectorController } from './accounting-connector.controller';
-import { AccountingConnectorService } from './accounting-connector.service';
-import { AgentController } from './agent.controller';
-import { AgentDecisionService } from './agent-decision.service';
-import { AgentService } from './agent.service';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
-import { AuthController } from './auth.controller';
-import { AuthService } from './auth.service';
-import { CircleWalletService } from './circle-wallet.service';
-import { DatabaseService } from './database.service';
-import { DocumentStorageService } from './document-storage.service';
-import { DocumentExtractionService } from './document-extraction.service';
-import { DecisionController } from './decision.controller';
-import { DecisionService } from './decision.service';
-import { EvidenceController } from './evidence.controller';
-import { EvidenceService } from './evidence.service';
-import {
-  EmailInboxController,
-  ResendInboundController,
-} from './email-inbox.controller';
-import { EmailInboxService } from './email-inbox.service';
-import { FactoryManifestService } from './factory-manifest.service';
-import { InvoiceController } from './invoice.controller';
-import { LedgerController } from './ledger.controller';
-import { InvoiceService } from './invoice.service';
-import { InvoiceModelService } from './invoice-model.service';
-import { LifecycleController } from './lifecycle.controller';
-import { LiquidityController } from './liquidity.controller';
-import { LiquidityExecutionWorkerService } from './liquidity-execution-worker.service';
-import { LifecycleService } from './lifecycle.service';
-import { LiquidityService } from './liquidity.service';
-import { LedgerService } from './ledger.service';
-import { OnboardingController } from './onboarding.controller';
-import { OperationsController } from './operations.controller';
-import { OperationsService } from './operations.service';
-import { PaymentExecutionService } from './payment-execution.service';
-import { PaymentReconciliationService } from './payment-reconciliation.service';
-import { PaymentWebhookController } from './payment-webhook.controller';
-import { PaymentExecutionWorkerService } from './payment-execution-worker.service';
-import { ProvisioningWorkerService } from './provisioning-worker.service';
-import { ProcurementEvidenceController } from './procurement-evidence.controller';
-import { ProcurementEvidenceService } from './procurement-evidence.service';
-import { RailwayBucketService } from './railway-bucket.service';
-import { RecurringExecutionService } from './recurring-execution.service';
-import { EscrowExecutionService } from './escrow-execution.service';
-import { OnboardingService } from './onboarding.service';
-import { OrganizationInvitationController } from './organization-invitation.controller';
-import { OrganizationController } from './organization.controller';
-import { OrganizationService } from './organization.service';
-import { SessionController } from './session.controller';
-import { SessionService } from './session.service';
-import { TenantContextService } from './tenant-context.service';
-import { OwnerTreasuryController } from './owner-treasury.controller';
-import { OwnerTreasuryService } from './owner-treasury.service';
-import { TreasuryReconciliationService } from './treasury-reconciliation.service';
-import { WorkspaceController } from './workspace.controller';
-import { WorkspaceService } from './workspace.service';
-import {
-  VendorPortalAdminController,
-  VendorPortalController,
-} from './vendor-portal.controller';
-import { VendorPortalService } from './vendor-portal.service';
-import { WatchedBucketService } from './watched-bucket.service';
-import { NotificationController } from './notification.controller';
-import { NotificationService } from './notification.service';
-import { NotificationEmailWorkerService } from './notification-email-worker.service';
+import { CoreModule } from './core/core.module';
+import { InfrastructureModule } from './infrastructure/infrastructure.module';
+import { AgentsModule } from './modules/agents/agents.module';
+import { AgreementsModule } from './modules/agreements/agreements.module';
+import { EvidenceModule } from './modules/evidence/evidence.module';
+import { IntegrationsModule } from './modules/integrations/integrations.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { OperationsModule } from './modules/operations/operations.module';
+import { OrganizationsModule } from './modules/organizations/organizations.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { TreasuryModule } from './modules/treasury/treasury.module';
+import { WorkspaceModule } from './modules/workspace/workspace.module';
 
 @Module({
-  imports: [],
-  controllers: [
-    AccountingConnectorController,
-    AgentController,
-    AppController,
-    AuthController,
-    DecisionController,
-    EmailInboxController,
-    EvidenceController,
-    InvoiceController,
-    LedgerController,
-    LifecycleController,
-    LiquidityController,
-    OnboardingController,
-    NotificationController,
-    OperationsController,
-    PaymentWebhookController,
-    ProcurementEvidenceController,
-    ResendInboundController,
-    OrganizationInvitationController,
-    OrganizationController,
-    SessionController,
-    OwnerTreasuryController,
-    WorkspaceController,
-    VendorPortalAdminController,
-    VendorPortalController,
-  ],
-  providers: [
-    AccountingConnectorService,
-    AgentService,
-    AgentDecisionService,
-    AppService,
-    AuthService,
-    CircleWalletService,
-    DatabaseService,
-    DecisionService,
-    DocumentExtractionService,
-    DocumentStorageService,
-    EmailInboxService,
-    EvidenceService,
-    FactoryManifestService,
-    InvoiceService,
-    InvoiceModelService,
-    LedgerService,
-    LifecycleService,
-    LiquidityService,
-    LiquidityExecutionWorkerService,
-    OnboardingService,
-    NotificationService,
-    NotificationEmailWorkerService,
-    OperationsService,
-    PaymentExecutionService,
-    PaymentExecutionWorkerService,
-    PaymentReconciliationService,
-    ProvisioningWorkerService,
-    ProcurementEvidenceService,
-    RailwayBucketService,
-    RecurringExecutionService,
-    EscrowExecutionService,
-    OrganizationService,
-    SessionService,
-    TenantContextService,
-    OwnerTreasuryService,
-    TreasuryReconciliationService,
-    WorkspaceService,
-    VendorPortalService,
-    WatchedBucketService,
+  imports: [
+    CoreModule,
+    InfrastructureModule,
+    NotificationsModule,
+    OrganizationsModule,
+    AgentsModule,
+    PaymentsModule,
+    EvidenceModule,
+    AgreementsModule,
+    TreasuryModule,
+    InvoicesModule,
+    IntegrationsModule,
+    WorkspaceModule,
+    OperationsModule,
   ],
 })
 export class AppModule {}
