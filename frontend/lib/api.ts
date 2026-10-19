@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "anomalies" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "anomalies" | "corrections" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -336,6 +336,9 @@ export function getApprovalInbox(token: string, organizationId: string) {
 }
 export interface AnomalySignalResponse { id: string; kind: "DUPLICATE" | "AMOUNT" | "FREQUENCY" | "PAYOUT_CHANGE"; severity: "INFO" | "REVIEW"; title: string; explanation: string; relatedRecordId: string; actionView: "invoices" | "approvals"; observedAt: string }
 export function getAnomalyReview(token: string, organizationId: string) { return request<{ authoritative: false; signals: AnomalySignalResponse[] }>(`/organizations/${encodeURIComponent(organizationId)}/anomalies`, token); }
+export interface PaymentCorrectionResponse { id: string; type: "CREDIT_NOTE" | "REFUND"; executionId: string; creditNoteId: string | null; amountAtomic: string; reason: string; transactionHash: string | null; status: string; createdAt: string }
+export function listPaymentCorrections(token: string, organizationId: string) { return request<PaymentCorrectionResponse[]>(`/organizations/${encodeURIComponent(organizationId)}/payment-corrections`, token); }
+export function createPaymentCorrection(token: string, organizationId: string, input: { type: "CREDIT_NOTE" | "REFUND"; executionId: string; creditNoteId?: string; amountAtomic: string; reason: string; transactionHash?: string }) { return request<PaymentCorrectionResponse>(`/organizations/${encodeURIComponent(organizationId)}/payment-corrections`, token, { method: "POST", body: JSON.stringify(input) }); }
 
 export type AccountingProvider = "ODOO" | "ERPNEXT";
 
