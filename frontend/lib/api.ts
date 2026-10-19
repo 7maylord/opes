@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -285,6 +285,40 @@ export interface ExceptionCenterResponse {
 export function listOperationalExceptions(token: string, organizationId: string) {
   return request<ExceptionCenterResponse>(
     `/organizations/${encodeURIComponent(organizationId)}/exceptions`,
+    token,
+  );
+}
+
+export interface PaymentCalendarItemResponse {
+  id: string;
+  kind: "INVOICE" | "SUBSCRIPTION" | "MILESTONE";
+  title: string;
+  counterparty: string;
+  amountAtomic: string;
+  assetSymbol: string;
+  scheduledFor: string | null;
+  status: string;
+  explanation: string;
+  actionView: "invoices" | "agreements";
+  relatedRecordId: string;
+  affectsOperatingBalance: boolean;
+  projectedOperatingAvailableAtomic: string | null;
+}
+
+export interface PaymentCalendarResponse {
+  from: string;
+  to: string;
+  snapshotStatus: string;
+  startingOperatingAvailableAtomic: string;
+  projectedOperatingAvailableAtomic: string;
+  scheduledOperatingSpendAtomic: string;
+  uncoveredAtomic: string;
+  items: PaymentCalendarItemResponse[];
+}
+
+export function getPaymentCalendar(token: string, organizationId: string) {
+  return request<PaymentCalendarResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/payment-calendar`,
     token,
   );
 }

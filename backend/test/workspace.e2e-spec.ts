@@ -166,6 +166,32 @@ describe('Workspace read models (e2e)', () => {
     );
   });
 
+  it('builds a tenant-scoped payment calendar', async () => {
+    const response = await request(app.getHttpAdapter().getInstance() as App)
+      .get(
+        `/organizations/${organizationId}/payment-calendar?from=2026-01-01&to=2030-12-31`,
+      )
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200);
+
+    const body = response.body as unknown as {
+      from: string;
+      to: string;
+      items: Array<{ id: string; kind: string; relatedRecordId: string }>;
+    };
+    expect(body).toMatchObject({
+      from: '2026-01-01',
+      to: '2030-12-31',
+    });
+    expect(
+      body.items.find((item) => item.id === `invoice:${invoiceVersionId}`),
+    ).toMatchObject({
+      id: `invoice:${invoiceVersionId}`,
+      kind: 'INVOICE',
+      relatedRecordId: invoiceVersionId,
+    });
+  });
+
   it('rejects revoked and expired approvals through the execution API', async () => {
     const server = app.getHttpAdapter().getInstance() as App;
     await request(server)
