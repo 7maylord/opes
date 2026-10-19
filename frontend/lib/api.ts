@@ -387,6 +387,16 @@ export function requestAccountingSync(token: string, organizationId: string, con
     { method: "POST" },
   );
 }
+export function testAccountingConnector(token: string, organizationId: string, connectorId: string) {
+  return request<{ ok: true; recordsByType: Record<string, number> }>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}/test`, token, { method: "POST" },
+  );
+}
+export function disconnectAccountingConnector(token: string, organizationId: string, connectorId: string) {
+  return request<{ disconnected: true }>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}`, token, { method: "DELETE" },
+  );
+}
 
 export function listAccountingRecords(token: string, organizationId: string, connectorId: string) {
   return request<AccountingRecordResponse[]>(

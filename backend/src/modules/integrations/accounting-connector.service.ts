@@ -222,6 +222,70 @@ export class AccountingConnectorService {
     return { queued: true };
   }
 
+  async testConnection(
+    context: TenantContext,
+    connectorId: string,
+  ): Promise<{ ok: true; recordsByType: Record<string, number> }> {
+    requireManager(context);
+    const connector = await this.database.withTenant(
+      context,
+      async (database) => {
+        const result = await database.query<ConnectorRow>(
+          `SELECT * FROM opes.accounting_connector_bindings
+         WHERE organization_id=$1 AND id=$2 AND status <> 'DISABLED'`,
+          [context.organizationId, connectorId],
+        );
+        return requireRow(result.rows[0], 'connector');
+      },
+    );
+    const records = await fetchAccountingRecords(
+      providerConfig(connector),
+      null,
+    );
+    const recordsByType: Record<string, number> = {};
+    for (const record of records)
+      recordsByType[record.recordType] =
+        (recordsByType[record.recordType] ?? 0) + 1;
+    return { ok: true, recordsByType };
+  }
+
+  async disconnect(
+    context: TenantContext,
+    connectorId: string,
+  ): Promise<{ disconnected: true }> {
+    requireManager(context);
+    await this.database.withTenant(context, async (database) => {
+      const result = await database.query(
+        `UPDATE opes.accounting_connector_bindings
+         SET status='DISABLED',last_error=NULL,updated_at=now()
+         WHERE organization_id=$1 AND id=$2 AND status <> 'DISABLED'
+         RETURNING id`,
+        [context.organizationId, connectorId],
+      );
+      requireRow(result.rows[0], 'connector');
+      await database.query(
+        `UPDATE opes.outbox_events SET status='FAILED',processed_at=now(),updated_at=now(),
+           payload=payload||'{"failureReason":"Connector disconnected"}'::jsonb
+         WHERE organization_id=$1 AND aggregate_id=$2
+           AND event_type='accounting.connector.sync' AND status='PENDING'`,
+        [context.organizationId, connectorId],
+      );
+      await database.query(
+        `INSERT INTO opes.audit_events (
+           organization_id,actor_user_id,actor_membership_id,event_type,
+           subject_type,subject_id,payload
+         ) VALUES ($1,$2,$3,'ACCOUNTING_CONNECTOR_DISCONNECTED','ACCOUNTING_CONNECTOR',$4,'{}')`,
+        [
+          context.organizationId,
+          context.userId,
+          context.membershipId,
+          connectorId,
+        ],
+      );
+    });
+    return { disconnected: true };
+  }
+
   async requestSettlementWriteback(
     context: TenantContext,
     connectorId: string,

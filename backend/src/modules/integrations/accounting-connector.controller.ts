@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -70,6 +71,32 @@ export class AccountingConnectorController {
     @Headers('x-correlation-id') correlationId: string | undefined,
   ) {
     return this.connectors.requestSync(
+      await this.context(organizationId, authorization, correlationId),
+      connectorId,
+    );
+  }
+
+  @Post(':connectorId/test')
+  async test(
+    @Param('organizationId') organizationId: string,
+    @Param('connectorId') connectorId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    return this.connectors.testConnection(
+      await this.context(organizationId, authorization, correlationId),
+      connectorId,
+    );
+  }
+
+  @Delete(':connectorId')
+  async disconnect(
+    @Param('organizationId') organizationId: string,
+    @Param('connectorId') connectorId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    return this.connectors.disconnect(
       await this.context(organizationId, authorization, correlationId),
       connectorId,
     );

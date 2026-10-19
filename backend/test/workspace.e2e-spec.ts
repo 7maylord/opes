@@ -40,6 +40,7 @@ describe('Workspace read models (e2e)', () => {
   const orderDocumentId = randomUUID();
   const receiptDocumentId = randomUUID();
   const connectorId = randomUUID();
+  const disposableConnectorId = randomUUID();
   const vaultAddress = `0x${randomUUID().replaceAll('-', '').padStart(40, '0')}`;
   const operatorAddress = `0x${randomUUID().replaceAll('-', '').padStart(40, '0')}`;
   const settlementEventId = `workspace-settlement-${randomUUID()}`;
@@ -70,6 +71,14 @@ describe('Workspace read models (e2e)', () => {
           (id,organization_id,provider,label,base_url,encrypted_credentials,status,last_error,created_by_membership_id)
          VALUES ($1,$2,'ODOO','Odoo payable sync','https://private.invalid','secret-ciphertext','FAILED','Authentication failed',$3)`,
         [connectorId, organizationId, membershipId],
+      ),
+    );
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.accounting_connector_bindings
+          (id,organization_id,provider,label,base_url,encrypted_credentials,status,created_by_membership_id)
+         VALUES ($1,$2,'ERPNEXT','Disposable connector','https://erp.invalid','encrypted','ACTIVE',$3)`,
+        [disposableConnectorId, organizationId, membershipId],
       ),
     );
     sessionToken = await app.get(SessionService).createSession(userId);
@@ -203,6 +212,16 @@ describe('Workspace read models (e2e)', () => {
     };
     expect(Array.isArray(body.items)).toBe(true);
     expect(body.summary.total).toBeGreaterThanOrEqual(body.summary.actionable);
+  });
+
+  it('disconnects a workspace-owned accounting connector', async () => {
+    await request(app.getHttpAdapter().getInstance() as App)
+      .delete(
+        `/organizations/${organizationId}/accounting-connectors/${disposableConnectorId}`,
+      )
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200)
+      .expect({ disconnected: true });
   });
 
   it('rejects revoked and expired approvals through the execution API', async () => {

@@ -90,6 +90,32 @@ describe('AccountingConnectorService', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('disconnects a tenant connector and cancels pending sync work', async () => {
+    const queries: string[] = [];
+    const query = jest.fn((text: string) => {
+      queries.push(text);
+      return Promise.resolve({
+        rows: text.includes('UPDATE opes.accounting_connector_bindings')
+          ? [{ id: '00000000-0000-4000-8000-000000000005' }]
+          : [],
+        rowCount: 1,
+      });
+    }) as unknown as TenantDatabase['query'];
+
+    await expect(
+      serviceWithQuery(query).disconnect(
+        context,
+        '00000000-0000-4000-8000-000000000005',
+      ),
+    ).resolves.toEqual({ disconnected: true });
+    expect(queries.some((text) => text.includes("status='DISABLED'"))).toBe(
+      true,
+    );
+    expect(
+      queries.some((text) => text.includes('Connector disconnected')),
+    ).toBe(true);
+  });
+
   it('rejects writeback without both imported bill and settlement ledger evidence', async () => {
     const query = jest.fn(() => Promise.resolve({ rows: [], rowCount: 0 }));
     const service = serviceWithQuery(query);

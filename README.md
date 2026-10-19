@@ -107,7 +107,7 @@ The web application separates the operating surface into focused views:
 - **Agreements** — recurring mandates and milestone escrow from draft through completion.
 - **Treasury & controls** — balances, commitments, forecasts, policy limits, pause controls, vendor authorization, and recovery.
 - **Email inbox** — configured address, forwarding guidance, received messages, attachments, and processing state.
-- **Integrations** — self-service Odoo and ERPNext credentials, sync status, imported records, and settlement writeback.
+- **Integrations** — self-service Odoo and ERPNext connection tests, standard evidence mapping, sync status, imported records, audited disconnects, and settlement writeback.
 - **Team** — organization membership and roles.
 
 ## Architecture
