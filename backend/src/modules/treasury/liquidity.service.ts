@@ -107,6 +107,70 @@ export interface PaymentPolicyResponse extends PaymentPolicyRequest {
   status: 'ACTIVE';
 }
 
+export const paymentPolicyTemplates = [
+  {
+    id: 'conservative',
+    name: 'Conservative',
+    description: 'Low autonomy with a 5,000 USDC reserve.',
+    autonomousLimitAtomic: '100000000',
+    singlePaymentLimitAtomic: '1000000000',
+    vendorDailyLimitAtomic: '2500000000',
+    organizationDailyLimitAtomic: '5000000000',
+    monthlyBudgetAtomic: '25000000000',
+    operatingBufferAtomic: '5000000000',
+  },
+  {
+    id: 'balanced',
+    name: 'Balanced',
+    description: 'Everyday controls for an established operating treasury.',
+    autonomousLimitAtomic: '1000000000',
+    singlePaymentLimitAtomic: '5000000000',
+    vendorDailyLimitAtomic: '10000000000',
+    organizationDailyLimitAtomic: '25000000000',
+    monthlyBudgetAtomic: '100000000000',
+    operatingBufferAtomic: '10000000000',
+  },
+  {
+    id: 'growth',
+    name: 'Growth',
+    description:
+      'Higher operating limits with a protected 10,000 USDC reserve.',
+    autonomousLimitAtomic: '5000000000',
+    singlePaymentLimitAtomic: '25000000000',
+    vendorDailyLimitAtomic: '50000000000',
+    organizationDailyLimitAtomic: '100000000000',
+    monthlyBudgetAtomic: null,
+    operatingBufferAtomic: '10000000000',
+  },
+] as const;
+
+export function policyTemplateRequest(
+  templateId: string,
+): PaymentPolicyRequest {
+  const template = paymentPolicyTemplates.find(
+    (item) => item.id === templateId,
+  );
+  if (!template)
+    throw new BadRequestException('Unknown payment policy template');
+  return {
+    autonomousLimitAtomic: template.autonomousLimitAtomic,
+    singlePaymentLimitAtomic: template.singlePaymentLimitAtomic,
+    vendorDailyLimitAtomic: template.vendorDailyLimitAtomic,
+    organizationDailyLimitAtomic: template.organizationDailyLimitAtomic,
+    monthlyBudgetAtomic: template.monthlyBudgetAtomic,
+    operatingBufferAtomic: template.operatingBufferAtomic,
+    allowedRoutes: [
+      {
+        liquidityRoute: 'OPERATING',
+        environment: 'arc-testnet',
+        chainId: 5042002,
+        assetSymbol: 'USDC',
+      },
+    ],
+    allowedAssets: ['USDC'],
+  };
+}
+
 export interface TreasuryAvailability {
   ready: boolean;
   availableAtomic: bigint;
@@ -578,6 +642,17 @@ export class LiquidityService {
         allowedAssets: assets,
       };
     });
+  }
+
+  listPaymentPolicyTemplates() {
+    return paymentPolicyTemplates;
+  }
+
+  applyPaymentPolicyTemplate(context: TenantContext, templateId: string) {
+    return this.configurePaymentPolicy(
+      context,
+      policyTemplateRequest(templateId),
+    );
   }
 }
 

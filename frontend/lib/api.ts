@@ -1249,6 +1249,19 @@ export async function getTreasuryPosition(token: string, organizationId: string)
   );
 }
 
+export interface PaymentPolicyTemplate {
+  id: string; name: string; description: string; autonomousLimitAtomic: string;
+  singlePaymentLimitAtomic: string; vendorDailyLimitAtomic: string;
+  organizationDailyLimitAtomic: string; monthlyBudgetAtomic: string | null;
+  operatingBufferAtomic: string;
+}
+export function listPaymentPolicyTemplates(token: string, organizationId: string) {
+  return request<PaymentPolicyTemplate[]>(`/organizations/${encodeURIComponent(organizationId)}/treasury/policy-templates`, token);
+}
+export function applyPaymentPolicyTemplate(token: string, organizationId: string, templateId: string) {
+  return request(`/organizations/${encodeURIComponent(organizationId)}/treasury/policy-templates/${encodeURIComponent(templateId)}/apply`, token, { method: "POST" });
+}
+
 export async function planLiquidityAction(
   token: string,
   organizationId: string,

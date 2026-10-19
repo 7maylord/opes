@@ -106,6 +106,31 @@ export class LiquidityController {
     return this.liquidity.configurePaymentPolicy(context, body);
   }
 
+  @Get('treasury/policy-templates')
+  async listPaymentPolicyTemplates(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    await this.resolveContext(organizationId, authorization, correlationId);
+    return this.liquidity.listPaymentPolicyTemplates();
+  }
+
+  @Post('treasury/policy-templates/:templateId/apply')
+  async applyPaymentPolicyTemplate(
+    @Param('organizationId') organizationId: string,
+    @Param('templateId') templateId: string,
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('x-correlation-id') correlationId: string | undefined,
+  ) {
+    const context = await this.resolveContext(
+      organizationId,
+      authorization,
+      correlationId,
+    );
+    return this.liquidity.applyPaymentPolicyTemplate(context, templateId);
+  }
+
   private async resolveContext(
     organizationId: string,
     authorization: string | undefined,
