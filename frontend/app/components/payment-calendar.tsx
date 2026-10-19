@@ -4,9 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   getPaymentCalendar,
+  getForecastScenarios,
   type NotificationView,
   type PaymentCalendarItemResponse,
   type PaymentCalendarResponse,
+  type ForecastScenarioResponse,
 } from "@/lib/api";
 import { formatAtomic } from "@/lib/money";
 
@@ -20,15 +22,16 @@ export function PaymentCalendar({ token, organizationId, onNavigate }: {
   const [data, setData] = useState<PaymentCalendarResponse | null>(null);
   const [filter, setFilter] = useState<Filter>("ALL");
   const [loading, setLoading] = useState(true);
+  const [scenarios, setScenarios] = useState<ForecastScenarioResponse[]>([]);
   const load = useCallback(() => getPaymentCalendar(token, organizationId), [organizationId, token]);
 
   useEffect(() => {
     let active = true;
-    load().then((value) => active && setData(value)).catch((error: unknown) => {
+    Promise.all([load(), getForecastScenarios(token, organizationId)]).then(([value, forecast]) => { if (active) { setData(value); setScenarios(forecast.scenarios); } }).catch((error: unknown) => {
       if (active) toast.error(error instanceof Error ? error.message : "Unable to load payment calendar");
     }).finally(() => active && setLoading(false));
     return () => { active = false; };
-  }, [load]);
+  }, [load, organizationId, token]);
 
   async function refresh() {
     setLoading(true);
@@ -47,6 +50,8 @@ export function PaymentCalendar({ token, organizationId, onNavigate }: {
     </div>
 
     {data ? <><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Spendable now" value={money(data.startingOperatingAvailableAtomic)} /><Metric label="Scheduled 90 days" value={money(data.scheduledOperatingSpendAtomic)} /><Metric label="Projected spendable" value={money(data.projectedOperatingAvailableAtomic)} /><Metric label="Uncovered" value={money(data.uncoveredAtomic)} alert={data.uncoveredAtomic !== "0"} /></div>{data.snapshotStatus !== "FRESH" ? <p className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">The treasury snapshot is {data.snapshotStatus.toLowerCase()}. Dates remain useful, but projected balances are not confirmed chain balances.</p> : null}</> : null}
+
+    {scenarios.length ? <section><div><h4 className="font-semibold">Forecast scenarios</h4><p className="mt-1 text-sm text-slate-500">Planning comparisons only. Payment authorization still uses live evidence and policy checks.</p></div><div className="mt-3 grid gap-3 lg:grid-cols-3">{scenarios.map((scenario) => <article key={scenario.id} className="rounded-2xl border border-slate-200 p-4"><strong>{scenario.label}</strong><p className="mt-1 min-h-10 text-xs text-slate-500">{scenario.explanation}</p><p className="mt-3 text-xl font-semibold">{money(scenario.projectedAvailableAtomic)} USDC</p><p className="text-xs text-slate-500">projected available · {money(scenario.uncoveredAtomic)} uncovered</p></article>)}</div></section> : null}
 
     <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Payment type">{(["ALL", "INVOICE", "SUBSCRIPTION", "MILESTONE"] as const).map((kind) => <button key={kind} type="button" role="tab" aria-selected={filter === kind} onClick={() => setFilter(kind)} className={filter === kind ? "rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white" : "rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600"}>{kind === "ALL" ? "All" : title(kind)}</button>)}</div>
     {loading && !data ? <p role="status" className="rounded-2xl bg-slate-50 p-6 text-sm text-slate-500">Loading scheduled obligations…</p> : null}

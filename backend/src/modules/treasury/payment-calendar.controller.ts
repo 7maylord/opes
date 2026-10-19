@@ -37,4 +37,21 @@ export class PaymentCalendarController {
     });
     return this.calendar.get(context, from, to);
   }
+
+  @Get('scenarios') async scenarios(
+    @Param('organizationId') organizationId: string,
+    @Headers('authorization') authorization?: string,
+    @Headers('x-correlation-id') correlationId?: string,
+  ) {
+    const token = parseBearerToken(authorization);
+    const user = token ? await this.sessions.resolveUser(token) : null;
+    if (!user)
+      throw new UnauthorizedException('Valid bearer session is required');
+    const context = await this.contexts.resolve({
+      organizationId,
+      userId: user.id,
+      requestId: resolveCorrelationId(correlationId),
+    });
+    return this.calendar.getScenarios(context);
+  }
 }

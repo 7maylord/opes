@@ -322,6 +322,10 @@ export function getPaymentCalendar(token: string, organizationId: string) {
     token,
   );
 }
+export interface ForecastScenarioResponse { id: "PAY_NOW" | "DUE_DATE" | "POLICY_SAFE_DELAY"; label: string; explanation: string; spendAtomic: string; projectedAvailableAtomic: string; uncoveredAtomic: string; firstPaymentAt: string | null; lastPaymentAt: string | null }
+export function getForecastScenarios(token: string, organizationId: string) {
+  return request<{ authoritative: false; scenarios: ForecastScenarioResponse[] }>(`/organizations/${encodeURIComponent(organizationId)}/payment-calendar/scenarios`, token);
+}
 
 export interface ApprovalInboxResponse {
   items: Array<{ id: string; kind: "PAYMENT_LIMIT" | "PAYOUT_ADDRESS" | "MILESTONE"; title: string; reason: string; amountAtomic: string | null; assetSymbol: string | null; expiresAt: string | null; requestedAt: string; requiredRoles: string[]; canAct: boolean; status: string; actionView: "invoices" | "agreements"; relatedRecordId: string }>;

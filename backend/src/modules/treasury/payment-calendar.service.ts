@@ -20,6 +20,19 @@ export interface PaymentCalendarItem {
   relatedRecordId: string;
   affectsOperatingBalance: boolean;
   projectedOperatingAvailableAtomic: string | null;
+  dueAt: string | null;
+  policyScheduledAt: string | null;
+}
+
+export interface ForecastScenario {
+  id: 'PAY_NOW' | 'DUE_DATE' | 'POLICY_SAFE_DELAY';
+  label: string;
+  explanation: string;
+  spendAtomic: string;
+  projectedAvailableAtomic: string;
+  uncoveredAtomic: string;
+  firstPaymentAt: string | null;
+  lastPaymentAt: string | null;
 }
 
 export interface PaymentCalendarResponse {
@@ -137,6 +150,74 @@ export class PaymentCalendarService {
       items,
     };
   }
+
+  async getScenarios(
+    context: TenantContext,
+  ): Promise<{ authoritative: false; scenarios: ForecastScenario[] }> {
+    const calendar = await this.get(context);
+    const payable = calendar.items.filter(
+      (item) => item.affectsOperatingBalance && item.scheduledFor !== null,
+    );
+    const today = `${calendar.from}T00:00:00.000Z`;
+    return {
+      authoritative: false,
+      scenarios: [
+        buildScenario(
+          'PAY_NOW',
+          'Pay now',
+          'Moves every payable operating obligation to today.',
+          payable,
+          calendar.startingOperatingAvailableAtomic,
+          () => today,
+        ),
+        buildScenario(
+          'DUE_DATE',
+          'Pay on due date',
+          'Uses contractual due dates and fixed agreement dates.',
+          payable,
+          calendar.startingOperatingAvailableAtomic,
+          (item) => item.dueAt ?? item.scheduledFor,
+        ),
+        buildScenario(
+          'POLICY_SAFE_DELAY',
+          'Current policy schedule',
+          'Uses the latest deterministic agent schedule; execution still reruns every policy check.',
+          payable,
+          calendar.startingOperatingAvailableAtomic,
+          (item) => item.policyScheduledAt ?? item.dueAt ?? item.scheduledFor,
+        ),
+      ],
+    };
+  }
+}
+
+function buildScenario(
+  id: ForecastScenario['id'],
+  label: string,
+  explanation: string,
+  items: PaymentCalendarItem[],
+  startingAtomic: string,
+  dateFor: (item: PaymentCalendarItem) => string | null,
+): ForecastScenario {
+  const dates = items
+    .map(dateFor)
+    .filter((date): date is string => date !== null)
+    .sort();
+  const spend = items.reduce(
+    (total, item) => total + BigInt(item.amountAtomic),
+    0n,
+  );
+  const remaining = BigInt(startingAtomic) - spend;
+  return {
+    id,
+    label,
+    explanation,
+    spendAtomic: spend.toString(),
+    projectedAvailableAtomic: max(remaining, 0n).toString(),
+    uncoveredAtomic: max(-remaining, 0n).toString(),
+    firstPaymentAt: dates[0] ?? null,
+    lastPaymentAt: dates.at(-1) ?? null,
+  };
 }
 
 function buildItems(
@@ -177,6 +258,8 @@ function buildItems(
       relatedRecordId: row.id,
       affectsOperatingBalance: !row.reserved && !inFlight,
       projectedOperatingAvailableAtomic: null,
+      dueAt: row.due_at?.toISOString() ?? null,
+      policyScheduledAt: row.proposed_execution_at?.toISOString() ?? null,
     };
   });
   items.push(
@@ -196,6 +279,8 @@ function buildItems(
         row.status,
       ),
       projectedOperatingAvailableAtomic: null,
+      dueAt: row.due_at.toISOString(),
+      policyScheduledAt: row.due_at.toISOString(),
     })),
   );
   for (const row of rows.subscriptions) {
@@ -224,6 +309,8 @@ function buildItems(
           relatedRecordId: row.id,
           affectsOperatingBalance: true,
           projectedOperatingAvailableAtomic: null,
+          dueAt: `${next}T00:00:00.000Z`,
+          policyScheduledAt: `${next}T00:00:00.000Z`,
         });
       }
       next = addPeriod(next, row.cadence);
@@ -246,6 +333,8 @@ function buildItems(
       relatedRecordId: row.agreement_id,
       affectsOperatingBalance: false,
       projectedOperatingAvailableAtomic: null,
+      dueAt: row.accepted_at?.toISOString() ?? null,
+      policyScheduledAt: row.accepted_at?.toISOString() ?? null,
     })),
   );
   return items
