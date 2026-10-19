@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -321,6 +321,14 @@ export function getPaymentCalendar(token: string, organizationId: string) {
     `/organizations/${encodeURIComponent(organizationId)}/payment-calendar`,
     token,
   );
+}
+
+export interface ApprovalInboxResponse {
+  items: Array<{ id: string; kind: "PAYMENT_LIMIT" | "PAYOUT_ADDRESS" | "MILESTONE"; title: string; reason: string; amountAtomic: string | null; assetSymbol: string | null; expiresAt: string | null; requestedAt: string; requiredRoles: string[]; canAct: boolean; status: string; actionView: "invoices" | "agreements"; relatedRecordId: string }>;
+  summary: { total: number; actionable: number; expiring: number };
+}
+export function getApprovalInbox(token: string, organizationId: string) {
+  return request<ApprovalInboxResponse>(`/organizations/${encodeURIComponent(organizationId)}/approvals`, token);
 }
 
 export type AccountingProvider = "ODOO" | "ERPNEXT";

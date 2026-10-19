@@ -99,6 +99,7 @@ The web application separates the operating surface into focused views:
 
 - **Overview** — organization status, live setup state, and immediate next actions.
 - **Notifications** — invoice, approval, agreement, settlement, and failure events.
+- **Approval inbox** — payment-limit exceptions, payout-wallet changes, and milestone evidence with exact role and expiry context.
 - **Exceptions & recovery** — payment, liquidity, agreement, reconciliation, intake, provisioning, and worker failures with safe next actions.
 - **Payment calendar** — unpaid invoices, recurring renewals, and escrow milestones with schedule explanations and projected operating liquidity.
 - **Getting started** — owner wallet, Circle operator, contract deployment, funding, inbox, and integration setup.

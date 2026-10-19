@@ -12,6 +12,7 @@ import { OrganizationsModule } from './modules/organizations/organizations.modul
 import { PaymentsModule } from './modules/payments/payments.module';
 import { TreasuryModule } from './modules/treasury/treasury.module';
 import { WorkspaceModule } from './modules/workspace/workspace.module';
+import { ApprovalsModule } from './modules/approvals/approvals.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { WorkspaceModule } from './modules/workspace/workspace.module';
     IntegrationsModule,
     WorkspaceModule,
     OperationsModule,
+    ApprovalsModule,
   ],
 })
 export class AppModule {}

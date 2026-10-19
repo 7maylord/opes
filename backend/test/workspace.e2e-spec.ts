@@ -192,6 +192,19 @@ describe('Workspace read models (e2e)', () => {
     });
   });
 
+  it('serves the tenant approval inbox with authority context', async () => {
+    const response = await request(app.getHttpAdapter().getInstance() as App)
+      .get(`/organizations/${organizationId}/approvals`)
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200);
+    const body = response.body as unknown as {
+      items: unknown[];
+      summary: { total: number; actionable: number };
+    };
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.summary.total).toBeGreaterThanOrEqual(body.summary.actionable);
+  });
+
   it('rejects revoked and expired approvals through the execution API', async () => {
     const server = app.getHttpAdapter().getInstance() as App;
     await request(server)
