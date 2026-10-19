@@ -42,6 +42,7 @@ import { WorkspaceHistory } from "./workspace-history";
 import { EmailInboxScreen } from "./email-inbox-screen";
 import { AccountingIntegrations } from "./accounting-integrations";
 import { NotificationCenter } from "./notification-center";
+import { ExceptionCenter } from "./exception-center";
 import { buildSetupChecklist, canExecute } from "@/lib/setup-checklist";
 import { clearTenantCache, sessionStorageKeys } from "@/lib/session-cache";
 
@@ -428,7 +429,7 @@ export function AuthenticatedShell() {
                 One workspace. Every obligation accounted for.
               </p>
               <nav className="mt-6 flex gap-2 overflow-x-auto lg:grid" aria-label="Workspace views">
-                {([ ["overview", "Overview", "Workspace status, setup progress, and next actions."], ["notifications", "Notifications", "Alerts for invoices, approvals, scheduled payments, and settlements."], ["setup", "Getting started", "Wallet, contract, funding, and integration setup."], ["invoices", "Invoices & vendors", "Verify vendors and turn invoice evidence into authorized payments."], ["agreements", "Agreements", "Manage recurring payments and milestone escrow agreements."], ["treasury", "Treasury & controls", "Review balances and forecasts, then set payment and emergency controls."], ["inbox", "Email inbox", "Review invoices and attachments received through your OPES address."], ["integrations", "Integrations", "Connect accounting systems and other evidence sources."], ["team", "Team", "Invite members and manage workspace access." ] ] as const).map(([value, label, summary]) => (
+                {([ ["overview", "Overview", "Workspace status, setup progress, and next actions."], ["notifications", "Notifications", "Alerts for invoices, approvals, scheduled payments, and settlements."], ["exceptions", "Exceptions & recovery", "Review failures, reconciliation cases, and safe recovery actions."], ["setup", "Getting started", "Wallet, contract, funding, and integration setup."], ["invoices", "Invoices & vendors", "Verify vendors and turn invoice evidence into authorized payments."], ["agreements", "Agreements", "Manage recurring payments and milestone escrow agreements."], ["treasury", "Treasury & controls", "Review balances and forecasts, then set payment and emergency controls."], ["inbox", "Email inbox", "Review invoices and attachments received through your OPES address."], ["integrations", "Integrations", "Connect accounting systems and other evidence sources."], ["team", "Team", "Invite members and manage workspace access." ] ] as const).map(([value, label, summary]) => (
                   <button key={value} type="button" title={summary} aria-current={workspaceView === value ? "page" : undefined} disabled={!selectedOrganizationId} onClick={() => setWorkspaceView(value)} className={workspaceView === value ? "flex shrink-0 items-center justify-between gap-2 rounded-xl bg-[#dce8c6] px-4 py-3 text-left text-sm font-semibold text-slate-950" : "flex shrink-0 items-center justify-between gap-2 rounded-xl px-4 py-3 text-left text-sm text-slate-300 hover:bg-white/10 disabled:opacity-40"}><span>{label}</span>{value === "notifications" && notificationUnread > 0 ? <span className="rounded-full bg-cyan-400 px-2 py-0.5 text-xs font-bold text-slate-950">{notificationUnread > 99 ? "99+" : notificationUnread}</span> : null}</button>
                 ))}
               </nav>
@@ -568,6 +569,7 @@ export function AuthenticatedShell() {
               {workspaceView === "inbox" && selectedOrganizationId !== "" ? <EmailInboxScreen key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
               {workspaceView === "integrations" && selectedOrganizationId !== "" ? <AccountingIntegrations key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} canManage={canManageMembers} /> : null}
               {workspaceView === "notifications" && selectedOrganizationId !== "" ? <NotificationCenter key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} onNavigate={(view, invoiceVersionId) => { setFocusedInvoiceVersionId(invoiceVersionId ?? null); setWorkspaceView(view); }} onUnreadChange={setNotificationUnread} /> : null}
+              {workspaceView === "exceptions" && selectedOrganizationId !== "" ? <ExceptionCenter key={selectedOrganizationId} token={token} organizationId={selectedOrganizationId} onNavigate={(view, invoiceVersionId) => { setFocusedInvoiceVersionId(invoiceVersionId ?? null); setWorkspaceView(view); }} /> : null}
             </section>
           </div>
           </>

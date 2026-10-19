@@ -92,7 +92,8 @@ All tenant routes resolve the bearer session and organization context before tou
 | Decisions | invoice verification, agent recommendation, override, authorization, execution |
 | Agreements | recurring subscriptions/cycles and escrow agreements/milestones |
 | Treasury | position, policy actions, liquidity, reconciliation, owner controls |
-| Audit | workspace records, ledger, notifications, outbox operations |
+| Operations | tenant exception and recovery read model; protected platform outbox health |
+| Audit | workspace records, ledger and notifications |
 
 The OpenAPI-derived frontend workspace types are regenerated from the repository root with:
 

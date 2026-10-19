@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "treasury" | "inbox" | "integrations" | "team" | "notifications";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "treasury" | "inbox" | "integrations" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -253,6 +253,40 @@ export function markNotificationRead(token: string, organizationId: string, noti
 }
 export function markAllNotificationsRead(token: string, organizationId: string) {
   return request<{ read: true }>(`/organizations/${encodeURIComponent(organizationId)}/notifications/read-all`, token, { method: "POST" });
+}
+
+export interface OperationalExceptionResponse {
+  id: string;
+  category: "PAYMENT" | "LIQUIDITY" | "AGREEMENT" | "TREASURY" | "INTEGRATION" | "INBOX" | "PROVISIONING" | "SYSTEM";
+  severity: "WARNING" | "CRITICAL";
+  status: string;
+  title: string;
+  reason: string;
+  recommendation: string;
+  recoveryMode: "USER_ACTION" | "AUTO_RECOVERING" | "PLATFORM_ACTION";
+  actionView: NotificationView;
+  actionLabel: string;
+  subjectType: string;
+  subjectId: string;
+  relatedRecordId: string | null;
+  updatedAt: string;
+}
+
+export interface ExceptionCenterResponse {
+  items: OperationalExceptionResponse[];
+  summary: {
+    total: number;
+    critical: number;
+    userAction: number;
+    autoRecovering: number;
+  };
+}
+
+export function listOperationalExceptions(token: string, organizationId: string) {
+  return request<ExceptionCenterResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/exceptions`,
+    token,
+  );
 }
 
 export type AccountingProvider = "ODOO" | "ERPNEXT";

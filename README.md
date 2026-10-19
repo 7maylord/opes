@@ -99,6 +99,7 @@ The web application separates the operating surface into focused views:
 
 - **Overview** — organization status, live setup state, and immediate next actions.
 - **Notifications** — invoice, approval, agreement, settlement, and failure events.
+- **Exceptions & recovery** — payment, liquidity, agreement, reconciliation, intake, provisioning, and worker failures with safe next actions.
 - **Getting started** — owner wallet, Circle operator, contract deployment, funding, inbox, and integration setup.
 - **Invoices & vendors** — vendor records, payout verification, evidence intake, matching, decisions, overrides, and execution.
 - **Agreements** — recurring mandates and milestone escrow from draft through completion.

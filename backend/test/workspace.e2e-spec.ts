@@ -64,6 +64,14 @@ describe('Workspace read models (e2e)', () => {
     await seedOrganization(organizationId, true);
     await seedOrganization(otherOrganizationId, false);
     await seedApprovalFixtures();
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.accounting_connector_bindings
+          (id,organization_id,provider,label,base_url,encrypted_credentials,status,last_error,created_by_membership_id)
+         VALUES ($1,$2,'ODOO','Odoo payable sync','https://private.invalid','secret-ciphertext','FAILED','Authentication failed',$3)`,
+        [connectorId, organizationId, membershipId],
+      ),
+    );
     sessionToken = await app.get(SessionService).createSession(userId);
   });
 
@@ -127,6 +135,35 @@ describe('Workspace read models (e2e)', () => {
       .get(`/organizations/${organizationId}/workspace/vendor`)
       .set('Authorization', 'Bearer expired-session')
       .expect(401);
+  });
+
+  it('surfaces tenant exceptions with safe recovery guidance', async () => {
+    const response = await request(app.getHttpAdapter().getInstance() as App)
+      .get(`/organizations/${organizationId}/exceptions`)
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200);
+    const body = response.body as unknown as {
+      summary: { total: number; userAction: number };
+      items: Array<{
+        category: string;
+        subjectId: string;
+        recoveryMode: string;
+        actionView: string;
+      }>;
+    };
+
+    expect(body.summary.total).toBeGreaterThanOrEqual(1);
+    expect(body.summary.userAction).toBeGreaterThanOrEqual(1);
+    expect(body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'INTEGRATION',
+          subjectId: connectorId,
+          recoveryMode: 'USER_ACTION',
+          actionView: 'integrations',
+        }),
+      ]),
+    );
   });
 
   it('rejects revoked and expired approvals through the execution API', async () => {
@@ -546,12 +583,6 @@ describe('Workspace read models (e2e)', () => {
           transactionHash,
           'e'.repeat(64),
         ],
-      );
-      await sql.query(
-        `INSERT INTO opes.accounting_connector_bindings
-          (id,organization_id,provider,label,base_url,encrypted_credentials,status,last_error,created_by_membership_id)
-         VALUES ($1,$2,'ODOO','Odoo payable sync','https://private.invalid','secret-ciphertext','FAILED','Authentication failed',$3)`,
-        [connectorId, organizationId, membershipId],
       );
     });
     await request(server)
