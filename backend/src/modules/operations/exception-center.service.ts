@@ -129,12 +129,12 @@ function exceptionsSql(): string {
        WHERE action.organization_id=$1 AND action.status IN ('FAILED','UNKNOWN')
       UNION ALL
       SELECT action.id, 'AGREEMENT', 'WARNING', action.status,
-             'Agreement execution failed', COALESCE(action.failure_reason,'The onchain agreement action failed.'),
-             'Open the agreement, verify its current state, and retry the supported action.',
-             'USER_ACTION', 'agreements', 'Open agreement', action.target_type, action.target_id,
+             'Agreement execution needs attention', COALESCE(action.failure_reason,'The onchain agreement action needs reconciliation.'),
+             CASE WHEN action.status='UNKNOWN' THEN 'Reconcile the provider transaction before attempting another submission.' ELSE 'Open the agreement and verify its current state.' END,
+             CASE WHEN action.status='UNKNOWN' THEN 'PLATFORM_ACTION' ELSE 'USER_ACTION' END, 'agreements', 'Open agreement', action.target_type, action.target_id,
              action.target_id, action.updated_at
         FROM opes.lifecycle_chain_actions action
-       WHERE action.organization_id=$1 AND action.status='FAILED'
+       WHERE action.organization_id=$1 AND action.status IN ('FAILED','UNKNOWN')
       UNION ALL
       SELECT exception.id, 'TREASURY', 'CRITICAL', exception.status,
              replace(initcap(exception.exception_type),'_',' '),

@@ -1,4 +1,9 @@
 import {
+  claimLifecycleAction,
+  lockLifecycleClaim,
+  releaseLifecycleClaim,
+} from './lifecycle-action-claims';
+import {
   ConflictException,
   Injectable,
   NotFoundException,
@@ -466,21 +471,36 @@ export class EscrowExecutionService {
   }
 
   async processDue(limit = 10) {
-    const actions = await this.database.withWorker((db) =>
-      db.query<ActionRow>(
-        `SELECT action.* FROM opes.lifecycle_chain_actions action LEFT JOIN opes.lifecycle_chain_actions required ON required.id=(action.payload->>'requiresActionId')::uuid WHERE action.actor='OPERATOR' AND action.action_type IN ('FUND_ESCROW','RELEASE_ESCROW_MILESTONE','REFUND_ESCROW') AND action.status IN ('PREPARED','SUBMITTED') AND (required.id IS NULL OR required.status='CONFIRMED') ORDER BY action.created_at FOR UPDATE OF action SKIP LOCKED LIMIT $1`,
-        [limit],
-      ),
-    );
-    for (const action of actions.rows) await this.execute(action);
-    return actions.rows.length;
+    let processed = 0;
+    while (processed < limit) {
+      const action = await this.database.withWorker((db) =>
+        claimLifecycleAction(db, [
+          'FUND_ESCROW',
+          'RELEASE_ESCROW_MILESTONE',
+          'REFUND_ESCROW',
+        ]),
+      );
+      if (!action) break;
+      await this.execute(action);
+      processed++;
+    }
+    return processed;
   }
 
   private async execute(action: ActionRow) {
+    let terminalFailure = false;
     try {
       const evidence = await this.escrowEvidence(action);
       let provider = action.provider_transaction_id;
       if (!provider) {
+        const marked = await this.database.withWorker((db) =>
+          db.query(
+            `UPDATE opes.lifecycle_chain_actions SET status='UNKNOWN',submitted_at=now(),updated_at=now()
+           WHERE id=$1 AND claim_token=$2 AND lease_expires_at>now() AND status='PREPARED' RETURNING id`,
+            [action.id, action.claim_token],
+          ),
+        );
+        if (!marked.rows.length) return;
         const submitted = await this.circle.createCallDataTransaction({
           walletId: evidence.walletId,
           contractAddress: evidence.contractAddress,
@@ -490,20 +510,22 @@ export class EscrowExecutionService {
         provider = submitted.id;
         await this.database.withWorker((db) =>
           db.query(
-            `UPDATE opes.lifecycle_chain_actions SET status='SUBMITTED',provider_transaction_id=$2,submitted_at=now(),updated_at=now() WHERE id=$1`,
-            [action.id, provider],
+            `UPDATE opes.lifecycle_chain_actions SET status='SUBMITTED',provider_transaction_id=$2,submitted_at=now(),updated_at=now() WHERE id=$1 AND claim_token=$3 AND lease_expires_at>now()`,
+            [action.id, provider, action.claim_token],
           ),
         );
       }
       const transaction = (await this.circle.getTransaction(
         provider,
       )) as CircleLifecycleTransaction;
-      if (TERMINAL_CIRCLE_STATES.has(transaction.state))
+      if (TERMINAL_CIRCLE_STATES.has(transaction.state)) {
+        terminalFailure = true;
         throw new Error(
           transaction.errorDetails ??
             transaction.errorReason ??
             `Circle transaction ${transaction.state}`,
         );
+      }
       if (!transaction.txHash) return;
       const [tx, receipt] = await Promise.all([
         rpc<LifecycleRpcTransaction | null>('eth_getTransactionByHash', [
@@ -514,6 +536,10 @@ export class EscrowExecutionService {
         ]),
       ]);
       if (!tx || !receipt) return;
+      if (receipt.status === '0x0') {
+        terminalFailure = true;
+        throw new Error('Lifecycle transaction reverted');
+      }
       const transactionHash = verifyLifecycleExecution(
         evidence,
         transaction,
@@ -521,6 +547,7 @@ export class EscrowExecutionService {
         receipt,
       );
       await this.database.withWorker(async (db) => {
+        if (!(await lockLifecycleClaim(db, action))) return;
         let completedAgreementId: string | undefined;
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status='CONFIRMED',transaction_hash=$2,confirmed_at=now(),updated_at=now() WHERE id=$1`,
@@ -586,6 +613,14 @@ export class EscrowExecutionService {
       const reason =
         error instanceof Error ? error.message : 'Escrow execution failed';
       await this.database.withWorker(async (db) => {
+        if (!(await lockLifecycleClaim(db, action))) return;
+        if (!terminalFailure) {
+          await db.query(
+            `UPDATE opes.lifecycle_chain_actions SET failure_reason=$2,updated_at=now() WHERE id=$1`,
+            [action.id, reason],
+          );
+          return;
+        }
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status='FAILED',failure_reason=$2,updated_at=now() WHERE id=$1`,
           [action.id, reason],
@@ -604,6 +639,8 @@ export class EscrowExecutionService {
           dedupeKey: `escrow-execution-failed:${action.id}`,
         });
       });
+    } finally {
+      await releaseLifecycleClaim(this.database, action);
     }
   }
 

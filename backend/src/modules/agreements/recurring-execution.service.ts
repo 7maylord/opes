@@ -30,6 +30,12 @@ import {
 import { addPeriod, dueAtUtc } from './lifecycle.service';
 import { TenantContext } from '../../core/database/tenant-context';
 
+import {
+  claimLifecycleAction,
+  lockLifecycleClaim,
+  releaseLifecycleClaim,
+} from './lifecycle-action-claims';
+
 const vaultAbi = vaultAbiJson as Parameters<
   typeof encodeFunctionData
 >[0]['abi'];
@@ -68,6 +74,7 @@ export interface ActionRow {
   payload: Record<string, unknown>;
   status: string;
   provider_transaction_id: string | null;
+  claim_token?: string;
 }
 
 @Injectable()
@@ -363,15 +370,10 @@ export class RecurringExecutionService {
   }
 
   private async nextRecurringAction(): Promise<ActionRow | undefined> {
-    const pending = await this.database.withWorker((database) =>
-      database.query<ActionRow>(
-        `SELECT * FROM opes.lifecycle_chain_actions
-          WHERE actor = 'OPERATOR' AND action_type = 'EXECUTE_RECURRING_PAYMENT'
-            AND status IN ('PREPARED', 'SUBMITTED')
-          ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`,
-      ),
+    const pending = await this.database.withWorker((db) =>
+      claimLifecycleAction(db, ['EXECUTE_RECURRING_PAYMENT']),
     );
-    return pending.rows[0] ?? this.prepareNextDueCycle();
+    return pending ?? this.prepareNextDueCycle();
   }
 
   private async prepareNextDueCycle(): Promise<ActionRow | undefined> {
@@ -459,15 +461,28 @@ export class RecurringExecutionService {
         `UPDATE opes.subscription_cycles SET status = 'PROCESSING' WHERE organization_id = $1 AND id = $2 AND status = 'DUE'`,
         [row.organization_id, row.id],
       );
-      return action;
+      return claimLifecycleAction(
+        database,
+        ['EXECUTE_RECURRING_PAYMENT'],
+        action.id,
+      );
     });
   }
 
   private async execute(action: ActionRow): Promise<void> {
+    let terminalFailure = false;
     try {
       const evidence = await this.recurringEvidence(action);
       let providerId = action.provider_transaction_id;
       if (!providerId) {
+        const marked = await this.database.withWorker((db) =>
+          db.query(
+            `UPDATE opes.lifecycle_chain_actions SET status='UNKNOWN',submitted_at=now(),updated_at=now()
+           WHERE id=$1 AND claim_token=$2 AND lease_expires_at>now() AND status='PREPARED' RETURNING id`,
+            [action.id, action.claim_token],
+          ),
+        );
+        if (!marked.rows.length) return;
         const submitted = await this.circle.createCallDataTransaction({
           walletId: evidence.walletId,
           contractAddress: evidence.contractAddress,
@@ -477,20 +492,22 @@ export class RecurringExecutionService {
         providerId = submitted.id;
         await this.database.withWorker((db) =>
           db.query(
-            `UPDATE opes.lifecycle_chain_actions SET status = 'SUBMITTED', provider_transaction_id = $2, submitted_at = now(), updated_at = now() WHERE id = $1`,
-            [action.id, providerId],
+            `UPDATE opes.lifecycle_chain_actions SET status = 'SUBMITTED', provider_transaction_id = $2, submitted_at = now(), updated_at = now() WHERE id = $1 AND claim_token=$3 AND lease_expires_at>now()`,
+            [action.id, providerId, action.claim_token],
           ),
         );
       }
       const transaction = (await this.circle.getTransaction(
         providerId,
       )) as CircleLifecycleTransaction;
-      if (TERMINAL_CIRCLE_STATES.has(transaction.state))
+      if (TERMINAL_CIRCLE_STATES.has(transaction.state)) {
+        terminalFailure = true;
         throw new Error(
           transaction.errorDetails ??
             transaction.errorReason ??
             `Circle transaction ${transaction.state}`,
         );
+      }
       if (!transaction.txHash) return;
       const [chainTransaction, receipt] = await Promise.all([
         rpc<LifecycleRpcTransaction | null>('eth_getTransactionByHash', [
@@ -501,6 +518,10 @@ export class RecurringExecutionService {
         ]),
       ]);
       if (!receipt || !chainTransaction) return;
+      if (receipt.status === '0x0') {
+        terminalFailure = true;
+        throw new Error('Lifecycle transaction reverted');
+      }
       const transactionHash = verifyLifecycleExecution(
         evidence,
         transaction,
@@ -508,6 +529,7 @@ export class RecurringExecutionService {
         receipt,
       );
       await this.database.withWorker(async (db) => {
+        if (!(await lockLifecycleClaim(db, action))) return;
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status = 'CONFIRMED', transaction_hash = $2, confirmed_at = now(), updated_at = now() WHERE id = $1`,
           [action.id, transactionHash],
@@ -534,6 +556,14 @@ export class RecurringExecutionService {
       const reason =
         error instanceof Error ? error.message : 'Recurring execution failed';
       await this.database.withWorker(async (db) => {
+        if (!(await lockLifecycleClaim(db, action))) return;
+        if (!terminalFailure) {
+          await db.query(
+            `UPDATE opes.lifecycle_chain_actions SET failure_reason=$2,updated_at=now() WHERE id=$1`,
+            [action.id, reason],
+          );
+          return;
+        }
         await db.query(
           `UPDATE opes.lifecycle_chain_actions SET status = 'FAILED', failure_reason = $2, updated_at = now() WHERE id = $1`,
           [action.id, reason],
@@ -554,6 +584,8 @@ export class RecurringExecutionService {
           dedupeKey: `recurring-failed:${action.id}`,
         });
       });
+    } finally {
+      await releaseLifecycleClaim(this.database, action);
     }
   }
 

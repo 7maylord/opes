@@ -178,7 +178,11 @@ export class PaymentExecutionWorkerService {
       );
       return;
     }
-    if (execution.expires_at.getTime() <= Date.now()) {
+    if (
+      execution.provider_transaction_id === null &&
+      execution.attempt_status !== 'UNKNOWN' &&
+      execution.expires_at.getTime() <= Date.now()
+    ) {
       await this.fail(
         event,
         execution.attempt_id,

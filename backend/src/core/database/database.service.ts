@@ -1,4 +1,9 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { loadRuntimeConfig } from '../config/runtime.config';
 import { assertTenantContext, TenantContext } from './tenant-context';
@@ -18,12 +23,15 @@ interface DatabasePool {
 @Injectable()
 export class DatabaseService implements OnModuleDestroy {
   private pool?: DatabasePool;
+  private readonly logger = new Logger(DatabaseService.name);
+  private waiting = 0;
+  private closing = false;
   private readonly databaseUrl = loadRuntimeConfig().databaseUrl;
 
   async withDatabase<T>(
     work: (database: TenantDatabase) => Promise<T>,
   ): Promise<T> {
-    const client = await this.getPool().connect();
+    const client = await this.connect();
 
     try {
       return await work(client);
@@ -35,7 +43,8 @@ export class DatabaseService implements OnModuleDestroy {
   async withTransaction<T>(
     work: (database: TenantDatabase) => Promise<T>,
   ): Promise<T> {
-    const client = await this.getPool().connect();
+    const client = await this.connect();
+    let discard = false;
 
     try {
       await client.query('BEGIN');
@@ -43,10 +52,14 @@ export class DatabaseService implements OnModuleDestroy {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
     }
   }
 
@@ -67,7 +80,8 @@ export class DatabaseService implements OnModuleDestroy {
       throw new Error('userId is required');
     }
 
-    const client = await this.getPool().connect();
+    const client = await this.connect();
+    let discard = false;
     try {
       await client.query('BEGIN');
       await client.query("SELECT set_config('opes.user_id', $1, true)", [
@@ -77,10 +91,14 @@ export class DatabaseService implements OnModuleDestroy {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
     }
   }
 
@@ -92,7 +110,8 @@ export class DatabaseService implements OnModuleDestroy {
       throw new Error('organizationId is required');
     }
 
-    const client = await this.getPool().connect();
+    const client = await this.connect();
+    let discard = false;
 
     try {
       await client.query('BEGIN');
@@ -104,17 +123,22 @@ export class DatabaseService implements OnModuleDestroy {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
     }
   }
 
   async withWorker<T>(
     work: (database: TenantDatabase) => Promise<T>,
   ): Promise<T> {
-    const client = await this.getPool().connect();
+    const client = await this.connect();
+    let discard = false;
 
     try {
       await client.query('BEGIN');
@@ -123,17 +147,33 @@ export class DatabaseService implements OnModuleDestroy {
       await client.query('COMMIT');
       return result;
     } catch (error) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        discard = true;
+      }
       throw error;
     } finally {
-      client.release();
+      client.release(discard);
     }
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.closing = true;
     const pool = this.pool;
     this.pool = undefined;
     await pool?.end();
+  }
+
+  private async connect(): Promise<PoolClient> {
+    if (this.closing || this.waiting >= 100)
+      throw new ServiceUnavailableException('Database is busy; retry shortly');
+    this.waiting++;
+    try {
+      return await this.getPool().connect();
+    } finally {
+      this.waiting--;
+    }
   }
 
   private getPool(): DatabasePool {
@@ -142,7 +182,19 @@ export class DatabaseService implements OnModuleDestroy {
         throw new Error('DATABASE_URL is required for database access');
       }
 
-      this.pool = new Pool({ connectionString: this.databaseUrl });
+      const pool = new Pool({
+        connectionString: this.databaseUrl,
+        max: 10,
+        connectionTimeoutMillis: 5_000,
+        statement_timeout: 25_000,
+        query_timeout: 30_000,
+        lock_timeout: 5_000,
+        idle_in_transaction_session_timeout: 60_000,
+      });
+      pool.on('error', () =>
+        this.logger.error('Idle database connection lost; pool will reconnect'),
+      );
+      this.pool = pool;
     }
 
     return this.pool;

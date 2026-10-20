@@ -71,6 +71,7 @@ describe('PaymentExecutionService', () => {
       .mockResolvedValueOnce({
         rows: [{ organization_id: context.organizationId }],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [autonomous] })
       .mockResolvedValueOnce({
         rows: [
@@ -109,7 +110,7 @@ describe('PaymentExecutionService', () => {
       status: 'PENDING',
     });
     expect(query).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.stringContaining('INSERT INTO opes.payment_executions'),
       expect.arrayContaining([
         context.organizationId,
@@ -130,7 +131,7 @@ describe('PaymentExecutionService', () => {
       ]),
     );
     expect(query).toHaveBeenNthCalledWith(
-      5,
+      6,
       expect.stringContaining('SELECT $1, $3'),
       [
         context.organizationId,
@@ -146,6 +147,7 @@ describe('PaymentExecutionService', () => {
       .mockResolvedValueOnce({
         rows: [{ organization_id: context.organizationId }],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
         rows: [candidate({ approval_amount_atomic: '12340002' })],
       });
@@ -157,7 +159,7 @@ describe('PaymentExecutionService', () => {
         '55555555-5555-5555-5555-555555555555',
       ),
     ).rejects.toThrow(ConflictException);
-    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenCalledTimes(3);
   });
 
   it('reserves confirmed Base liquidity once for an approved payout', async () => {
@@ -176,6 +178,7 @@ describe('PaymentExecutionService', () => {
       .mockResolvedValueOnce({
         rows: [{ organization_id: context.organizationId }],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [crosschain] })
       .mockResolvedValueOnce({
         rows: [
@@ -215,7 +218,7 @@ describe('PaymentExecutionService', () => {
       maxSourceDebitAtomic: '25000000',
     });
     expect(query).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.any(String),
       expect.arrayContaining([
         'CROSSCHAIN_WALLET',
@@ -224,11 +227,26 @@ describe('PaymentExecutionService', () => {
         '25000000',
       ]),
     );
-    expect(query).toHaveBeenNthCalledWith(5, expect.any(String), [
+    expect(query).toHaveBeenNthCalledWith(6, expect.any(String), [
       context.organizationId,
       'execution-2',
       'payment.execute.crosschain',
     ]);
+  });
+
+  it('returns an existing execution after its reservation has been consumed', async () => {
+    const query = jest
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          { id: 'existing', decision_id: 'decision', status: 'SUBMITTED' },
+        ],
+      });
+    await expect(
+      serviceWithQuery(query).requestDecisionExecution(context, 'decision'),
+    ).resolves.toMatchObject({ id: 'existing', status: 'SUBMITTED' });
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it('requires an approving role to request execution', async () => {

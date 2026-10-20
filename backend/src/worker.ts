@@ -1,3 +1,4 @@
+import { runWorkerLoop } from './core/worker-loop';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -20,7 +21,6 @@ async function bootstrapWorker() {
   });
   const logger = new Logger('Worker');
 
-  app.enableShutdownHooks();
   logger.log(`worker started in ${config.environment}`);
 
   const provisioning = app.get(ProvisioningWorkerService);
@@ -33,112 +33,35 @@ async function bootstrapWorker() {
   const watchedBucket = app.get(WatchedBucketService);
   const notificationEmails = app.get(NotificationEmailWorkerService);
   const webhooks = app.get(WebhookDeliveryWorkerService);
-  const runProvisioning = async () => {
-    try {
-      await provisioning.processDueArcProvisioning();
-    } catch (error) {
-      logger.error('arc provisioning worker failed', error);
-    }
-  };
-  const runLiquidity = async () => {
-    try {
-      await liquidity.processDueLiquidityActions();
-    } catch (error) {
-      logger.error('liquidity execution worker failed', error);
-    }
-  };
-  const runPayments = async () => {
-    try {
-      await payments.processDuePaymentExecutions();
-    } catch (error) {
-      logger.error('payment execution worker failed', error);
-    }
-  };
-  const runRecurring = async () => {
-    try {
-      await recurring.processDue();
-    } catch (error) {
-      logger.error('recurring execution worker failed', error);
-    }
-  };
-  const runEscrow = async () => {
-    try {
-      await escrow.processDue();
-    } catch (error) {
-      logger.error('escrow execution worker failed', error);
-    }
-  };
-  let reconciliationRunning = false;
-  const runReconciliation = async () => {
-    if (reconciliationRunning) return;
-    reconciliationRunning = true;
-    try {
-      await reconciliation.process();
-    } catch (error) {
-      logger.error('treasury reconciliation worker failed', error);
-    } finally {
-      reconciliationRunning = false;
-    }
-  };
-  const runAccounting = async () => {
-    try {
-      await accounting.processDue();
-    } catch (error) {
-      logger.error('accounting connector worker failed', error);
-    }
-  };
-  const runWatchedBucket = async () => {
-    try {
-      await watchedBucket.processDue();
-    } catch (error) {
-      logger.error('watched bucket worker failed', error);
-    }
-  };
-  const runNotificationEmails = async () => {
-    try {
-      await notificationEmails.processDue();
-    } catch (error) {
-      logger.error('notification email worker failed', error);
-    }
-  };
-  const runWebhooks = async () => {
-    try {
-      await webhooks.processDue();
-    } catch (error) {
-      logger.error('webhook delivery worker failed', error);
-    }
-  };
-
-  await runProvisioning();
-  await runPayments();
-  await runLiquidity();
-  await runRecurring();
-  await runEscrow();
-  await runReconciliation();
-  await runAccounting();
-  await runWatchedBucket();
-  await runNotificationEmails();
-  await runWebhooks();
-  const interval = setInterval(() => {
-    void runProvisioning();
-    void runPayments();
-    void runLiquidity();
-    void runRecurring();
-    void runEscrow();
-    void runReconciliation();
-    void runAccounting();
-    void runWatchedBucket();
-    void runNotificationEmails();
-    void runWebhooks();
-  }, 10_000);
-
-  await new Promise<void>((resolve) => {
-    process.once('SIGINT', resolve);
-    process.once('SIGTERM', resolve);
-  });
-
-  clearInterval(interval);
-  await app.close();
+  const stop = new AbortController();
+  const shutdown = () => stop.abort();
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  const tasks: Array<[string, () => Promise<unknown>]> = [
+    ['provisioning', () => provisioning.processDueArcProvisioning()],
+    ['payments', () => payments.processDuePaymentExecutions()],
+    ['liquidity', () => liquidity.processDueLiquidityActions()],
+    ['recurring', () => recurring.processDue()],
+    ['escrow', () => escrow.processDue()],
+    ['reconciliation', () => reconciliation.process()],
+    ['accounting', () => accounting.processDue()],
+    ['watched bucket', () => watchedBucket.processDue()],
+    ['notification emails', () => notificationEmails.processDue()],
+    ['webhooks', () => webhooks.processDue()],
+  ];
+  try {
+    await Promise.all(
+      tasks.map(([name, work]) =>
+        runWorkerLoop(work, stop.signal, (error) =>
+          logger.error(`${name} worker failed`, error),
+        ),
+      ),
+    );
+  } finally {
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
+    await app.close();
+  }
 }
 
 void bootstrapWorker();

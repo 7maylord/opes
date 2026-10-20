@@ -105,6 +105,12 @@ export class PaymentExecutionService {
          WHERE organization_id=$1 FOR UPDATE`,
         [context.organizationId],
       );
+      const existing = await database.query<ExecutionRow>(
+        `SELECT *, amount_atomic::text AS amount_atomic, max_source_debit_atomic::text AS max_source_debit_atomic
+         FROM opes.payment_executions WHERE organization_id=$1 AND decision_id=$2`,
+        [context.organizationId, decisionId],
+      );
+      if (existing.rows[0]) return mapExecution(existing.rows[0]);
       const candidate = await getExecutionCandidate(
         database,
         context.organizationId,

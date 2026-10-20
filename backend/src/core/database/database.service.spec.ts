@@ -1,7 +1,39 @@
 import { DatabaseService } from './database.service';
 import { TenantContext } from './tenant-context';
+import { Pool } from 'pg';
 
 describe('DatabaseService', () => {
+  it('handles idle pool errors and bounds acquisition and query waits', async () => {
+    const service = new DatabaseService();
+    Reflect.set(service, 'databaseUrl', 'postgresql://unused');
+    const pool = (service as unknown as { getPool(): Pool }).getPool();
+    expect(pool.options.connectionTimeoutMillis).toBe(5000);
+    expect(pool.options.query_timeout).toBe(30000);
+    expect(() =>
+      pool.emit('error', new Error('connection lost')),
+    ).not.toThrow();
+    await service.onModuleDestroy();
+    await expect(
+      service.withDatabase(() => Promise.resolve(undefined)),
+    ).rejects.toThrow('Database is busy');
+  });
+
+  it('discards a broken connection without masking the original transaction error', async () => {
+    const client = {
+      query: jest.fn((sql: string) =>
+        sql === 'ROLLBACK'
+          ? Promise.reject(new Error('socket closed'))
+          : Promise.resolve({ rows: [] }),
+      ),
+      release: jest.fn(),
+    };
+    const service = new DatabaseService();
+    Reflect.set(service, 'pool', { connect: () => Promise.resolve(client) });
+    await expect(
+      service.withTransaction(() => Promise.reject(new Error('original'))),
+    ).rejects.toThrow('original');
+    expect(client.release).toHaveBeenCalledWith(true);
+  });
   const context: TenantContext = {
     organizationId: '11111111-1111-1111-1111-111111111111',
     userId: '22222222-2222-2222-2222-222222222222',
