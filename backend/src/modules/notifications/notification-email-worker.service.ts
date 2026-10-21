@@ -7,6 +7,8 @@ interface DeliveryEvent {
   organization_id: string;
   delivery_id: string;
   attempts: number;
+  claim_token: string;
+  retry_window_expired: boolean;
 }
 interface AdviceRow {
   recipient_email: string;
@@ -32,8 +34,17 @@ export class NotificationEmailWorkerService {
       const event = await this.claim();
       if (!event) return processed;
       try {
+        if (event.retry_window_expired)
+          throw new Error(
+            'Email outcome needs review: provider idempotency window expired',
+          );
         const advice = await this.load(event);
-        const providerId = await sendPaymentAdvice(advice);
+        const payload = await this.prepareRequest(event, advice);
+        if (!payload) {
+          processed++;
+          continue;
+        }
+        const providerId = await sendPaymentAdvice(payload, event.delivery_id);
         await this.sent(event, advice, providerId);
       } catch (error) {
         await this.failed(
@@ -50,24 +61,33 @@ export class NotificationEmailWorkerService {
 
   private claim() {
     return this.database.withWorker(async (database) => {
+      await database.query(`WITH exhausted AS (
+        UPDATE opes.outbox_events event SET status='FAILED',claim_token=NULL,updated_at=now()
+        FROM opes.outbound_email_deliveries delivery
+        WHERE event.event_type='PAYMENT_ADVICE_EMAIL' AND event.aggregate_id=delivery.id AND event.organization_id=delivery.organization_id
+          AND event.status='PROCESSING' AND event.updated_at<now()-interval '5 minutes' AND delivery.attempts>=3
+        RETURNING delivery.id
+      ) UPDATE opes.outbound_email_deliveries SET status='FAILED',failure_reason='Delivery interrupted after final attempt',updated_at=now() WHERE id IN (SELECT id FROM exhausted)`);
       const result = await database.query<DeliveryEvent>(
         `WITH candidate AS (
-           SELECT event.id,event.organization_id,event.aggregate_id,delivery.attempts
+           SELECT event.id,event.organization_id,event.aggregate_id,delivery.attempts,
+                  COALESCE(delivery.first_attempt_at<=now()-interval '23 hours',false) AS retry_window_expired
              FROM opes.outbox_events event
              JOIN opes.outbound_email_deliveries delivery
                ON delivery.organization_id=event.organization_id AND delivery.id=event.aggregate_id
-            WHERE event.event_type='PAYMENT_ADVICE_EMAIL' AND event.status='PENDING'
-              AND event.available_at<=now() AND delivery.status IN ('PENDING','FAILED')
+            WHERE event.event_type='PAYMENT_ADVICE_EMAIL' AND delivery.attempts<3
+              AND ((event.status='PENDING' AND event.available_at<=now() AND delivery.status IN ('PENDING','FAILED'))
+                OR (event.status='PROCESSING' AND event.updated_at<now()-interval '5 minutes' AND delivery.status='SENDING'))
             ORDER BY event.created_at FOR UPDATE OF event SKIP LOCKED LIMIT 1
          )
-         UPDATE opes.outbox_events event SET status='PROCESSING',updated_at=now()
+         UPDATE opes.outbox_events event SET status='PROCESSING',claim_token=gen_random_uuid(),updated_at=now()
           FROM candidate WHERE event.id=candidate.id
-         RETURNING event.id AS event_id,event.organization_id,candidate.aggregate_id AS delivery_id,candidate.attempts`,
+         RETURNING event.id AS event_id,event.organization_id,candidate.aggregate_id AS delivery_id,candidate.attempts,event.claim_token,candidate.retry_window_expired`,
       );
       const event = result.rows[0];
       if (event)
         await database.query(
-          `UPDATE opes.outbound_email_deliveries SET status='SENDING',attempts=attempts+1,updated_at=now() WHERE organization_id=$1 AND id=$2`,
+          `UPDATE opes.outbound_email_deliveries SET status='SENDING',attempts=attempts+1,first_attempt_at=COALESCE(first_attempt_at,now()),updated_at=now() WHERE organization_id=$1 AND id=$2`,
           [event.organization_id, event.delivery_id],
         );
       return event;
@@ -98,14 +118,41 @@ export class NotificationEmailWorkerService {
     });
   }
 
+  private prepareRequest(event: DeliveryEvent, advice: AdviceRow) {
+    return this.database.withWorker(async (db) => {
+      if (!(await this.ownsClaim(db, event))) return null;
+      const result = await db.query<{ request_payload: unknown }>(
+        `UPDATE opes.outbound_email_deliveries SET request_payload=COALESCE(request_payload,$3::jsonb) WHERE organization_id=$1 AND id=$2 RETURNING request_payload`,
+        [
+          event.organization_id,
+          event.delivery_id,
+          JSON.stringify(paymentAdvicePayload(advice)),
+        ],
+      );
+      return result.rows[0]?.request_payload;
+    });
+  }
+
+  private async ownsClaim(
+    db: import('../../core/database/database.service').TenantDatabase,
+    event: DeliveryEvent,
+  ) {
+    const result = await db.query(
+      `SELECT id FROM opes.outbox_events WHERE id=$1 AND claim_token=$2 AND status='PROCESSING' FOR UPDATE`,
+      [event.event_id, event.claim_token],
+    );
+    return result.rows.length === 1;
+  }
+
   private sent(event: DeliveryEvent, advice: AdviceRow, providerId: string) {
     return this.database.withWorker(async (database) => {
+      if (!(await this.ownsClaim(database, event))) return;
       await database.query(
         `UPDATE opes.outbound_email_deliveries SET status='SENT',provider_message_id=$3,failure_reason=NULL,sent_at=now(),updated_at=now() WHERE organization_id=$1 AND id=$2`,
         [event.organization_id, event.delivery_id, providerId],
       );
       await database.query(
-        `UPDATE opes.outbox_events SET status='PROCESSED',processed_at=now(),updated_at=now() WHERE organization_id=$1 AND id=$2`,
+        `UPDATE opes.outbox_events SET status='PROCESSED',processed_at=now(),updated_at=now(),claim_token=NULL WHERE organization_id=$1 AND id=$2`,
         [event.organization_id, event.event_id],
       );
       await recordNotification(database, {
@@ -125,13 +172,14 @@ export class NotificationEmailWorkerService {
   private failed(event: DeliveryEvent, reason: string) {
     this.logger.warn(`payment advice ${event.delivery_id} failed: ${reason}`);
     return this.database.withWorker(async (database) => {
-      const terminal = event.attempts + 1 >= 3;
+      if (!(await this.ownsClaim(database, event))) return;
+      const terminal = event.retry_window_expired || event.attempts + 1 >= 3;
       await database.query(
         `UPDATE opes.outbound_email_deliveries SET status='FAILED',failure_reason=$3,updated_at=now() WHERE organization_id=$1 AND id=$2`,
         [event.organization_id, event.delivery_id, reason.slice(0, 1000)],
       );
       await database.query(
-        `UPDATE opes.outbox_events SET status=$3,available_at=CASE WHEN $3='PENDING' THEN now()+interval '1 minute' ELSE available_at END,updated_at=now() WHERE organization_id=$1 AND id=$2`,
+        `UPDATE opes.outbox_events SET status=$3,claim_token=NULL,available_at=CASE WHEN $3='PENDING' THEN now()+interval '1 minute' ELSE available_at END,updated_at=now() WHERE organization_id=$1 AND id=$2`,
         [
           event.organization_id,
           event.event_id,
@@ -154,11 +202,9 @@ export class NotificationEmailWorkerService {
   }
 }
 
-async function sendPaymentAdvice(advice: AdviceRow): Promise<string> {
-  const apiKey = process.env.OPES_RESEND_API_KEY?.trim();
+function paymentAdvicePayload(advice: AdviceRow) {
   const from = process.env.OPES_RESEND_FROM_EMAIL?.trim();
-  if (!apiKey || !from)
-    throw new Error('Resend outbound email is not configured');
+  if (!from) throw new Error('Resend outbound email is not configured');
   const amount = formatAtomic(advice.amount_atomic);
   const explorer = explorerUrl(advice.route_chain_id, advice.transaction_hash);
   const network = networkName(advice.route_environment);
@@ -177,20 +223,29 @@ async function sendPaymentAdvice(advice: AdviceRow): Promise<string> {
     .filter(Boolean)
     .join('\n');
   const html = paymentAdviceHtml(advice, amount, network, settledAt, explorer);
+  return {
+    from,
+    to: [advice.recipient_email],
+    subject: `Payment confirmed — invoice ${advice.invoice_number}`,
+    text,
+    html,
+  };
+}
+async function sendPaymentAdvice(
+  payload: unknown,
+  deliveryId: string,
+): Promise<string> {
+  const apiKey = process.env.OPES_RESEND_API_KEY?.trim();
+  if (!apiKey) throw new Error('Resend outbound email is not configured');
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     signal: AbortSignal.timeout(20_000),
     headers: {
       Authorization: `Bearer ${apiKey}`,
+      'Idempotency-Key': `opes-payment-advice/${deliveryId}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      from,
-      to: [advice.recipient_email],
-      subject: `Payment confirmed — invoice ${advice.invoice_number}`,
-      text,
-      html,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!response.ok)
     throw new Error(`Resend payment advice failed (${response.status})`);

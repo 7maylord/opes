@@ -21,8 +21,14 @@ it('sends supplier advice only for a confirmed settlement and records the provid
   process.env.OPES_RESEND_API_KEY = 're_test';
   process.env.OPES_RESEND_FROM_EMAIL = 'OPES <payments@example.com>';
   const queries: string[] = [];
-  const query = jest.fn((text: string) => {
+  const query = jest.fn((text: string, values?: readonly unknown[]) => {
     queries.push(text);
+    if (text.includes('SELECT id FROM opes.outbox_events'))
+      return result([{ id: 'event-1' }]);
+    if (text.includes('RETURNING request_payload'))
+      return result([
+        { request_payload: JSON.parse(String(values?.[2])) as unknown },
+      ]);
     if (text.includes('WITH candidate AS'))
       return result([
         {
@@ -30,6 +36,8 @@ it('sends supplier advice only for a confirmed settlement and records the provid
           organization_id: 'org-1',
           delivery_id: 'delivery-1',
           attempts: 0,
+          claim_token: 'claim-1',
+          retry_window_expired: false,
         },
       ]);
     if (text.includes('SELECT delivery.recipient_email'))
@@ -67,6 +75,9 @@ it('sends supplier advice only for a confirmed settlement and records the provid
     'https://api.resend.com/emails',
     expect.objectContaining({ method: 'POST' }),
   );
+  expect(jest.mocked(global.fetch).mock.calls[0][1]?.headers).toMatchObject({
+    'Idempotency-Key': 'opes-payment-advice/delivery-1',
+  });
   expect(sentBody).toContain('vendor@example.com');
   const payload = JSON.parse(sentBody) as {
     subject: string;

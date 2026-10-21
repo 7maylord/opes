@@ -1,7 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DatabaseService } from '../../core/database/database.service';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { postWebhook } from './webhook-request';
 import {
   decryptWebhookSecret,
   signWebhook,
@@ -10,6 +9,7 @@ interface Work {
   id: string;
   organization_id: string;
   endpoint_id: string;
+  claim_token: string;
   event_id: string;
   event_type: string;
   payload: unknown;
@@ -43,17 +43,25 @@ export class WebhookDeliveryWorkerService {
     return count;
   }
   private claim() {
-    return this.database.withWorker(
-      async (db) =>
-        (
-          await db.query<Work>(
-            `WITH candidate AS (SELECT delivery.id FROM opes.webhook_deliveries delivery JOIN opes.webhook_endpoints endpoint ON endpoint.organization_id=delivery.organization_id AND endpoint.id=delivery.endpoint_id AND endpoint.status='ACTIVE' WHERE delivery.status='PENDING' AND delivery.next_attempt_at<=now() ORDER BY delivery.created_at FOR UPDATE OF delivery SKIP LOCKED LIMIT 1) UPDATE opes.webhook_deliveries delivery SET status='PROCESSING',attempt_count=attempt_count+1,updated_at=now() FROM candidate,opes.webhook_endpoints endpoint WHERE delivery.id=candidate.id AND endpoint.organization_id=delivery.organization_id AND endpoint.id=delivery.endpoint_id RETURNING delivery.id,delivery.organization_id,delivery.endpoint_id,delivery.event_id,delivery.event_type,delivery.payload,delivery.attempt_count,delivery.created_at,endpoint.url,endpoint.signing_secret_encrypted,endpoint.description,endpoint.event_types,endpoint.status`,
-          )
-        ).rows[0],
-    );
+    return this.database.withWorker(async (db) => {
+      await db.query(`UPDATE opes.webhook_deliveries SET status='FAILED',last_error='Delivery interrupted after final attempt',claim_token=NULL,updated_at=now()
+        WHERE status='PROCESSING' AND updated_at<now()-interval '5 minutes' AND attempt_count>=5`);
+      return (
+        await db.query<Work>(
+          `WITH candidate AS (
+           SELECT delivery.id FROM opes.webhook_deliveries delivery
+           JOIN opes.webhook_endpoints endpoint ON endpoint.organization_id=delivery.organization_id AND endpoint.id=delivery.endpoint_id AND endpoint.status='ACTIVE'
+           WHERE delivery.attempt_count<5 AND ((delivery.status='PENDING' AND delivery.next_attempt_at<=now()) OR (delivery.status='PROCESSING' AND delivery.updated_at<now()-interval '5 minutes'))
+           ORDER BY delivery.created_at FOR UPDATE OF delivery SKIP LOCKED LIMIT 1
+         ) UPDATE opes.webhook_deliveries delivery SET status='PROCESSING',attempt_count=attempt_count+1,claim_token=gen_random_uuid(),updated_at=now()
+         FROM candidate,opes.webhook_endpoints endpoint WHERE delivery.id=candidate.id AND endpoint.organization_id=delivery.organization_id AND endpoint.id=delivery.endpoint_id
+         RETURNING delivery.id,delivery.claim_token,delivery.organization_id,delivery.endpoint_id,delivery.event_id,delivery.event_type,delivery.payload,delivery.attempt_count,delivery.created_at,endpoint.url,endpoint.signing_secret_encrypted,endpoint.description,endpoint.event_types,endpoint.status`,
+        )
+      ).rows[0];
+    });
   }
+
   private async deliver(work: Work) {
-    await assertPublicDestination(work.url);
     const body = JSON.stringify({
       id: work.event_id,
       type: work.event_type,
@@ -61,27 +69,24 @@ export class WebhookDeliveryWorkerService {
       payload: work.payload,
     });
     const timestamp = Math.floor(Date.now() / 1000).toString();
-    const secret = decryptWebhookSecret(work.organization_id, work);
-    const response = await fetch(work.url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-opes-event-id': work.event_id,
-        'x-opes-timestamp': timestamp,
-        'x-opes-signature': `v1=${signWebhook(secret, timestamp, body)}`,
-      },
-      body,
-      signal: AbortSignal.timeout(10000),
+    const secret = decryptWebhookSecret(work.organization_id, {
+      ...work,
+      id: work.endpoint_id,
     });
-    const responseBody = (await response.text()).slice(0, 1000);
-    if (!response.ok)
+    const response = await postWebhook(work.url, body, {
+      'content-type': 'application/json',
+      'x-opes-event-id': work.event_id,
+      'x-opes-timestamp': timestamp,
+      'x-opes-signature': `v1=${signWebhook(secret, timestamp, body)}`,
+    });
+    if (response.status < 200 || response.status >= 300)
       throw new Error(
-        `Webhook returned HTTP ${response.status}: ${responseBody}`,
+        `Webhook returned HTTP ${response.status}: ${response.body}`,
       );
     await this.database.withWorker((db) =>
       db.query(
-        `UPDATE opes.webhook_deliveries SET status='DELIVERED',response_status=$2,response_body=$3,delivered_at=now(),updated_at=now(),last_error=NULL WHERE id=$1`,
-        [work.id, response.status, responseBody],
+        `UPDATE opes.webhook_deliveries SET status='DELIVERED',response_status=$2,response_body=$3,delivered_at=now(),updated_at=now(),last_error=NULL,claim_token=NULL WHERE id=$1 AND claim_token=$4 AND status='PROCESSING'`,
+        [work.id, response.status, response.body, work.claim_token],
       ),
     );
   }
@@ -90,45 +95,14 @@ export class WebhookDeliveryWorkerService {
     const terminal = work.attempt_count >= 5;
     return this.database.withWorker((db) =>
       db.query(
-        `UPDATE opes.webhook_deliveries SET status=$2,last_error=$3,next_attempt_at=CASE WHEN $2='PENDING' THEN now()+(interval '1 minute'*power(2,LEAST(attempt_count,5))) ELSE next_attempt_at END,updated_at=now() WHERE id=$1`,
-        [work.id, terminal ? 'FAILED' : 'PENDING', reason.slice(0, 1000)],
+        `UPDATE opes.webhook_deliveries SET status=$2,last_error=$3,next_attempt_at=CASE WHEN $2='PENDING' THEN now()+(interval '1 minute'*power(2,LEAST(attempt_count,5))) ELSE next_attempt_at END,updated_at=now(),claim_token=NULL WHERE id=$1 AND claim_token=$4 AND status='PROCESSING'`,
+        [
+          work.id,
+          terminal ? 'FAILED' : 'PENDING',
+          reason.slice(0, 1000),
+          work.claim_token,
+        ],
       ),
     );
   }
-}
-
-async function assertPublicDestination(value: string) {
-  const addresses = await lookup(new URL(value).hostname, { all: true });
-  if (
-    !addresses.length ||
-    addresses.some((item) => isPrivateAddress(item.address))
-  )
-    throw new Error('Webhook destination resolves to a private network');
-}
-function isPrivateAddress(address: string) {
-  if (!isIP(address)) return true;
-  if (address.includes(':')) {
-    const normalized = address.toLowerCase();
-    if (normalized.startsWith('::ffff:'))
-      return isPrivateAddress(normalized.slice(7));
-    return (
-      normalized === '::1' ||
-      normalized === '::' ||
-      normalized.startsWith('fc') ||
-      normalized.startsWith('fd') ||
-      normalized.startsWith('fe8') ||
-      normalized.startsWith('fe9') ||
-      normalized.startsWith('fea') ||
-      normalized.startsWith('feb')
-    );
-  }
-  const [first, second] = address.split('.').map(Number);
-  return (
-    first === 10 ||
-    first === 127 ||
-    first === 0 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
 }
