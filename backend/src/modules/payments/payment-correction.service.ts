@@ -10,6 +10,8 @@ import {
   TenantDatabase,
 } from '../../core/database/database.service';
 import { TenantContext } from '../../core/database/tenant-context';
+import { createHash } from 'node:crypto';
+import { verifyRefund } from './refund-evidence';
 
 interface ExecutionRow {
   id: string;
@@ -18,6 +20,10 @@ interface ExecutionRow {
   route_asset_symbol: string;
   route_environment: string;
   transaction_hash: string;
+  route_chain_id: number;
+  destination_address: string;
+  vault_address: string | null;
+  refund_address: string | null;
 }
 interface CorrectionRow {
   id: string;
@@ -53,15 +59,22 @@ export class PaymentCorrectionService {
     );
   }
 
-  async create(context: TenantContext, input: CreateCorrectionRequest) {
+  async create(
+    context: TenantContext,
+    input: CreateCorrectionRequest,
+    idempotencyKey?: string,
+  ) {
     if (!['OWNER', 'ADMIN'].includes(context.role))
       throw new ForbiddenException(
         'Only owners and admins can post payment corrections',
       );
     requireUuid(input.executionId, 'executionId');
+    if (!['CREDIT_NOTE', 'REFUND'].includes(input.type))
+      throw new BadRequestException('Invalid correction type');
     if (
       !/^[0-9]+$/.test(input.amountAtomic) ||
-      BigInt(input.amountAtomic) <= 0n
+      BigInt(input.amountAtomic) <= 0n ||
+      BigInt(input.amountAtomic) > 9223372036854775807n
     )
       throw new BadRequestException('amountAtomic must be a positive integer');
     const reason = input.reason?.trim();
@@ -76,10 +89,60 @@ export class PaymentCorrectionService {
       throw new BadRequestException('A refund transaction hash is required');
     if (input.type === 'REFUND')
       requireUuid(input.creditNoteId ?? '', 'creditNoteId');
+    if (
+      input.type === 'CREDIT_NOTE' &&
+      (input.creditNoteId || input.transactionHash)
+    )
+      throw new BadRequestException(
+        'Credit notes cannot include refund fields',
+      );
+    const key = idempotencyKey?.trim();
+    if (!key || key.length > 200)
+      throw new BadRequestException(
+        'Idempotency-Key is required and must be at most 200 characters',
+      );
+    const normalized = {
+      type: input.type,
+      executionId: input.executionId.toLowerCase(),
+      creditNoteId: input.creditNoteId?.toLowerCase() ?? null,
+      amountAtomic: BigInt(input.amountAtomic).toString(),
+      reason,
+      transactionHash: input.transactionHash?.toLowerCase() ?? null,
+    };
+    const requestHash = createHash('sha256')
+      .update(JSON.stringify(normalized))
+      .digest('hex');
+    const requestKey = `payment-correction:${key}`;
     return this.database.withTenant(context, async (db) => {
+      const insertedRequest = await db.query(
+        `INSERT INTO opes.idempotency_records(organization_id,idempotency_key,request_hash) VALUES($1,$2,$3) ON CONFLICT(organization_id,idempotency_key) DO NOTHING`,
+        [context.organizationId, requestKey, requestHash],
+      );
+      if (insertedRequest.rowCount === 0) {
+        const record = (
+          await db.query<{
+            request_hash: string;
+            status: string;
+            response_payload: ReturnType<typeof mapCorrection>;
+          }>(
+            `SELECT request_hash,status,response_payload FROM opes.idempotency_records WHERE organization_id=$1 AND idempotency_key=$2`,
+            [context.organizationId, requestKey],
+          )
+        ).rows[0];
+        if (!record || record.request_hash !== requestHash)
+          throw new ConflictException(
+            'Idempotency key was used with a different request',
+          );
+        if (record.status !== 'COMPLETED')
+          throw new ConflictException('Correction is still processing');
+        return {
+          ...record.response_payload,
+          createdAt: new Date(record.response_payload.createdAt),
+        };
+      }
       const execution = (
         await db.query<ExecutionRow>(
-          `SELECT execution.id,execution.amount_atomic::text,version.vendor_id,execution.route_asset_symbol,execution.route_environment,execution.transaction_hash FROM opes.payment_executions execution JOIN opes.payable_obligation_versions version ON version.organization_id=execution.organization_id AND version.id=execution.source_version_id WHERE execution.organization_id=$1 AND execution.id=$2 AND execution.status='CONFIRMED' FOR UPDATE`,
+          `SELECT execution.id,execution.amount_atomic::text,version.vendor_id,execution.route_asset_symbol,execution.route_environment,execution.transaction_hash,execution.route_chain_id,execution.destination_address,execution.vault_address,execution.refund_address FROM opes.payment_executions execution JOIN opes.payable_obligation_versions version ON version.organization_id=execution.organization_id AND version.id=execution.source_version_id WHERE execution.organization_id=$1 AND execution.id=$2 AND execution.status='CONFIRMED' FOR UPDATE`,
           [context.organizationId, input.executionId],
         )
       ).rows[0];
@@ -102,6 +165,28 @@ export class PaymentCorrectionService {
           input.creditNoteId,
           BigInt(input.amountAtomic),
         );
+      let refundEvidence: Awaited<ReturnType<typeof verifyRefund>> | undefined;
+      if (input.type === 'REFUND') {
+        await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [
+          `opes:refund:${context.organizationId}:${normalized.transactionHash}`,
+        ]);
+        const used = await db.query(
+          `SELECT id FROM opes.payment_corrections WHERE organization_id=$1 AND lower(transaction_hash)=$2`,
+          [context.organizationId, normalized.transactionHash],
+        );
+        if (used.rows.length)
+          throw new ConflictException(
+            'Refund transaction has already been posted',
+          );
+        refundEvidence = await verifyRefund({
+          environment: execution.route_environment,
+          chainId: execution.route_chain_id,
+          transactionHash: normalized.transactionHash!,
+          amount: normalized.amountAtomic,
+          from: execution.destination_address,
+          to: execution.vault_address ?? execution.refund_address,
+        });
+      }
       const inserted = await db.query<CorrectionRow>(
         `INSERT INTO opes.payment_corrections(organization_id,correction_type,original_execution_id,credit_note_id,amount_atomic,reason,transaction_hash,created_by_membership_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,correction_type,original_execution_id,credit_note_id,amount_atomic::text,reason,transaction_hash,status,created_at`,
         [
@@ -111,7 +196,7 @@ export class PaymentCorrectionService {
           input.creditNoteId ?? null,
           input.amountAtomic,
           reason,
-          input.transactionHash ?? null,
+          normalized.transactionHash,
           context.membershipId,
         ],
       );
@@ -130,15 +215,21 @@ export class PaymentCorrectionService {
           isRefund ? 'ASSET:OPERATING_USDC' : 'ASSET:VENDOR_CREDIT',
           input.amountAtomic,
           execution.vendor_id,
-          input.transactionHash ?? null,
+          normalized.transactionHash,
           JSON.stringify({
             originalExecutionId: execution.id,
             originalTransactionHash: execution.transaction_hash,
+            refundEvidence,
           }),
           isRefund ? 'ASSET:VENDOR_CREDIT' : 'EXPENSE:PAYABLES',
         ],
       );
-      return mapCorrection(correction);
+      const response = mapCorrection(correction);
+      await db.query(
+        `UPDATE opes.idempotency_records SET status='COMPLETED',response_payload=$3::jsonb,updated_at=now() WHERE organization_id=$1 AND idempotency_key=$2`,
+        [context.organizationId, requestKey, JSON.stringify(response)],
+      );
+      return response;
     });
   }
 }

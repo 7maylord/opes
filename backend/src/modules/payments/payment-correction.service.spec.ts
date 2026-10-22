@@ -10,6 +10,7 @@ describe('payment corrections', () => {
   it('posts a balanced credit-note pair linked to a confirmed payment', async () => {
     const query = jest
       .fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -38,18 +39,23 @@ describe('payment corrections', () => {
           },
         ],
       })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] });
     const service = new PaymentCorrectionService({
       withTenant: (_context: unknown, work: (db: unknown) => unknown) =>
         work({ query }),
     } as never);
     await expect(
-      service.create(context, {
-        type: 'CREDIT_NOTE',
-        executionId: '33333333-3333-4333-8333-333333333333',
-        amountAtomic: '50',
-        reason: 'Duplicate charge',
-      }),
+      service.create(
+        context,
+        {
+          type: 'CREDIT_NOTE',
+          executionId: '33333333-3333-4333-8333-333333333333',
+          amountAtomic: '50',
+          reason: 'Duplicate charge',
+        },
+        'request-1',
+      ),
     ).resolves.toMatchObject({ type: 'CREDIT_NOTE', amountAtomic: '50' });
     expect(query).toHaveBeenCalledWith(
       expect.stringContaining('ledger_entries'),
@@ -72,6 +78,7 @@ describe('payment corrections', () => {
   it('rejects credit beyond the original payment', async () => {
     const query = jest
       .fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] })
       .mockResolvedValueOnce({
         rows: [
           {
@@ -90,12 +97,16 @@ describe('payment corrections', () => {
         work({ query }),
     } as never);
     await expect(
-      service.create(context, {
-        type: 'CREDIT_NOTE',
-        executionId: '33333333-3333-4333-8333-333333333333',
-        amountAtomic: '50',
-        reason: 'Excess credit',
-      }),
+      service.create(
+        context,
+        {
+          type: 'CREDIT_NOTE',
+          executionId: '33333333-3333-4333-8333-333333333333',
+          amountAtomic: '50',
+          reason: 'Excess credit',
+        },
+        'request-2',
+      ),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 });

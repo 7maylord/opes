@@ -33,11 +33,13 @@ export class PaymentCorrectionController {
     @Param('organizationId') organizationId: string,
     @Headers('authorization') authorization: string | undefined,
     @Headers('x-correlation-id') correlationId: string | undefined,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
     @Body() body: CreateCorrectionRequest,
   ) {
     return this.corrections.create(
       await this.context(organizationId, authorization, correlationId),
       body,
+      idempotencyKey,
     );
   }
   private async context(
