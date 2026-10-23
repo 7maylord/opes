@@ -76,11 +76,11 @@ describe('treasury RPC failures', () => {
       .spyOn(global, 'fetch')
       .mockImplementation((_url, options) => {
         const { params } = JSON.parse(options!.body as string) as {
-          params: [{ fromBlock: string; toBlock: string }];
+          params: [{ fromBlock: string; toBlock: string; topics: unknown[] }];
         };
         const from = Number(BigInt(params[0].fromBlock));
         const to = Number(BigInt(params[0].toBlock));
-        ranges.push([from, to]);
+        if (params[0].topics.length === 2) ranges.push([from, to]);
         return Promise.resolve(
           Response.json(
             to - from >= 4
@@ -89,7 +89,10 @@ describe('treasury RPC failures', () => {
           ),
         );
       });
-    await transferLogs('arc-testnet', '0x1', 100, 10_105);
+    for await (const page of transferLogs('arc-testnet', '0x1', 100, 10_105, [
+      '0x' + '1'.repeat(40),
+    ]))
+      expect(page).toEqual([]);
     const accepted = ranges.filter(([from, to]) => to - from < 4);
     expect(accepted[0][0]).toBe(100);
     expect(accepted.at(-1)![1]).toBe(10_105);
@@ -100,9 +103,11 @@ describe('treasury RPC failures', () => {
     fetchMock.mockResolvedValue(
       Response.json({ error: { message: 'unauthorized' } }),
     );
-    await expect(transferLogs('arc-testnet', '0x1', 100, 101)).rejects.toThrow(
-      'unauthorized',
-    );
+    await expect(
+      transferLogs('arc-testnet', '0x1', 100, 101, [
+        '0x' + '1'.repeat(40),
+      ]).next(),
+    ).rejects.toThrow('unauthorized');
   });
   it('identifies an unauthorized provider even with a plain-text body', async () => {
     process.env.OPES_RPC_ARC_TESTNET = 'https://rpc.invalid/secret';

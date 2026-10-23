@@ -4,6 +4,7 @@ test("vendor submits a correction without treasury access", async ({ page }) => 
   let submitted = false;
   await page.route("http://mock.api/**", async (route) => {
     const url = route.request().url();
+    if (url.endsWith("/status")) return route.fulfill({ json: { invoices: [], payoutAddresses: [] } });
     if (url.endsWith("/upload")) return route.fulfill({ status: 200 });
     if (url.endsWith("/submissions/uploads")) return route.fulfill({ json: {
       submission: { id: "submission-2" },

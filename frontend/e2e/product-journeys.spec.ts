@@ -193,7 +193,7 @@ test("journey 5: escrow requires owner-signed setup before funding", async ({ pa
   await escrow.getByRole("combobox").nth(2).selectOption("doc-1");
   await page.getByRole("button", { name: "Create milestone agreement" }).click();
   await expect(page.getByText("Milestone agreement created")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign escrow setup" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Authorize agreement" })).toBeEnabled();
 });
 
 test("journey 6: treasury separates planned from settled", async ({ page }) => {
@@ -261,7 +261,7 @@ test("owner configures ERPNext and inspects tenant-scoped imports", async ({ pag
   await page.getByRole("button", { name: "Save and start first sync" }).click();
   await expect(page.getByText("Integration saved and first sync queued")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Finance sandbox" })).toBeVisible();
-  await page.getByRole("button", { name: "Imported records" }).click();
+  await page.getByRole("button", { name: "Mapped records" }).click();
   await expect(page.getByText(/4 current records/)).toBeVisible();
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("secret-value");
 });
@@ -345,6 +345,7 @@ function responseFor(method: string, path: string, body: Record<string, unknown>
   ];
   if (method === "POST" && path.includes("/notifications/")) return { read: true };
   if (method === "GET" && path.endsWith("/accounting-connectors")) return [];
+  if (method === "GET" && path.endsWith("/treasury/policy-templates")) return [];
   if (method === "POST" && path.endsWith("/accounting-connectors")) return { id: "connector-1", provider: body.provider, label: body.label, baseUrl: body.baseUrl, databaseName: null, status: "ACTIVE", syncCursor: null, lastSyncedAt: null, lastError: null };
   if (method === "POST" && path.endsWith("/accounting-connectors/connector-1/sync")) return { queued: true };
   if (method === "GET" && path.endsWith("/accounting-connectors/connector-1/records")) return ["VENDOR", "PURCHASE_ORDER", "PURCHASE_RECEIPT", "VENDOR_BILL"].map((recordType, index) => ({ id: `record-${index}`, connectorId: "connector-1", recordType, externalId: `external-${index}`, providerUpdatedAt: null, normalizedData: {}, fetchedAt: "2026-10-15T12:00:00.000Z" }));

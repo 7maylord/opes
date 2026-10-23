@@ -652,7 +652,7 @@ describe('Workspace read models (e2e)', () => {
 
     const detail = await request(server)
       .get(
-        `/organizations/${organizationId}/workspace/invoice/${invoiceVersionId}`,
+        `/organizations/${organizationId}/workspace/execution/${paymentExecutionId}`,
       )
       .set('Authorization', authorization)
       .expect(200);
@@ -667,7 +667,6 @@ describe('Workspace read models (e2e)', () => {
         'procurement_evidence',
         'policy_decision',
         'reservation',
-        'approval',
         'execution',
         'preflight',
         'reconciliation',
@@ -679,7 +678,18 @@ describe('Workspace read models (e2e)', () => {
         (node) => node.transactionHash === transactionHash,
       ),
     ).toBe(true);
-    expect(detailBody.blockers.map((blocker) => blocker.code)).toEqual(
+    // Either competing invoice may win the reservation; old approval blockers
+    // belong to the first invoice regardless of which payment settled.
+    const blockedInvoice = await request(server)
+      .get(
+        `/organizations/${organizationId}/workspace/invoice/${invoiceVersionId}`,
+      )
+      .set('Authorization', authorization)
+      .expect(200);
+    const blockedBody = blockedInvoice.body as {
+      blockers: Array<{ code: string }>;
+    };
+    expect(blockedBody.blockers.map((blocker) => blocker.code)).toEqual(
       expect.arrayContaining(['APPROVAL:REVOKED', 'APPROVAL:EXPIRED']),
     );
 
@@ -687,14 +697,14 @@ describe('Workspace read models (e2e)', () => {
       .get(`/organizations/${organizationId}/workspace/connector`)
       .set('Authorization', authorization)
       .expect(200);
-    expect(connectors.body).toMatchObject({
-      items: [
-        {
-          id: connectorId,
-          status: 'FAILED',
-          details: { lastError: 'Authentication failed' },
-        },
-      ],
+    const connectorItems = (connectors.body as { items: Array<{ id: string }> })
+      .items;
+    expect(
+      connectorItems.find((item) => item.id === connectorId),
+    ).toMatchObject({
+      id: connectorId,
+      status: 'FAILED',
+      details: { lastError: 'Authentication failed' },
     });
     expect(JSON.stringify(connectors.body)).not.toContain('secret-ciphertext');
     expect(JSON.stringify(connectors.body)).not.toContain('private.invalid');

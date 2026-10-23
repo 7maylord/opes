@@ -6,6 +6,8 @@ import {
   TenantDatabase,
 } from '../../core/database/database.service';
 import { supportedNetworks } from './liquidity-policy';
+import { addressTopic } from '../../infrastructure/evm/lifecycle-chain-evidence';
+import { readBoundedJson } from '../../infrastructure/evm/bounded-json';
 
 const tokenAbi = tokenAbiJson as Parameters<
   typeof encodeFunctionData
@@ -37,10 +39,13 @@ export class TreasuryReconciliationService {
       }>(
         `SELECT organization_id,environment,chain_id,
            array_agg(lower(address)) FILTER (WHERE address IS NOT NULL) AS addresses
-         FROM opes.tenant_resource_bindings
+         FROM opes.tenant_resource_bindings binding
          WHERE status='ACTIVE' AND address IS NOT NULL AND chain_id IS NOT NULL
            AND resource_type IN ('operator_wallet','business_policy_vault_contract','milestone_escrow_contract')
-         GROUP BY organization_id,environment,chain_id LIMIT $1`,
+         GROUP BY organization_id,environment,chain_id
+         ORDER BY (SELECT max(read.observed_at) FROM opes.treasury_balance_reads read
+           WHERE read.organization_id=binding.organization_id AND read.environment=binding.environment) ASC NULLS FIRST,
+           organization_id,environment LIMIT $1`,
         [limit],
       ),
     );
@@ -50,8 +55,8 @@ export class TreasuryReconciliationService {
           item.environment === tenant.environment &&
           item.chainId === tenant.chain_id,
       );
-      if (!network) continue;
       try {
+        if (!network) throw new Error('Unsupported reconciliation network');
         await this.scanTenant(
           tenant.organization_id,
           tenant.environment,
@@ -95,8 +100,15 @@ export class TreasuryReconciliationService {
     const finality = Number(
       process.env.OPES_RECONCILIATION_FINALITY_BLOCKS ?? '12',
     );
+    if (!Number.isSafeInteger(finality) || finality < 1)
+      throw new Error('Reconciliation finality must be positive');
     const finalized = Math.max(0, head - finality);
     await this.database.withWorker(async (db) => {
+      // Serializes first scans too, before a cursor row exists.
+      await db.query(
+        'SELECT id FROM opes.organizations WHERE id=$1 FOR UPDATE',
+        [organizationId],
+      );
       const cursor = (
         await db.query<{
           last_finalized_block: string;
@@ -145,30 +157,32 @@ export class TreasuryReconciliationService {
           from = rewind + 1;
         }
       }
-      const scanTo = finalized;
+      const scanTo = Math.min(finalized, from + 999);
       if (from <= scanTo) {
-        const logs = await transferLogs(
+        for await (const logs of transferLogs(
           environment,
           tokenAddress,
           from,
           scanTo,
-        );
-        for (const log of logs) {
-          const fromAddress = topicAddress(log.topics[1]);
-          const toAddress = topicAddress(log.topics[2]);
-          if (
-            !addresses.includes(fromAddress) &&
-            !addresses.includes(toAddress)
-          )
-            continue;
-          await recordMovement(db, {
-            organizationId,
-            environment,
-            chainId,
-            log,
-            fromAddress,
-            toAddress,
-          });
+          addresses,
+        )) {
+          for (const log of logs) {
+            const fromAddress = topicAddress(log.topics[1]);
+            const toAddress = topicAddress(log.topics[2]);
+            if (
+              !addresses.includes(fromAddress) &&
+              !addresses.includes(toAddress)
+            )
+              continue;
+            await recordMovement(db, {
+              organizationId,
+              environment,
+              chainId,
+              log,
+              fromAddress,
+              toAddress,
+            });
+          }
         }
       }
       await checkBalances(
@@ -182,9 +196,15 @@ export class TreasuryReconciliationService {
       );
       await db.query(
         `INSERT INTO opes.treasury_balance_reads
-          (organization_id,environment,status,block_number)
-         VALUES ($1,$2,'SUCCESS',$3)`,
-        [organizationId, environment, scanTo],
+          (organization_id,environment,status,block_number,failure_reason)
+         VALUES ($1,$2,$4,$3,$5)`,
+        [
+          organizationId,
+          environment,
+          scanTo,
+          scanTo === finalized ? 'SUCCESS' : 'FAILED',
+          scanTo === finalized ? null : 'Catching up finalized chain history',
+        ],
       );
       const block = await rpc<{ hash: string }>(
         environment,
@@ -346,7 +366,7 @@ async function checkBalances(
 }
 async function postSponsorLedger(db: TenantDatabase, organizationId: string) {
   const actions = await db.query<{ id: string; transaction_hash: string }>(
-    `SELECT action.id,action.transaction_hash FROM opes.lifecycle_chain_actions action WHERE action.organization_id=$1 AND action.actor='OPERATOR' AND action.status='CONFIRMED' AND action.transaction_hash IS NOT NULL AND NOT EXISTS(SELECT 1 FROM opes.ledger_entries ledger WHERE ledger.organization_id=action.organization_id AND ledger.ledger_event_type='SPONSOR_GAS_SPENT' AND ledger.ledger_event_id=action.id)`,
+    `SELECT action.id,action.transaction_hash FROM opes.lifecycle_chain_actions action WHERE action.organization_id=$1 AND action.actor='OPERATOR' AND action.status='CONFIRMED' AND action.transaction_hash IS NOT NULL AND NOT EXISTS(SELECT 1 FROM opes.ledger_entries ledger WHERE ledger.organization_id=action.organization_id AND ledger.ledger_event_type='SPONSOR_GAS_SPENT' AND ledger.ledger_event_id=action.id) ORDER BY action.created_at LIMIT 10`,
     [organizationId],
   );
   for (const action of actions.rows) {
@@ -395,27 +415,34 @@ export function suggestedLogRangeEnd(error: unknown, expectedFrom: number) {
   return Number.isSafeInteger(end) && end >= expectedFrom ? end : null;
 }
 
-export async function transferLogs(
+export async function* transferLogs(
   environment: string,
   tokenAddress: string,
   from: number,
   to: number,
-): Promise<RpcLog[]> {
-  const logs: RpcLog[] = [];
+  addresses: string[],
+): AsyncGenerator<RpcLog[]> {
+  if (!addresses.length) return;
+  const topics = [...new Set(addresses)].map(addressTopic);
   // Arc requires ranges below 10,000 blocks; other providers may allow less.
-  let pageSize = 9_999;
+  let pageSize = 1_000;
   while (from <= to) {
     const end = Math.min(to, from + pageSize - 1);
     try {
-      const page = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
-        {
-          address: tokenAddress,
-          fromBlock: hex(from),
-          toBlock: hex(end),
-          topics: [TRANSFER_TOPIC],
-        },
-      ]);
-      logs.push(...page);
+      for (const filter of [
+        [TRANSFER_TOPIC, topics],
+        [TRANSFER_TOPIC, null, topics],
+      ]) {
+        const page = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
+          {
+            address: tokenAddress,
+            fromBlock: hex(from),
+            toBlock: hex(end),
+            topics: filter,
+          },
+        ]);
+        yield page;
+      }
       from = end + 1;
     } catch (error) {
       const suggested = suggestedLogRangeEnd(error, from);
@@ -423,7 +450,7 @@ export async function transferLogs(
         pageSize = suggested - from + 1;
       } else if (
         error instanceof Error &&
-        /range too large|ranges over \d+ blocks|block range.*(?:limit|exceed)/i.test(
+        /response too large|range too large|ranges over \d+ blocks|block range.*(?:limit|exceed)/i.test(
           error.message,
         ) &&
         end > from
@@ -434,7 +461,6 @@ export async function transferLogs(
       }
     }
   }
-  return logs;
 }
 export async function rpc<T>(
   environment: string,
@@ -450,7 +476,9 @@ export async function rpc<T>(
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     signal: AbortSignal.timeout(15_000),
   });
-  const body = (await response.json().catch(() => {
+  const body = (await readBoundedJson(response).catch((error: unknown) => {
+    if (error instanceof Error && error.message === 'RPC response too large')
+      throw error;
     throw new Error(`${name} ${method}: HTTP ${response.status}, invalid JSON`);
   })) as {
     result?: T;
