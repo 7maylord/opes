@@ -69,6 +69,31 @@ describe('treasury RPC failures', () => {
     if (originalUrl === undefined) delete process.env.OPES_RPC_ARC_TESTNET;
     else process.env.OPES_RPC_ARC_TESTNET = originalUrl;
   });
+  it('filters logs by our addresses on the node and dedupes self-transfers', async () => {
+    process.env.OPES_RPC_ARC_TESTNET = 'https://rpc.invalid';
+    const log = {
+      address: '0x1',
+      blockNumber: '0x1',
+      blockHash: '0xb',
+      transactionHash: '0xt',
+      logIndex: '0x0',
+      topics: [],
+      data: '0x0',
+    };
+    const topics: unknown[] = [];
+    jest.spyOn(global, 'fetch').mockImplementation((_url, options) => {
+      const { params } = JSON.parse(options!.body as string) as {
+        params: [{ topics: unknown }];
+      };
+      topics.push(params[0].topics);
+      return Promise.resolve(Response.json({ result: [log] }));
+    });
+    const logs = await transferLogs('arc-testnet', '0x1', 1, 2, ['0xAB']);
+    const padded = `0x${'ab'.padStart(64, '0')}`;
+    expect(topics).toHaveLength(2);
+    expect(JSON.stringify(topics[0])).toContain(padded);
+    expect(logs).toHaveLength(1);
+  });
   it('catches up a long outage in contiguous pages and propagates failures before balances are confirmed', async () => {
     process.env.OPES_RPC_ARC_TESTNET = 'https://rpc.invalid';
     const ranges: number[][] = [];

@@ -31,41 +31,27 @@ async function bootstrapWorker() {
   const accounting = app.get(AccountingConnectorService);
   const watchedBucket = app.get(WatchedBucketService);
   const notificationEmails = app.get(NotificationEmailWorkerService);
-  const runProvisioning = async () => {
-    try {
-      await provisioning.processDueArcProvisioning();
-    } catch (error) {
-      logger.error('arc provisioning worker failed', error);
-    }
+  // Skip a tick while the previous run of the same job is still going, so slow
+  // RPC/bucket calls can't stack up overlapping runs (and their memory).
+  const guarded = (name: string, job: () => Promise<unknown>) => {
+    let running = false;
+    return async () => {
+      if (running) return;
+      running = true;
+      try {
+        await job();
+      } catch (error) {
+        logger.error(`${name} worker failed`, error);
+      } finally {
+        running = false;
+      }
+    };
   };
-  const runLiquidity = async () => {
-    try {
-      await liquidity.processDueLiquidityActions();
-    } catch (error) {
-      logger.error('liquidity execution worker failed', error);
-    }
-  };
-  const runPayments = async () => {
-    try {
-      await payments.processDuePaymentExecutions();
-    } catch (error) {
-      logger.error('payment execution worker failed', error);
-    }
-  };
-  const runRecurring = async () => {
-    try {
-      await recurring.processDue();
-    } catch (error) {
-      logger.error('recurring execution worker failed', error);
-    }
-  };
-  const runEscrow = async () => {
-    try {
-      await escrow.processDue();
-    } catch (error) {
-      logger.error('escrow execution worker failed', error);
-    }
-  };
+  const runProvisioning = guarded('provisioning', () => provisioning.processDueArcProvisioning());
+  const runLiquidity = guarded('liquidity', () => liquidity.processDueLiquidityActions());
+  const runPayments = guarded('payments', () => payments.processDuePaymentExecutions());
+  const runRecurring = guarded('recurring', () => recurring.processDue());
+  const runEscrow = guarded('escrow', () => escrow.processDue());
   let reconciliationRunning = false;
   const runReconciliation = async () => {
     if (reconciliationRunning) return;
@@ -78,27 +64,9 @@ async function bootstrapWorker() {
       reconciliationRunning = false;
     }
   };
-  const runAccounting = async () => {
-    try {
-      await accounting.processDue();
-    } catch (error) {
-      logger.error('accounting connector worker failed', error);
-    }
-  };
-  const runWatchedBucket = async () => {
-    try {
-      await watchedBucket.processDue();
-    } catch (error) {
-      logger.error('watched bucket worker failed', error);
-    }
-  };
-  const runNotificationEmails = async () => {
-    try {
-      await notificationEmails.processDue();
-    } catch (error) {
-      logger.error('notification email worker failed', error);
-    }
-  };
+  const runAccounting = guarded('accounting', () => accounting.processDue());
+  const runWatchedBucket = guarded('watchedBucket', () => watchedBucket.processDue());
+  const runNotificationEmails = guarded('notificationEmails', () => notificationEmails.processDue());
 
   await runProvisioning();
   await runPayments();

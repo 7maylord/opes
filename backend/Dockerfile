@@ -10,6 +10,8 @@ RUN pnpm build && pnpm prune --prod
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+# Cap V8 heap so a leak can't grow unbounded; override via NODE_OPTIONS on the service.
+ENV NODE_OPTIONS=--max-old-space-size=768
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
