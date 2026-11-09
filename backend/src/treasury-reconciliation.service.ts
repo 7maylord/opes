@@ -149,6 +149,7 @@ export class TreasuryReconciliationService {
           tokenAddress,
           from,
           scanTo,
+          addresses,
         );
         for (const log of logs) {
           const fromAddress = topicAddress(log.topics[1]);
@@ -397,22 +398,44 @@ export async function transferLogs(
   tokenAddress: string,
   from: number,
   to: number,
+  addresses?: string[],
 ): Promise<RpcLog[]> {
   const logs: RpcLog[] = [];
+  // Filter by our addresses on the node instead of downloading every USDC
+  // transfer on the chain and discarding most of them in memory.
+  const padded = addresses?.map(
+    (address) =>
+      `0x${address.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`,
+  );
+  const topicFilters: (string | string[] | null)[][] =
+    padded && padded.length > 0
+      ? [
+          [TRANSFER_TOPIC, padded],
+          [TRANSFER_TOPIC, null, padded],
+        ]
+      : [[TRANSFER_TOPIC]];
   // Arc requires ranges below 10,000 blocks; other providers may allow less.
   let pageSize = 9_999;
   while (from <= to) {
     const end = Math.min(to, from + pageSize - 1);
     try {
-      const page = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
-        {
-          address: tokenAddress,
-          fromBlock: hex(from),
-          toBlock: hex(end),
-          topics: [TRANSFER_TOPIC],
-        },
-      ]);
-      logs.push(...page);
+      const seen = new Set<string>();
+      for (const topics of topicFilters) {
+        const page = await rpc<RpcLog[]>(environment, 'eth_getLogs', [
+          {
+            address: tokenAddress,
+            fromBlock: hex(from),
+            toBlock: hex(end),
+            topics,
+          },
+        ]);
+        for (const log of page) {
+          const id = `${log.transactionHash}:${log.logIndex}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          logs.push(log);
+        }
+      }
       from = end + 1;
     } catch (error) {
       const suggested = suggestedLogRangeEnd(error, from);
