@@ -228,7 +228,7 @@ export function listInboundEmailEvents(token: string, organizationId: string) {
   );
 }
 
-export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "treasury" | "inbox" | "integrations" | "team" | "notifications";
+export type NotificationView = "overview" | "setup" | "invoices" | "agreements" | "calendar" | "approvals" | "anomalies" | "corrections" | "treasury" | "inbox" | "integrations" | "developer" | "team" | "notifications" | "exceptions";
 export interface WorkspaceNotificationResponse {
   id: string;
   type: string;
@@ -254,6 +254,103 @@ export function markNotificationRead(token: string, organizationId: string, noti
 export function markAllNotificationsRead(token: string, organizationId: string) {
   return request<{ read: true }>(`/organizations/${encodeURIComponent(organizationId)}/notifications/read-all`, token, { method: "POST" });
 }
+
+export interface OperationalExceptionResponse {
+  id: string;
+  category: "PAYMENT" | "LIQUIDITY" | "AGREEMENT" | "TREASURY" | "INTEGRATION" | "INBOX" | "PROVISIONING" | "SYSTEM";
+  severity: "WARNING" | "CRITICAL";
+  status: string;
+  title: string;
+  reason: string;
+  recommendation: string;
+  recoveryMode: "USER_ACTION" | "AUTO_RECOVERING" | "PLATFORM_ACTION";
+  actionView: NotificationView;
+  actionLabel: string;
+  subjectType: string;
+  subjectId: string;
+  relatedRecordId: string | null;
+  updatedAt: string;
+}
+
+export interface ExceptionCenterResponse {
+  items: OperationalExceptionResponse[];
+  summary: {
+    total: number;
+    critical: number;
+    userAction: number;
+    autoRecovering: number;
+  };
+}
+
+export function listOperationalExceptions(token: string, organizationId: string) {
+  return request<ExceptionCenterResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/exceptions`,
+    token,
+  );
+}
+
+export interface PaymentCalendarItemResponse {
+  id: string;
+  kind: "INVOICE" | "SUBSCRIPTION" | "MILESTONE";
+  title: string;
+  counterparty: string;
+  amountAtomic: string;
+  assetSymbol: string;
+  scheduledFor: string | null;
+  status: string;
+  explanation: string;
+  actionView: "invoices" | "agreements";
+  relatedRecordId: string;
+  affectsOperatingBalance: boolean;
+  projectedOperatingAvailableAtomic: string | null;
+}
+
+export interface PaymentCalendarResponse {
+  from: string;
+  to: string;
+  snapshotStatus: string;
+  startingOperatingAvailableAtomic: string;
+  projectedOperatingAvailableAtomic: string;
+  scheduledOperatingSpendAtomic: string;
+  uncoveredAtomic: string;
+  items: PaymentCalendarItemResponse[];
+}
+
+export function getPaymentCalendar(token: string, organizationId: string) {
+  return request<PaymentCalendarResponse>(
+    `/organizations/${encodeURIComponent(organizationId)}/payment-calendar`,
+    token,
+  );
+}
+export interface ForecastScenarioResponse { id: "PAY_NOW" | "DUE_DATE" | "POLICY_SAFE_DELAY"; label: string; explanation: string; spendAtomic: string; projectedAvailableAtomic: string; uncoveredAtomic: string; firstPaymentAt: string | null; lastPaymentAt: string | null }
+export function getForecastScenarios(token: string, organizationId: string) {
+  return request<{ authoritative: false; scenarios: ForecastScenarioResponse[] }>(`/organizations/${encodeURIComponent(organizationId)}/payment-calendar/scenarios`, token);
+}
+
+export interface ApprovalInboxResponse {
+  items: Array<{ id: string; kind: "PAYMENT_LIMIT" | "PAYOUT_ADDRESS" | "MILESTONE"; title: string; reason: string; amountAtomic: string | null; assetSymbol: string | null; expiresAt: string | null; requestedAt: string; requiredRoles: string[]; canAct: boolean; status: string; actionView: "invoices" | "agreements"; relatedRecordId: string }>;
+  summary: { total: number; actionable: number; expiring: number };
+}
+export function getApprovalInbox(token: string, organizationId: string) {
+  return request<ApprovalInboxResponse>(`/organizations/${encodeURIComponent(organizationId)}/approvals`, token);
+}
+export interface AnomalySignalResponse { id: string; kind: "DUPLICATE" | "AMOUNT" | "FREQUENCY" | "PAYOUT_CHANGE"; severity: "INFO" | "REVIEW"; title: string; explanation: string; relatedRecordId: string; actionView: "invoices" | "approvals"; observedAt: string }
+export function getAnomalyReview(token: string, organizationId: string) { return request<{ authoritative: false; signals: AnomalySignalResponse[] }>(`/organizations/${encodeURIComponent(organizationId)}/anomalies`, token); }
+export interface PaymentCorrectionResponse { id: string; type: "CREDIT_NOTE" | "REFUND"; executionId: string; creditNoteId: string | null; amountAtomic: string; reason: string; transactionHash: string | null; status: string; createdAt: string }
+export function listPaymentCorrections(token: string, organizationId: string) { return request<PaymentCorrectionResponse[]>(`/organizations/${encodeURIComponent(organizationId)}/payment-corrections`, token); }
+export function createPaymentCorrection(token: string, organizationId: string, input: { type: "CREDIT_NOTE" | "REFUND"; executionId: string; creditNoteId?: string; amountAtomic: string; reason: string; transactionHash?: string }, idempotencyKey: string) { return request<PaymentCorrectionResponse>(`/organizations/${encodeURIComponent(organizationId)}/payment-corrections`, token, { method: "POST", headers: { "Idempotency-Key": idempotencyKey }, body: JSON.stringify(input) }); }
+export interface ApiCredentialResponse { id:string;name:string;keyPrefix:string;scopes:string[];status:string;lastUsedAt:string|null;createdAt:string }
+export interface WebhookEndpointResponse { id:string;url:string;description:string;eventTypes:string[];status:string;createdAt:string }
+export interface WebhookDeliveryResponse { id:string;endpointId:string;eventId:string;eventType:string;status:string;attemptCount:number;responseStatus:number|null;lastError:string|null;deliveredAt:string|null;createdAt:string }
+const developerPath=(organizationId:string)=>`/organizations/${encodeURIComponent(organizationId)}/developer`;
+export function listApiCredentials(token:string,organizationId:string){return request<ApiCredentialResponse[]>(`${developerPath(organizationId)}/credentials`,token);}
+export function createApiCredential(token:string,organizationId:string,input:{name:string;scopes:string[]}){return request<ApiCredentialResponse&{secret:string}>(`${developerPath(organizationId)}/credentials`,token,{method:"POST",body:JSON.stringify(input)});}
+export function revokeApiCredential(token:string,organizationId:string,id:string){return request<{revoked:true}>(`${developerPath(organizationId)}/credentials/${encodeURIComponent(id)}`,token,{method:"DELETE"});}
+export function listWebhookEndpoints(token:string,organizationId:string){return request<WebhookEndpointResponse[]>(`${developerPath(organizationId)}/webhooks`,token);}
+export function createWebhookEndpoint(token:string,organizationId:string,input:{url:string;description:string;eventTypes:string[]}){return request<WebhookEndpointResponse&{signingSecret:string}>(`${developerPath(organizationId)}/webhooks`,token,{method:"POST",body:JSON.stringify(input)});}
+export function disableWebhookEndpoint(token:string,organizationId:string,id:string){return request<{disabled:true}>(`${developerPath(organizationId)}/webhooks/${encodeURIComponent(id)}`,token,{method:"DELETE"});}
+export function testWebhookEndpoint(token:string,organizationId:string,id:string){return request<{queued:true}>(`${developerPath(organizationId)}/webhooks/${encodeURIComponent(id)}/test`,token,{method:"POST"});}
+export function listWebhookDeliveries(token:string,organizationId:string){return request<WebhookDeliveryResponse[]>(`${developerPath(organizationId)}/webhook-deliveries`,token);}
 
 export type AccountingProvider = "ODOO" | "ERPNEXT";
 
@@ -309,6 +406,16 @@ export function requestAccountingSync(token: string, organizationId: string, con
     `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}/sync`,
     token,
     { method: "POST" },
+  );
+}
+export function testAccountingConnector(token: string, organizationId: string, connectorId: string) {
+  return request<{ ok: true; recordsByType: Record<string, number> }>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}/test`, token, { method: "POST" },
+  );
+}
+export function disconnectAccountingConnector(token: string, organizationId: string, connectorId: string) {
+  return request<{ disconnected: true }>(
+    `/organizations/${encodeURIComponent(organizationId)}/accounting-connectors/${encodeURIComponent(connectorId)}`, token, { method: "DELETE" },
   );
 }
 
@@ -420,6 +527,19 @@ export async function getVendorPortal(token: string) {
 
 export async function listVendorPortalSubmissions(token: string) {
   return fetchJson<VendorPortalSubmission[]>(`/vendor-portal/${encodeURIComponent(token)}/submissions`, {});
+}
+export interface VendorPortalStatus {
+  payoutAddresses: Array<{ id: string; payoutAddress: string; status: string; version: number; createdAt: string }>;
+  invoices: Array<{ id: string; invoiceNumber: string; amountAtomic: string; assetSymbol: string; status: string; executionId: string | null; paymentStatus: string | null; transactionHash: string | null; confirmedAt: string | null }>;
+}
+export function getVendorPortalStatus(token: string) {
+  return fetchJson<VendorPortalStatus>(`/vendor-portal/${encodeURIComponent(token)}/status`, {});
+}
+export function requestVendorPayoutChange(token: string, payoutAddress: string) {
+  return fetchJson<{ id: string; status: string }>(`/vendor-portal/${encodeURIComponent(token)}/payout-address-change`, { method: "POST", body: JSON.stringify({ payoutAddress }) });
+}
+export function getVendorPaymentAdvice(token: string, executionId: string) {
+  return fetchJson<{ invoiceNumber: string; amountAtomic: string; assetSymbol: string; network: string; transactionHash: string; confirmedAt: string; organizationName: string }>(`/vendor-portal/${encodeURIComponent(token)}/payment-advice/${encodeURIComponent(executionId)}`, {});
 }
 
 export async function submitVendorPortalDocument(token: string, file: File, vendorNote: string, replacesSubmissionId?: string) {
@@ -1148,6 +1268,19 @@ export async function getTreasuryPosition(token: string, organizationId: string)
     `/organizations/${encodeURIComponent(organizationId)}/treasury/position`,
     token,
   );
+}
+
+export interface PaymentPolicyTemplate {
+  id: string; name: string; description: string; autonomousLimitAtomic: string;
+  singlePaymentLimitAtomic: string; vendorDailyLimitAtomic: string;
+  organizationDailyLimitAtomic: string; monthlyBudgetAtomic: string | null;
+  operatingBufferAtomic: string;
+}
+export function listPaymentPolicyTemplates(token: string, organizationId: string) {
+  return request<PaymentPolicyTemplate[]>(`/organizations/${encodeURIComponent(organizationId)}/treasury/policy-templates`, token);
+}
+export function applyPaymentPolicyTemplate(token: string, organizationId: string, templateId: string) {
+  return request(`/organizations/${encodeURIComponent(organizationId)}/treasury/policy-templates/${encodeURIComponent(templateId)}/apply`, token, { method: "POST" });
 }
 
 export async function planLiquidityAction(

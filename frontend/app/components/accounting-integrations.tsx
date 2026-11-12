@@ -4,9 +4,11 @@ import { FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   createAccountingConnector,
+  disconnectAccountingConnector,
   listAccountingConnectors,
   listAccountingRecords,
   requestAccountingSync,
+  testAccountingConnector,
   type AccountingConnectorResponse,
   type AccountingProvider,
   type AccountingRecordResponse,
@@ -76,6 +78,30 @@ export function AccountingIntegrations({ token, organizationId, canManage }: { t
     }
   }
 
+  async function test(connector: AccountingConnectorResponse) {
+    setPending(true);
+    try {
+      const result = await testAccountingConnector(token, organizationId, connector.id);
+      const total = Object.values(result.recordsByType).reduce((sum, count) => sum + count, 0);
+      toast.success(`${connector.label} connected · ${total} records readable`);
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Connection test failed"); }
+    finally { setPending(false); }
+  }
+
+  function confirmDisconnect(connector: AccountingConnectorResponse) {
+    toast(`Disconnect ${connector.label}?`, { description: "Future syncs and writebacks will stop.", action: { label: "Disconnect", onClick: () => void disconnect(connector) } });
+  }
+
+  async function disconnect(connector: AccountingConnectorResponse) {
+    setPending(true);
+    try {
+      await disconnectAccountingConnector(token, organizationId, connector.id);
+      setConnectors((current) => current.map((item) => item.id === connector.id ? { ...item, status: "DISABLED", lastError: null } : item));
+      toast.success(`${connector.label} disconnected`);
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Unable to disconnect integration"); }
+    finally { setPending(false); }
+  }
+
   async function inspect(connector: AccountingConnectorResponse) {
     try {
       setRecords((current) => ({ ...current, [connector.id]: [] }));
@@ -104,12 +130,14 @@ export function AccountingIntegrations({ token, organizationId, canManage }: { t
         <button disabled={pending} className="btn md:col-span-2">Save and start first sync</button>
       </form><aside className="rounded-3xl bg-slate-950 p-6 text-white"><p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">{provider === "ODOO" ? "Odoo 19" : "ERPNext"}</p><h4 className="mt-3 text-xl font-semibold">Bring purchasing evidence into context</h4><p className="mt-3 text-sm leading-6 text-slate-300">{provider === "ODOO" ? "OPES reads vendors, purchase orders, receipts and vendor bills through JSON-2." : "OPES reads suppliers, purchase orders, purchase receipts and purchase invoices through the Frappe REST API."}</p><ul className="mt-5 space-y-3 text-sm text-slate-300"><li>✓ Tenant-scoped records</li><li>✓ Sync status and failures</li><li>✓ No credentials in browser storage</li></ul></aside></div> : <p className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-600">Only workspace owners and admins can add or sync integrations.</p>}
 
-      <div className="grid gap-4"><div><h4 className="text-lg font-semibold">Connected systems</h4><p className="mt-1 text-sm text-slate-500">Sync on demand and inspect the records available to the evidence engine.</p></div>
+      <div className="rounded-3xl border border-blue-100 bg-blue-50 p-5"><h4 className="font-semibold text-blue-950">Standard evidence mapping</h4><p className="mt-2 text-sm leading-6 text-blue-900">OPES maps each provider into vendor, purchase order, purchase receipt, and vendor bill records while preserving provider IDs for reconciliation.</p></div>
+      <div className="rounded-3xl border border-dashed border-slate-300 p-5"><h4 className="font-semibold">Gmail connector</h4><p className="mt-2 text-sm text-slate-600">Direct Gmail OAuth is planned after Google restricted-scope verification. Workspace inbox forwarding remains the supported Gmail intake path today.</p></div>
+      <div className="grid gap-4"><div><h4 className="text-lg font-semibold">Connected systems</h4><p className="mt-1 text-sm text-slate-500">Test credentials, sync on demand, inspect mapped records, or disconnect access.</p></div>
         {connectors.length === 0 ? <p className="rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-600">No accounting integration configured.</p> : null}
         {connectors.map((connector) => {
           const imported = records[connector.id];
           return <article key={connector.id} className="rounded-2xl border border-slate-200 p-5">
-            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><h4 className="font-semibold">{connector.label}</h4><Status value={!connector.lastSyncedAt && connector.status === "ACTIVE" ? "SYNC_QUEUED" : connector.status} /></div><p className="mt-1 break-all text-sm text-slate-600">{connector.provider === "ODOO" ? "Odoo 19" : "ERPNext"} · {connector.baseUrl}</p><p className="mt-1 text-xs text-slate-500">Last synced: {connector.lastSyncedAt ? new Date(connector.lastSyncedAt).toLocaleString() : "Not yet"}</p></div><div className="flex gap-2"><button type="button" disabled={!canManage || pending} onClick={() => void sync(connector)} className="btn-secondary">Sync now</button><button type="button" onClick={() => void inspect(connector)} className="btn-secondary">Imported records</button></div></div>
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><div className="flex items-center gap-2"><h4 className="font-semibold">{connector.label}</h4><Status value={!connector.lastSyncedAt && connector.status === "ACTIVE" ? "SYNC_QUEUED" : connector.status} /></div><p className="mt-1 break-all text-sm text-slate-600">{connector.provider === "ODOO" ? "Odoo 19" : "ERPNext"} · {connector.baseUrl}</p><p className="mt-1 text-xs text-slate-500">Last synced: {connector.lastSyncedAt ? new Date(connector.lastSyncedAt).toLocaleString() : "Not yet"}</p></div><div className="flex flex-wrap gap-2"><button type="button" disabled={!canManage || pending || connector.status === "DISABLED"} onClick={() => void test(connector)} className="btn-secondary">Test</button><button type="button" disabled={!canManage || pending || connector.status === "DISABLED"} onClick={() => void sync(connector)} className="btn-secondary">Sync now</button><button type="button" onClick={() => void inspect(connector)} className="btn-secondary">Mapped records</button><button type="button" disabled={!canManage || pending || connector.status === "DISABLED"} onClick={() => confirmDisconnect(connector)} className="btn-secondary text-red-700">Disconnect</button></div></div>
             {connector.lastError ? <p className="mt-3 text-sm text-red-700">{connector.lastError}</p> : null}
             {imported ? <p className="mt-3 text-sm text-slate-600">{imported.length} current records · {summarize(imported)}</p> : null}
           </article>;

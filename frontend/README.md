@@ -8,6 +8,7 @@ See the [root README](../README.md) for the complete product and architecture.
 
 - **Overview:** organization health, setup state, and next actions.
 - **Notifications:** actionable invoice, agreement, approval, settlement, and failure events.
+- **Exceptions & recovery:** tenant-scoped failures, automatic reconciliation cases, and safe recovery guidance.
 - **Getting started:** Privy owner wallet, Circle operator, Arc contracts, funding, email, and integrations.
 - **Invoices & vendors:** vendor identity, payout verification, evidence upload, three-way match, decisions, overrides, and payment.
 - **Agreements:** recurring mandates and milestone escrow lifecycle.

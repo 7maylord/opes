@@ -22,7 +22,7 @@ The model handles judgment-heavy work such as document extraction and advisory r
 
 - Upload invoices, purchase orders, receipts, contracts, and milestone evidence.
 - Receive invoice email and attachments through a workspace inbox backed by signed Resend webhooks.
-- Give a vendor a scoped submission portal for invoices and supporting documents.
+- Give each vendor a scoped portal to submit or correct evidence, track invoices, request payout-address re-verification, and download confirmed payment advice.
 - Watch an object-storage folder for new financial evidence.
 - Import suppliers, purchase orders, receipts, and vendor bills from **Odoo 19 JSON-2** or **ERPNext REST**.
 - Store immutable document hashes and extraction provenance in private object storage.
@@ -73,6 +73,7 @@ All three arrangements share the same vendor controls, evidence lineage, tenant 
 - Successful payments create balanced, document-linked ledger postings.
 - Supplier payment advice includes the paid invoice, amount, network, transaction, and explorer link.
 - Accounting connectors can write settlement references back to the source system without duplicating the writeback.
+- Scoped API keys expose read-only invoice and payment endpoints; signed lifecycle webhooks use stable event IDs, retries, and a delivery audit trail.
 
 ### Multi-tenant by construction
 
@@ -99,12 +100,16 @@ The web application separates the operating surface into focused views:
 
 - **Overview** — organization status, live setup state, and immediate next actions.
 - **Notifications** — invoice, approval, agreement, settlement, and failure events.
+- **Approval inbox** — payment-limit exceptions, payout-wallet changes, and milestone evidence with exact role and expiry context.
+- **Exceptions & recovery** — payment, liquidity, agreement, reconciliation, intake, provisioning, and worker failures with safe next actions.
+- **Payment calendar** — unpaid invoices, recurring renewals, and escrow milestones with schedule explanations and projected operating liquidity.
 - **Getting started** — owner wallet, Circle operator, contract deployment, funding, inbox, and integration setup.
 - **Invoices & vendors** — vendor records, payout verification, evidence intake, matching, decisions, overrides, and execution.
 - **Agreements** — recurring mandates and milestone escrow from draft through completion.
 - **Treasury & controls** — balances, commitments, forecasts, policy limits, pause controls, vendor authorization, and recovery.
 - **Email inbox** — configured address, forwarding guidance, received messages, attachments, and processing state.
-- **Integrations** — self-service Odoo and ERPNext credentials, sync status, imported records, and settlement writeback.
+- **Integrations** — self-service Odoo and ERPNext connection tests, standard evidence mapping, sync status, imported records, audited disconnects, and settlement writeback.
+- **API & webhooks** — owner-managed read scopes, one-time secrets, signed event delivery, tests, revocation, and delivery history.
 - **Team** — organization membership and roles.
 
 ## Architecture

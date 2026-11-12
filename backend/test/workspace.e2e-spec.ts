@@ -4,11 +4,14 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { CircleWalletService } from '../src/circle-wallet.service';
-import { DatabaseService } from '../src/database.service';
-import { PaymentExecutionWorkerService } from '../src/payment-execution-worker.service';
-import { SessionService } from '../src/session.service';
-import { workspaceKinds, WorkspaceService } from '../src/workspace.service';
+import { SessionService } from '../src/core/auth/session.service';
+import { DatabaseService } from '../src/core/database/database.service';
+import { CircleWalletService } from '../src/infrastructure/circle/circle-wallet.service';
+import { PaymentExecutionWorkerService } from '../src/modules/payments/payment-execution-worker.service';
+import {
+  workspaceKinds,
+  WorkspaceService,
+} from '../src/modules/workspace/workspace.service';
 
 jest.mock('@privy-io/node', () => ({ PrivyClient: jest.fn() }));
 
@@ -37,6 +40,7 @@ describe('Workspace read models (e2e)', () => {
   const orderDocumentId = randomUUID();
   const receiptDocumentId = randomUUID();
   const connectorId = randomUUID();
+  const disposableConnectorId = randomUUID();
   const vaultAddress = `0x${randomUUID().replaceAll('-', '').padStart(40, '0')}`;
   const operatorAddress = `0x${randomUUID().replaceAll('-', '').padStart(40, '0')}`;
   const settlementEventId = `workspace-settlement-${randomUUID()}`;
@@ -61,6 +65,22 @@ describe('Workspace read models (e2e)', () => {
     await seedOrganization(organizationId, true);
     await seedOrganization(otherOrganizationId, false);
     await seedApprovalFixtures();
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.accounting_connector_bindings
+          (id,organization_id,provider,label,base_url,encrypted_credentials,status,last_error,created_by_membership_id)
+         VALUES ($1,$2,'ODOO','Odoo payable sync','https://private.invalid','secret-ciphertext','FAILED','Authentication failed',$3)`,
+        [connectorId, organizationId, membershipId],
+      ),
+    );
+    await database.withOrganizationScope(organizationId, (sql) =>
+      sql.query(
+        `INSERT INTO opes.accounting_connector_bindings
+          (id,organization_id,provider,label,base_url,encrypted_credentials,status,created_by_membership_id)
+         VALUES ($1,$2,'ERPNEXT','Disposable connector','https://erp.invalid','encrypted','ACTIVE',$3)`,
+        [disposableConnectorId, organizationId, membershipId],
+      ),
+    );
     sessionToken = await app.get(SessionService).createSession(userId);
   });
 
@@ -124,6 +144,84 @@ describe('Workspace read models (e2e)', () => {
       .get(`/organizations/${organizationId}/workspace/vendor`)
       .set('Authorization', 'Bearer expired-session')
       .expect(401);
+  });
+
+  it('surfaces tenant exceptions with safe recovery guidance', async () => {
+    const response = await request(app.getHttpAdapter().getInstance() as App)
+      .get(`/organizations/${organizationId}/exceptions`)
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200);
+    const body = response.body as unknown as {
+      summary: { total: number; userAction: number };
+      items: Array<{
+        category: string;
+        subjectId: string;
+        recoveryMode: string;
+        actionView: string;
+      }>;
+    };
+
+    expect(body.summary.total).toBeGreaterThanOrEqual(1);
+    expect(body.summary.userAction).toBeGreaterThanOrEqual(1);
+    expect(body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: 'INTEGRATION',
+          subjectId: connectorId,
+          recoveryMode: 'USER_ACTION',
+          actionView: 'integrations',
+        }),
+      ]),
+    );
+  });
+
+  it('builds a tenant-scoped payment calendar', async () => {
+    const response = await request(app.getHttpAdapter().getInstance() as App)
+      .get(
+        `/organizations/${organizationId}/payment-calendar?from=2026-01-01&to=2030-12-31`,
+      )
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200);
+
+    const body = response.body as unknown as {
+      from: string;
+      to: string;
+      items: Array<{ id: string; kind: string; relatedRecordId: string }>;
+    };
+    expect(body).toMatchObject({
+      from: '2026-01-01',
+      to: '2030-12-31',
+    });
+    expect(
+      body.items.find((item) => item.id === `invoice:${invoiceVersionId}`),
+    ).toMatchObject({
+      id: `invoice:${invoiceVersionId}`,
+      kind: 'INVOICE',
+      relatedRecordId: invoiceVersionId,
+    });
+  });
+
+  it('serves the tenant approval inbox with authority context', async () => {
+    const response = await request(app.getHttpAdapter().getInstance() as App)
+      .get(`/organizations/${organizationId}/approvals`)
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200);
+    const body = response.body as unknown as {
+      items: unknown[];
+      summary: { total: number; actionable: number };
+    };
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.summary.total).toBeGreaterThanOrEqual(body.summary.actionable);
+  });
+
+  it('disconnects a workspace-owned accounting connector', async () => {
+    await request(app.getHttpAdapter().getInstance() as App)
+      .delete(
+        `/organizations/${organizationId}/accounting-connectors/${disposableConnectorId}`,
+      )
+      .set('Authorization', `Bearer ${sessionToken}`)
+      .expect(200)
+      .expect({ disconnected: true });
   });
 
   it('rejects revoked and expired approvals through the execution API', async () => {
@@ -544,12 +642,6 @@ describe('Workspace read models (e2e)', () => {
           'e'.repeat(64),
         ],
       );
-      await sql.query(
-        `INSERT INTO opes.accounting_connector_bindings
-          (id,organization_id,provider,label,base_url,encrypted_credentials,status,last_error,created_by_membership_id)
-         VALUES ($1,$2,'ODOO','Odoo payable sync','https://private.invalid','secret-ciphertext','FAILED','Authentication failed',$3)`,
-        [connectorId, organizationId, membershipId],
-      );
     });
     await request(server)
       .post(
@@ -560,7 +652,7 @@ describe('Workspace read models (e2e)', () => {
 
     const detail = await request(server)
       .get(
-        `/organizations/${organizationId}/workspace/invoice/${invoiceVersionId}`,
+        `/organizations/${organizationId}/workspace/execution/${paymentExecutionId}`,
       )
       .set('Authorization', authorization)
       .expect(200);
@@ -575,7 +667,6 @@ describe('Workspace read models (e2e)', () => {
         'procurement_evidence',
         'policy_decision',
         'reservation',
-        'approval',
         'execution',
         'preflight',
         'reconciliation',
@@ -587,7 +678,18 @@ describe('Workspace read models (e2e)', () => {
         (node) => node.transactionHash === transactionHash,
       ),
     ).toBe(true);
-    expect(detailBody.blockers.map((blocker) => blocker.code)).toEqual(
+    // Either competing invoice may win the reservation; old approval blockers
+    // belong to the first invoice regardless of which payment settled.
+    const blockedInvoice = await request(server)
+      .get(
+        `/organizations/${organizationId}/workspace/invoice/${invoiceVersionId}`,
+      )
+      .set('Authorization', authorization)
+      .expect(200);
+    const blockedBody = blockedInvoice.body as {
+      blockers: Array<{ code: string }>;
+    };
+    expect(blockedBody.blockers.map((blocker) => blocker.code)).toEqual(
       expect.arrayContaining(['APPROVAL:REVOKED', 'APPROVAL:EXPIRED']),
     );
 
@@ -595,14 +697,14 @@ describe('Workspace read models (e2e)', () => {
       .get(`/organizations/${organizationId}/workspace/connector`)
       .set('Authorization', authorization)
       .expect(200);
-    expect(connectors.body).toMatchObject({
-      items: [
-        {
-          id: connectorId,
-          status: 'FAILED',
-          details: { lastError: 'Authentication failed' },
-        },
-      ],
+    const connectorItems = (connectors.body as { items: Array<{ id: string }> })
+      .items;
+    expect(
+      connectorItems.find((item) => item.id === connectorId),
+    ).toMatchObject({
+      id: connectorId,
+      status: 'FAILED',
+      details: { lastError: 'Authentication failed' },
     });
     expect(JSON.stringify(connectors.body)).not.toContain('secret-ciphertext');
     expect(JSON.stringify(connectors.body)).not.toContain('private.invalid');

@@ -2,12 +2,12 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { createHash, randomUUID } from 'node:crypto';
 import { AppModule } from '../src/app.module';
-import { DatabaseService } from '../src/database.service';
+import { DatabaseService } from '../src/core/database/database.service';
 import {
   BucketObject,
   RailwayBucketService,
-} from '../src/railway-bucket.service';
-import { WatchedBucketService } from '../src/watched-bucket.service';
+} from '../src/infrastructure/storage/railway-bucket.service';
+import { WatchedBucketService } from '../src/modules/integrations/watched-bucket.service';
 
 jest.mock('@privy-io/node', () => ({ PrivyClient: jest.fn() }));
 

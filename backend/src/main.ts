@@ -1,8 +1,8 @@
 import { NestFactory } from '@nestjs/core';
-import { configureApiDocumentation } from './api-documentation';
+import { configureApiDocumentation } from './core/http/api-documentation';
 import { AppModule } from './app.module';
-import { useCorrelationIds } from './correlation-id';
-import { loadRuntimeConfig } from './runtime.config';
+import { useCorrelationIds } from './core/http/correlation-id';
+import { loadRuntimeConfig } from './core/config/runtime.config';
 
 async function bootstrap() {
   const config = loadRuntimeConfig();

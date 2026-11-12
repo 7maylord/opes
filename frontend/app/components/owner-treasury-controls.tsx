@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { confirmLifecycleAction, prepareTreasuryAction } from "@/lib/api";
+import { applyPaymentPolicyTemplate, confirmLifecycleAction, listPaymentPolicyTemplates, prepareTreasuryAction, type PaymentPolicyTemplate } from "@/lib/api";
 import { parseDecimalToAtomic } from "@/lib/money";
 import { readArcPaused, useArcTransaction } from "@/lib/use-arc-transaction";
 
@@ -25,6 +25,7 @@ export function OwnerTreasuryControls({
   const [pending, setPending] = useState(false);
   const [vaultPaused, setVaultPaused] = useState<boolean | null>(null);
   const [escrowPaused, setEscrowPaused] = useState<boolean | null>(null);
+  const [templates, setTemplates] = useState<PaymentPolicyTemplate[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +49,15 @@ export function OwnerTreasuryControls({
       cancelled = true;
     };
   }, [escrowAddress, vaultAddress]);
+
+  useEffect(() => { void listPaymentPolicyTemplates(token, organizationId).then(setTemplates).catch(() => undefined); }, [organizationId, token]);
+
+  async function applyTemplate(id: string) {
+    setPending(true);
+    try { await applyPaymentPolicyTemplate(token, organizationId, id); toast.success("Payment policy template applied"); }
+    catch (error) { toast.error(error instanceof Error ? error.message : "Unable to apply policy template"); }
+    finally { setPending(false); }
+  }
 
   async function run(
     action: string,
@@ -108,6 +118,12 @@ export function OwnerTreasuryControls({
         These controls change your Arc contracts. Privy will ask the workspace
         owner to sign each change before OPES records it.
       </p>
+
+      <section className="rounded-2xl border border-slate-200 p-5">
+        <h4 className="font-semibold">Policy templates</h4>
+        <p className="mt-1 text-slate-600">Choose a reviewed starting policy. This creates a new policy version; contract limits remain under the signed controls below.</p>
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">{templates.map((template) => <article key={template.id} className="rounded-xl bg-slate-50 p-4"><strong>{template.name}</strong><p className="mt-1 min-h-10 text-xs text-slate-500">{template.description}</p><button type="button" disabled={pending} onClick={() => void applyTemplate(template.id)} className="btn-secondary mt-3">Apply template</button></article>)}</div>
+      </section>
 
       <section
         className="rounded-2xl border border-slate-200 p-5"
